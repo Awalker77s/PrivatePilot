@@ -1,0 +1,107 @@
+/* ============================================================
+   Private Pilot — design tokens, lifted from the build pack (A2).
+   Dark always, two surfaces, hairline borders, one green.
+   Status is a word plus a color, never color alone.
+   ============================================================ */
+
+:root {
+  /* Surfaces — canvas, cards, nested (sparingly). Depth = 1px hairlines, never shadows. */
+  --canvas: #0b0c0e;
+  --card: #141519;
+  --nested: #1b1d22;
+  --border: #26282e;
+
+  /* One green. Blue only for batons and chain links; amber = needs you; red = recording and failure. */
+  --green: #2fd08c;
+  --blue: #5b9bf8;
+  --amber: #e2a93e;
+  --red: #e2574c;
+
+  /* Monochrome type ramp */
+  --text: #e7e9ec;
+  --muted: #9aa0a8;
+  --caption: #5f626b;
+
+  /* Tints for chips and quiet fills */
+  --green-tint: rgba(47, 208, 140, 0.12);
+  --blue-tint: rgba(91, 155, 248, 0.12);
+  --amber-tint: rgba(226, 169, 62, 0.13);
+  --red-tint: rgba(226, 87, 76, 0.12);
+
+  /* Radii: tiles/cards 12, strips/sheets 14, chips full-round */
+  --radius-card: 12px;
+  --radius-strip: 14px;
+  --radius-chip: 999px;
+
+  /* Type scale */
+  --font: ui-sans-serif, "Segoe UI Variable Text", "Segoe UI", -apple-system,
+    system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+  --fs-body: 15px;
+  --fs-tile-name: 12.5px;
+  --fw-tile-name: 620;
+  --fs-status: 11px;
+  --fs-label: 12px;
+  --fs-row: 13px;
+
+  /* Gradient glyph squares — 28px, radius 8, seven gradients */
+  --glyph-size: 28px;
+  --glyph-radius: 8px;
+  --grad-documents: linear-gradient(135deg, #7c5cff, #a78bfa);
+  --grad-email: linear-gradient(135deg, #3b82f6, #60a5fa);
+  --grad-web: linear-gradient(135deg, #10b981, #34d399);
+  --grad-notes: linear-gradient(135deg, #e2574c, #f87171);
+  --grad-money: linear-gradient(135deg, #059669, #2fd08c);
+  --grad-watch: linear-gradient(135deg, #0ea5e9, #38bdf8);
+  --grad-files: linear-gradient(135deg, #e2a93e, #fbbf24);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea {
+  user-select: text;
+  font-family: var(--font);
+}
+
+::selection {
+  background: rgba(47, 208, 140, 0.25);
+}
+
+/* Scrollbars stay quiet */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--nested);
+  border-radius: 5px;
+  border: 2px solid var(--canvas);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

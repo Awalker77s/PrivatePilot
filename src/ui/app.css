@@ -1,0 +1,335 @@
+/* ============================================================
+   Private Pilot — component classes on top of tokens.css.
+   Verb buttons, word+color chips, tiles, strips, sheet rows.
+   ============================================================ */
+
+/* ---------- shell ---------- */
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13.5px;
+  font-weight: 640;
+}
+
+.brand-glyph {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--green);
+  color: #06281a;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tabs {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: var(--radius-chip);
+  cursor: pointer;
+  position: relative;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--text);
+  background: var(--nested);
+}
+
+.tab .nav-dot {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.gear {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.gear:hover {
+  color: var(--text);
+  background: var(--nested);
+}
+
+.tabpanel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+/* ---------- buttons: always the verb, 1–2 words ---------- */
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--nested);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 570;
+  padding: 6px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: #33363e;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--green);
+  border-color: var(--green);
+  color: #06281a;
+  font-weight: 680;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.06);
+  border-color: var(--green);
+}
+
+.btn-ghost {
+  background: transparent;
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--red);
+  border-color: var(--border);
+}
+
+.btn-sm {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+/* ---------- chips: a word plus a color, full round ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-status);
+  font-weight: 560;
+  padding: 2px 9px;
+  border-radius: var(--radius-chip);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+  white-space: nowrap;
+}
+
+.chip-green {
+  color: var(--green);
+  background: var(--green-tint);
+  border-color: transparent;
+}
+
+.chip-red {
+  color: var(--red);
+  background: var(--red-tint);
+  border-color: transparent;
+}
+
+.chip-amber {
+  color: var(--amber);
+  background: var(--amber-tint);
+  border-color: transparent;
+}
+
+.chip-blue {
+  color: var(--blue);
+  background: var(--blue-tint);
+  border-color: transparent;
+}
+
+.chip-gray {
+  color: var(--muted);
+  background: var(--nested);
+  border-color: transparent;
+}
+
+/* ---------- cards / glyphs ---------- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.glyph {
+  width: var(--glyph-size);
+  height: var(--glyph-size);
+  border-radius: var(--glyph-radius);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  flex: none;
+}
+
+.glyph svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ---------- empty states: status, what belongs here, one verb ---------- */
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.empty-status {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.empty-what {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ---------- status line under tile names ---------- */
+.status-line {
+  font-size: var(--fs-status);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.caption {
+  font-size: var(--fs-status);
+  color: var(--caption);
+}
+
+/* ---------- settings sheet ---------- */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 40;
+}
+
+.settings-sheet {
+  width: 380px;
+  height: 100%;
+  background: var(--card);
+  border-left: 1px solid var(--border);
+  padding: 18px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sheet-title {
+  font-size: 14px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-card {
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-card-title {
+  font-size: var(--fs-label);
+  font-weight: 620;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* ---------- dot ---------- */
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dot-green {
+  background: var(--green);
+}
+.dot-red {
+  background: var(--red);
+}
+.dot-amber {
+  background: var(--amber);
+}
+.dot-gray {
+  background: var(--caption);
+}

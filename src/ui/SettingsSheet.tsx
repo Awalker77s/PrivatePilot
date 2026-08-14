@@ -1,12 +1,51 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { XIcon } from "./icons";
 import { runStorageSelfTest, SelfTestResult } from "../storage/selftest";
 import { useStore } from "../storage/useStore";
+import { DoctorReport, runModelDoctor } from "../providers/ollama";
+import { chat } from "../providers";
+import { NUM_CTX_DRAFT } from "../providers";
 
 export function SettingsSheet({ close }: { close: () => void }) {
   const { loadError } = useStore();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<SelfTestResult | null>(null);
+  const [doctor, setDoctor] = useState<DoctorReport | null>(null);
+  const [waking, setWaking] = useState(false);
+  const [wakeLine, setWakeLine] = useState<string | null>(null);
+
+  useEffect(() => {
+    runModelDoctor().then(setDoctor);
+  }, []);
+
+  async function wake() {
+    if (!doctor?.installedTag) return;
+    setWaking(true);
+    setWakeLine(null);
+    try {
+      // A real chat round trip — explicit num_ctx like every call.
+      const res = await chat({
+        model: doctor.installedTag,
+        messages: [
+          { role: "user", content: "Answer with the single word: ready" },
+        ],
+        options: { num_ctx: NUM_CTX_DRAFT, temperature: 0, seed: 7 },
+      });
+      const word = res.content.trim().slice(0, 40) || "(empty)";
+      setWakeLine(
+        `Answered "${word}" in ${(res.totalMs / 1000).toFixed(1)}s.`
+      );
+      setDoctor(await runModelDoctor()); // now /api/ps has real values
+    } catch (e) {
+      const sentence =
+        e instanceof Error && "sentence" in e
+          ? (e as { sentence: string }).sentence
+          : String(e);
+      setWakeLine(sentence);
+    } finally {
+      setWaking(false);
+    }
+  }
 
   async function test() {
     setTesting(true);
@@ -30,12 +69,47 @@ export function SettingsSheet({ close }: { close: () => void }) {
           </button>
         </div>
 
-        <div className="settings-card">
-          <div className="settings-card-title">Local AI</div>
-          <div className="status-line">Not checked yet.</div>
-          <div className="caption">
-            The model doctor reads what Ollama has loaded and how.
+        <div className="settings-card" data-testid="model-doctor">
+          <div className="settings-card-title">
+            Local AI
+            <button
+              className="btn btn-sm"
+              onClick={wake}
+              disabled={waking || !doctor?.installedTag}
+              data-testid="wake-model"
+            >
+              {waking ? "Waking…" : "Wake it"}
+            </button>
           </div>
+          {!doctor ? (
+            <div className="status-line">Checking…</div>
+          ) : (
+            <div
+              className="status-line"
+              style={{
+                color:
+                  doctor.up && doctor.installedTag
+                    ? "var(--text)"
+                    : "var(--red)",
+              }}
+              data-testid="doctor-sentence"
+            >
+              {doctor.sentence}
+            </div>
+          )}
+          {doctor?.toolsCapable != null && (
+            <div className="caption">
+              {doctor.toolsCapable
+                ? "Knows how to call tools."
+                : "Can't call tools — runs will use the drafting protocol."}
+              {doctor.visionCapable ? " Can look at screenshots." : ""}
+            </div>
+          )}
+          {wakeLine && (
+            <div className="caption" data-testid="wake-line">
+              {wakeLine}
+            </div>
+          )}
         </div>
 
         <div className="settings-card">

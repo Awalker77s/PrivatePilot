@@ -1,11 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { TabId } from "../App";
 import { PlusIcon, MicIcon } from "../icons";
+import { activeModelLabel } from "../../providers";
 
 // The builder surface. The composer is the product's front door; Send is
 // wired to the Tell-it pipeline in build step 4.
 export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   const [draft, setDraft] = useState("");
+  const [modelLabel, setModelLabel] = useState("…");
+
+  useEffect(() => {
+    activeModelLabel()
+      .then(setModelLabel)
+      .catch(() => setModelLabel("Ollama off"));
+  }, []);
 
   return (
     <div className="chat">
@@ -30,7 +38,7 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
             </button>
           </div>
           <div className="composer-right">
-            <span className="chip chip-gray">Qwen 9B</span>
+            <span className="chip chip-gray">{modelLabel}</span>
             <button className="btn btn-primary btn-sm" disabled>
               Send
             </button>

@@ -25,6 +25,18 @@ day. This becomes the writeup.
   and matched the four mockups by eye. The seven category gradients are named
   documents / email / web / notes / money / watch / files to cover the
   categories the mockups show.
+- **A trap the pack didn't list: Tauri's http scope ignores ports in `**`
+  patterns.** `{"url": "http://**"}` silently fails to match
+  `http://127.0.0.1:11434` — the URLPattern port defaults to 80. Every call to
+  Ollama died with "url not allowed on the configured scope" until the
+  capability gained explicit `http://*:*/**` port-wildcard entries. Found by
+  probing the real webview over CDP, which is now the build's verification
+  harness (dev-only `window.__pp` hook; see devhook.ts).
+- **Verification harness: CDP into the real app.** The permission-gated
+  screen-control path couldn't see the dev-mode window, so the app is driven
+  through WebView2's `--remote-debugging-port` instead — real IPC, real fs,
+  real Ollama, and the UI itself clicked by script. Every step's "done when"
+  is checked in the actually-running app this way.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

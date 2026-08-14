@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GearIcon } from "./icons";
+import { loadAll } from "../storage/stores";
 import { ChatTab } from "./tabs/ChatTab";
 import { AutomationsTab } from "./tabs/AutomationsTab";
 import { ActivityTab } from "./tabs/ActivityTab";
@@ -18,6 +19,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Turns red the moment any watcher or run is broken (wired to runs in step 6).
   const [errorDot] = useState(false);
+
+  useEffect(() => {
+    loadAll();
+  }, []);
 
   return (
     <div className="shell">

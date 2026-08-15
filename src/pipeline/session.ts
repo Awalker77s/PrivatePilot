@@ -318,8 +318,11 @@ export async function compile(
               after: s.after,
               needs: s.needs,
               when: s.when,
-              ifAnswerContains: s.if_answer_contains,
-              ifAnswerLacks: s.if_answer_lacks,
+              // "" is a constrained-decoding slip for "no condition" — every
+              // consumer is truthiness-guarded, so an empty string silently
+              // deletes the branch. Normalize to null (absent) here.
+              ifAnswerContains: s.if_answer_contains || null,
+              ifAnswerLacks: s.if_answer_lacks || null,
               map: Object.fromEntries(s.map.map((p) => [p.output, p.input])),
             })),
           }

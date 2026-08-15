@@ -150,6 +150,18 @@ export function buildWireSchema(catalog: Catalog) {
         });
       }
       const names = new Set(v.automations.map((a) => a.name));
+      // Two automations sharing a name collapse at assemble (nameToId is
+      // last-wins), so a chain runs one twice and orphans the other. Reject.
+      const lowerNames = v.automations.map((a) => a.name.trim().toLowerCase());
+      v.automations.forEach((a, i) => {
+        if (lowerNames.indexOf(a.name.trim().toLowerCase()) !== i) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["automations", i, "name"],
+            message: `Two automations are both named "${a.name}" — give each a distinct name.`,
+          });
+        }
+      });
       v.automations.forEach((a, i) => {
         const words = a.name.trim().split(/\s+/).length;
         if (words < 1 || words > 4) {
@@ -261,17 +273,19 @@ export function buildWireSchema(catalog: Catalog) {
       // The person's words routed on a result ("if…, otherwise…, depending
       // on…") — several jobs with no chain.steps is the drafter missing the
       // routing, not a choice. Insist, with the shape spelled out.
+      // Branching must be expressed as steps. Plain links run BOTH branches
+      // unconditionally every time — so branch-intent with no steps is wrong
+      // whether links are empty or not.
       if (
         catalog.branchIntent &&
         v.automations.length > 1 &&
-        (v.chain === null ||
-          (v.chain.steps.length === 0 && v.chain.links.length === 0))
+        (v.chain === null || v.chain.steps.length === 0)
       ) {
         ctx.addIssue({
           code: "custom",
           path: ["chain"],
           message:
-            'The person said the next automation depends on an earlier RESULT ("if…, otherwise…"). Set chain with steps (links stays []): the first job {"id": "s1", "after": [], …}; each branch after it with if_answer_contains or if_answer_lacks naming the word the result is tested for.',
+            'The person said the next automation depends on an earlier RESULT ("if…, otherwise…"). Express this with chain.steps (links MUST be []): the first job {"id": "s1", "after": [], …}; each branch after it with if_answer_contains or if_answer_lacks naming the word the result is tested for. Plain links would run every branch every time.',
         });
       }
       // Independent automations are fine unchained — a chain is only for
@@ -329,6 +343,28 @@ export function buildWireSchema(catalog: Catalog) {
                   code: "custom",
                   path: ["chain", "steps", i, "after"],
                   message: `Step ${s.id} can't wait for itself.`,
+                });
+              }
+            }
+            // Map pairs must reference REAL names — an output on the dep this
+            // step draws from, an input on this step's own automation. A
+            // misnamed output silently arrives empty at run time otherwise.
+            const stepAuto = v.automations.find((a) => a.name === s.automation);
+            const depStep = steps.find((x) => x.id === s.after[0]);
+            const depAuto = depStep && v.automations.find((a) => a.name === depStep.automation);
+            for (const pair of s.map) {
+              if (depAuto && !depAuto.outputs.some((o) => o.name === pair.output)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "map"],
+                  message: `"${pair.output}" is not an output of "${depStep!.automation}" (step ${s.after[0]}).`,
+                });
+              }
+              if (stepAuto && !stepAuto.inputs.some((inp) => inp.name === pair.input)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "map"],
+                  message: `"${pair.input}" is not an input of "${s.automation}".`,
                 });
               }
             }

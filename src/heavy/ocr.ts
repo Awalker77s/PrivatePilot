@@ -35,9 +35,20 @@ async function pdfTextIfDigital(sandboxPath: string): Promise<string | null> {
     const { extractText, getDocumentProxy } = await import("unpdf");
     const bytes = await readFile(sandboxPath);
     const pdf = await getDocumentProxy(new Uint8Array(bytes));
-    const { text } = await extractText(pdf, { mergePages: true });
-    const merged = Array.isArray(text) ? text.join("\n") : text;
-    return merged.replace(/\s+/g, "").length >= DIGITAL_PDF_CHARS ? merged.trim() : null;
+    // Per-PAGE, not per-document: a 10-page scan with one digital cover sheet
+    // must NOT be declared "digital" on the cover's text alone (that skipped
+    // OCR for every scanned page). Require MOST pages to carry real text.
+    const { text } = await extractText(pdf, { mergePages: false });
+    const pages = Array.isArray(text) ? text : [text];
+    const withText = pages.filter(
+      (p) => (p ?? "").replace(/\s+/g, "").length >= DIGITAL_PDF_CHARS
+    ).length;
+    // A truly digital PDF has text on (nearly) every page. A scan with a stray
+    // text page does not clear this bar, so it goes to OCR.
+    if (pages.length > 0 && withText >= Math.ceil(pages.length * 0.8)) {
+      return pages.join("\n").trim();
+    }
+    return null;
   } catch {
     // Unreadable as a text PDF → treat as scanned.
     return null;
@@ -105,7 +116,12 @@ export const realOcrRun = async (
   const lowConf: string[] = [];
   const allText: string[] = [];
   let pdfs = 0;
+  let digitalCount = 0; // PDFs that already had text — no OCR ran on these
   const pdfiumDll = await findBinary("pdfium.dll");
+  // Two inputs with the same stem but different extensions (invoice.pdf +
+  // invoice.jpg) would both write invoice.txt and clobber each other. Track
+  // used output stems and disambiguate with the source extension.
+  const usedStems = new Set<string>();
 
   for (const display of targets) {
     if (!IMG.test(display) && !PDF.test(display)) {
@@ -123,7 +139,15 @@ export const realOcrRun = async (
     if (!(await exists(src))) {
       return { ok: false, family: "broke", text: `${display} isn't there to read.`, logLine: `ocr_pdf: ${display} missing in sandbox.` };
     }
-    const { dir, stem, sep } = baseName(src);
+    const { dir, stem: rawStem, sep } = baseName(src);
+    // Disambiguate a colliding stem with the source extension (invoice-pdf,
+    // invoice-jpg) so each document's outputs are distinct.
+    const srcExt = (display.split(".").pop() ?? "").toLowerCase();
+    let stem = rawStem;
+    if (usedStems.has(stem.toLowerCase())) stem = `${rawStem}-${srcExt}`;
+    let bump = 2;
+    while (usedStems.has(stem.toLowerCase())) stem = `${rawStem}-${srcExt}-${bump++}`;
+    usedStems.add(stem.toLowerCase());
     const outBase = `${dir}${sep}${stem}.ocr`; // tesseract writes outBase.txt + outBase.pdf
 
     // The images Tesseract will read: the file itself, or the rasterized pages
@@ -140,6 +164,7 @@ export const realOcrRun = async (
           JSON.stringify({ source: display, method: "digital", chars: digital.replace(/\s+/g, "").length, readable: true }, null, 2)
         );
         done.push(stem);
+        digitalCount++;
         ctx.runNote(`${stem} already has text — indexed directly.`);
         continue;
       }
@@ -247,7 +272,17 @@ export const realOcrRun = async (
   const lowNote = lowConf.length
     ? ` ${lowConf.length} came back unreadable (${lowConf.slice(0, 3).join(", ")}) — those pages need a clearer scan.`
     : "";
-  const text = `Read ${readable} of ${done.length} document${done.length === 1 ? "" : "s"} with OCR at 300 DPI and made a searchable copy of each (in a copy — you keep the results).${lowNote}`;
+  const ocrCount = readable - digitalCount;
+  // Say what actually happened — OCR only where a scan was read, and "already
+  // had text" for the digital PDFs (no 300-DPI pass, no searchable copy made).
+  let text: string;
+  if (ocrCount > 0 && digitalCount > 0) {
+    text = `Read ${readable} of ${done.length} documents — ${ocrCount} scanned with OCR at 300 DPI (searchable copies made), ${digitalCount} already had text (indexed as-is).${lowNote} Everything's in a copy — you keep the results.`;
+  } else if (ocrCount > 0) {
+    text = `Read ${ocrCount} of ${done.length} document${done.length === 1 ? "" : "s"} with OCR at 300 DPI and made a searchable copy of each (in a copy — you keep the results).${lowNote}`;
+  } else {
+    text = `${digitalCount} document${digitalCount === 1 ? "" : "s"} already had text — indexed as-is, no OCR needed (in a copy — you keep the results).${lowNote}`;
+  }
   return {
     ok: readable > 0,
     family: readable > 0 ? "ok" : "on_purpose",

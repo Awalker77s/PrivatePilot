@@ -200,6 +200,17 @@ export function LibraryPanel() {
       .map((input) => `${to.name}: ${input.label}`);
   });
 
+  // A numeric-op threshold is held as raw text while editing — coerce it to a
+  // number at save. A non-numeric value (NaN, empty, a stray "-") drops the
+  // condition to null rather than persisting a broken threshold.
+  function coerceCondition(c: ChainCondition | null): ChainCondition | null {
+    if (!c) return null;
+    if (c.op === "now_contains" || c.op === "changed_at_all") return c;
+    const num = Number(c.value);
+    if (!Number.isFinite(num)) return null;
+    return { ...c, value: num };
+  }
+
   async function saveSequence() {
     if (sequence.length < 2) return;
     const members = sequenceMembers;
@@ -215,7 +226,7 @@ export function LibraryPanel() {
             .map((input) => [selectedOutput(from, to, input.name), input.name])
             .filter(([output]) => !!output)
         ),
-        onlyWhen: conditions[`${from.id}->${to.id}`] ?? null,
+        onlyWhen: coerceCondition(conditions[`${from.id}->${to.id}`] ?? null),
       });
     }
     const name = sequenceName.trim() || members.map((member) => member.name).join(" → ");
@@ -479,6 +490,12 @@ export function LibraryPanel() {
                           {conditions[`${previous.id}->${record.id}`]!.op !==
                             "changed_at_all" && (
                             <input
+                              inputMode={
+                                conditions[`${previous.id}->${record.id}`]!.op ===
+                                "now_contains"
+                                  ? "text"
+                                  : "decimal"
+                              }
                               value={
                                 conditions[`${previous.id}->${record.id}`]!.value ?? ""
                               }
@@ -486,13 +503,12 @@ export function LibraryPanel() {
                               onChange={(event) => {
                                 const key = `${previous.id}->${record.id}`;
                                 const condition = conditions[key]!;
-                                const value =
-                                  condition.op === "now_contains"
-                                    ? event.target.value
-                                    : Number(event.target.value);
+                                // Keep the RAW text while typing so "-", "0.",
+                                // and "-0.5" survive; numeric ops are coerced
+                                // to a number (or dropped if not one) at save.
                                 setConditions((currentConditions) => ({
                                   ...currentConditions,
-                                  [key]: { ...condition, value },
+                                  [key]: { ...condition, value: event.target.value },
                                 }));
                               }}
                             />
@@ -538,7 +554,12 @@ export function LibraryPanel() {
                   className="btn btn-sm btn-ghost"
                   key={version.revision?.id}
                   onClick={async () => {
-                    if (await restoreWorkflowVersion(editingWorkflowId)) {
+                    if (
+                      await restoreWorkflowVersion(
+                        editingWorkflowId,
+                        version.revision?.id
+                      )
+                    ) {
                       const restored = getState().chains.records.find(
                         (workflow) => workflow.id === editingWorkflowId
                       );

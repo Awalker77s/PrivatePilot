@@ -94,7 +94,14 @@ async function run(
       .replace(/\{n\}/g, String(n).padStart(pad, "0"))
       .replace(/\{name\}/g, base)
       .replace(/\{ext\}/g, dotExt);
-    if (regex) out = e.name.replace(regex, a.replace_with.replace(/\{n\}/g, String(n).padStart(pad, "0")));
+    if (regex)
+      out = e.name.replace(
+        regex,
+        a.replace_with
+          .replace(/\{n\}/g, String(n).padStart(pad, "0"))
+          .replace(/\{name\}/g, base)
+          .replace(/\{ext\}/g, dotExt)
+      );
     // Never let a rename escape the folder.
     out = out.replace(/[\\/:*?"<>|]/g, "_").trim();
     if (!out || /^(con|nul|prn|aux|com[1-9]|lpt[1-9])$/i.test(out.split(".")[0])) out = `file-${n}${dotExt}`;

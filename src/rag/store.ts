@@ -32,7 +32,21 @@ export interface StoredChunk extends Chunk {
 }
 
 export function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "kb";
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  // A fully non-Latin name (Cyrillic, CJK, Arabic, emoji) strips to "" and
+  // would collapse to the single slug "kb", merging every such KB into one.
+  // Give it a deterministic hash of the original so each name is distinct.
+  if (base) return base;
+  return `kb-${nameHash(name)}`;
+}
+
+function nameHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
 }
 
 async function kbDir(slug: string): Promise<string> {

@@ -343,18 +343,26 @@ export function workflowVersions(id: string): ChainRecord[] {
   return state.chains.versions[id] ?? [];
 }
 
-export async function restoreWorkflowVersion(id: string): Promise<boolean> {
+export async function restoreWorkflowVersion(
+  id: string,
+  revisionId?: string
+): Promise<boolean> {
   const versions = state.chains.versions[id] ?? [];
-  const previous = versions[0];
+  // Restore the version the person actually clicked — not always the newest.
+  const pickIdx = revisionId
+    ? versions.findIndex((v) => v.revision?.id === revisionId)
+    : 0;
+  const idx = pickIdx < 0 ? 0 : pickIdx;
+  const previous = versions[idx];
   if (!previous) return false;
   const index = state.chains.records.findIndex((workflow) => workflow.id === id);
   if (index < 0) return false;
   const current = state.chains.records[index];
+  // Swap: the current record goes to the head of history, the chosen version
+  // becomes current, and the rest of history keeps its order.
+  const rest = versions.filter((_, i) => i !== idx);
   state.chains.records[index] = previous;
-  state.chains.versions[id] = [current, ...versions.slice(1)].slice(
-    0,
-    VERSIONS_KEPT
-  );
+  state.chains.versions[id] = [current, ...rest].slice(0, VERSIONS_KEPT);
   await persistStore("chains", state.chains);
   emit();
   return true;

@@ -511,14 +511,10 @@ export function lintAutomation(a: {
       issues.push(`Steps reference {${t}} but there is no fill-in named "${t}".`);
     }
   }
-  for (const inp of a.inputs) {
-    if (!tokens.includes(inp.name) && a.steps.length > 0) {
-      // unused fill-ins are a smell, not a failure — surfaced softly
-      issues.push(
-        `The fill-in "${inp.name}" is never used in the steps — reference it as {${inp.name}} or remove it.`
-      );
-    }
-  }
+  // NOTE: an input NOT referenced by a {token} is intentionally allowed — a
+  // chain-fed automation receives its inputs through the chain map by name
+  // (the prompt's own receipts example does this). Flagging it as an error
+  // permanently blocked every edit of such an automation, so it's dropped.
   return issues;
 }
 

@@ -307,9 +307,15 @@ async function runInner(
     toolsLog.status = "held";
     toolsLog.finishedAt = Date.now();
     toolsLog.sentence = loop.heldBack;
-    const family = /Settings|Allow|connect|sign-in|permission/i.test(loop.heldBack)
-      ? "needs_you"
-      : "broke";
+    // Amber = the person must DO something. Match intentful phrases, not the
+    // bare word "connect" (which lives inside "Connection reset by peer" — a
+    // pure network crash that is red/broke, nothing for the person to fix).
+    const family =
+      /\bSettings\b|\bAllow\b|sign[- ]?in|permission|app password|not connected|\bpaste\b|connect your|reconnect|turn (it |this )?on/i.test(
+        loop.heldBack
+      )
+        ? "needs_you"
+        : "broke";
     event(family, "An app stopped the run", loop.heldBack);
     return finish(family === "needs_you" ? "needs_you" : "held", loop.heldBack);
   }
@@ -401,19 +407,32 @@ async function runInner(
   }
   verifyLog.finishedAt = Date.now();
 
-  // A run that reached none of its sources or apps delivered nothing — a
-  // purposeful stop, never a green checkmark that earns Save.
+  // A grounded answer run that reached NONE of its grounding — sources, apps,
+  // files, or a knowledge base — delivered nothing but its own guesswork. Hold
+  // it; a green checkmark over a fabricated answer is the one thing this app
+  // must never do. (Files and knowledge were previously omitted, so a
+  // "biggest expense in my receipts" answer with zero reads sailed to green.)
+  const isGrounded =
+    auto.sources.length > 0 ||
+    (auto.apps ?? []).length > 0 ||
+    (auto.files?.reads?.length ?? 0) > 0 ||
+    (auto.knowledge ?? []).length > 0;
   if (
     auto.delivers === "answer" &&
-    (auto.sources.length > 0 || (auto.apps ?? []).length > 0) &&
+    isGrounded &&
     loop.corpus.trim().length === 0 &&
     loop.appsRead === 0
   ) {
-    const sentence =
-      (auto.apps ?? []).length > 0 && auto.sources.length === 0
-        ? "Held back — it couldn't read anything from its apps, so there's nothing real to answer with."
-        : "Held back — it couldn't read anything from its sources, so there's nothing real to answer with.";
-    event("on_purpose", "Nothing fetched", sentence);
+    const what =
+      (auto.knowledge ?? []).length > 0
+        ? "your documents"
+        : (auto.files?.reads?.length ?? 0) > 0
+          ? "its files"
+          : (auto.apps ?? []).length > 0 && auto.sources.length === 0
+            ? "its apps"
+            : "its sources";
+    const sentence = `Held back — it couldn't read anything from ${what}, so there's nothing real to answer with.`;
+    event("on_purpose", "Nothing read", sentence);
     return finish("held", sentence);
   }
 
@@ -493,6 +512,10 @@ async function indexKeptDocuments(
   const docs: { name: string; text: string; sourcePath: string }[] = [];
   for (const e of diff.entries) {
     if (!e.kept || !/\.txt$/i.test(e.relPath)) continue;
+    // Skip OCR internal artifacts: the page-list (raw PNG paths) and any
+    // .ocr.json sidecar are machinery, not documents — indexing them poisons
+    // the KB with path junk that the keyword retriever then surfaces.
+    if (/\.pagelist\.txt$/i.test(e.relPath) || /\.ocr\.json$/i.test(e.relPath)) continue;
     // Map the kept sandbox .txt back to its real path; read the text there.
     const display = e.relPath;
     const real = toRealPath(sandbox, display) ?? "";

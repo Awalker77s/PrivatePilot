@@ -313,7 +313,13 @@ export async function runToolLoop(
     // first write root so a heavy tool can then work on it.
     writeSandboxFile: sandbox
       ? async (name, bytes) => {
-          const root = sandbox.roots.find((r) => record.files.writes.some((w) => w === r.display || w.startsWith(r.display + "/"))) ?? sandbox.roots[0];
+          // Only a declared WRITE folder — never a read-only root fallback,
+          // which would land the file somewhere the record can't write.
+          const root = sandbox.roots.find((r) =>
+            record.files.writes.some(
+              (w) => w === r.display || r.display.startsWith(w) || w.startsWith(r.display + "/")
+            )
+          );
           if (!root) return null;
           const sep = root.sandboxPath.includes("\\") ? "\\" : "/";
           const path = `${root.sandboxPath}${sep}${name}`;
@@ -451,6 +457,12 @@ export async function runToolLoop(
           } else if (!sb) {
             result = `Refused — ${display} is outside this automation's folders.`;
             outcome.refusals.push(result);
+          } else if (!underWriteFence(display, record.files.writes)) {
+            // A folder declared for READING is not a place to write — writing
+            // there would stage (and Keep would apply) an edit to a file the
+            // automation was only meant to look at.
+            result = `Refused — ${display} is in a read-only folder for this automation. It writes into: ${record.files.writes.join(", ") || "(nowhere — no write folder was set)"}.`;
+            outcome.refusals.push(result);
           } else {
             await writeSandboxFile(sb, display, String(args.content ?? ""));
             filesWritten++;
@@ -477,7 +489,7 @@ export async function runToolLoop(
           result = f.ok
             ? `${f.text}\n---\n${f.logLine}\nThe job remains: ${record.sentence}`
             : f.text;
-        } else if (name === "rag_ask") {
+        } else if (name === "rag_ask" && (record.knowledge ?? []).length > 0) {
           const kb = (record.knowledge ?? [])[0] ?? "";
           const question = String(args.question ?? "").trim() || record.sentence;
           onEvent({ text: `Tool loop — searching "${kb}"…` });
@@ -596,6 +608,18 @@ function tryRecoverCall(content: string): ToolCall | null {
   }
 }
 
+// A write target must sit inside a folder the record declared for WRITING —
+// not merely one it may read. Compares the display path against files.writes
+// (a file entry, or a folder that contains it).
+function underWriteFence(display: string, writes: string[]): boolean {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const d = norm(display);
+  return writes.some((w) => {
+    const wn = norm(w);
+    return d === wn || d.startsWith(wn + "/");
+  });
+}
+
 // Writes land in the sandbox. Spreadsheet targets take CSV text and become
 // real workbooks so the diff and the Keep both stay meaningful.
 async function writeSandboxFile(
@@ -612,7 +636,7 @@ async function writeSandboxFile(
     const ws = wb.addWorksheet("Sheet1");
     for (const line of content.split(/\r?\n/)) {
       if (line.trim().length === 0) continue;
-      ws.addRow(line.split(",").map((c) => parseCell(c.trim())));
+      ws.addRow(parseCsvLine(line).map((c) => parseCell(c)));
     }
     const buf = await wb.xlsx.writeBuffer();
     const { writeFile } = await import("@tauri-apps/plugin-fs");
@@ -622,7 +646,43 @@ async function writeSandboxFile(
   }
 }
 
+// RFC-4180 CSV: a quoted field may contain commas and "" (an escaped quote).
+// A naive split(",") shifts every cell after a quoted "Acme, Inc" one column
+// right — corrupting exactly the workbook the diff previews and Keep applies.
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((c) => c.trim());
+}
+
 function parseCell(v: string): string | number {
+  // A leading-zero string (zip codes, ids like "00123") must stay text — Excel
+  // would drop the zeros if it became a number.
+  if (/^0\d/.test(v)) return v;
   if (/^-?\$?[\d,]+(\.\d+)?$/.test(v)) {
     const n = Number(v.replace(/[$,]/g, ""));
     if (!Number.isNaN(n)) return n;

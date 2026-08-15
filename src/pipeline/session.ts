@@ -347,6 +347,7 @@ function assembleRecord(
     formats,
     sources: a.sources,
     apps: a.apps,
+    tools: a.tools,
     delivers: a.delivers,
     schedule: a.schedule,
     model,

@@ -50,4 +50,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     # secrets.rs — DPAPI
     "Win32_Security_Cryptography",
+    # heavy.rs — job objects (kill-on-close, resource + timeout caps)
+    "Win32_System_JobObjects",
+    "Win32_System_IO",
 ] }

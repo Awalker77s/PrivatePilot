@@ -12,6 +12,9 @@ import { readDir, writeTextFile, exists, mkdir } from "@tauri-apps/plugin-fs";
 import { toolsFor } from "../connectors/registry";
 import type { ToolContext, ToolSpec } from "../connectors/types";
 import type { RunHandoff } from "../storage/types";
+import { heavyToolsFor, heavyAllowed } from "../heavy/registry";
+import { findBinary } from "../heavy/runTool";
+import type { HeavyContext, HeavyToolSpec } from "../heavy/types";
 
 const MAX_TURNS = 15;
 // App connectors take one turn per read, and a mailbox has many — give
@@ -38,6 +41,7 @@ export interface LoopOutcome {
   heldBack: string | null;
   handoffs: RunHandoff[];
   appsRead: number; // connector reads that returned data
+  heavyRan: boolean; // a heavy tool did real work (staged into the sandbox)
 }
 
 const TOOLS: ToolDef[] = [
@@ -116,7 +120,11 @@ const TOOLS: ToolDef[] = [
 // Tools are bound per record: file tools only when the record touches
 // files, web tools only when it names sources, connector tools only for the
 // apps it lists. A triage job sees 5 tools, not 15.
-function bindTools(record: AutomationRecord, sandbox: Sandbox | null): { defs: ToolDef[]; specs: ToolSpec[] } {
+function bindTools(record: AutomationRecord, sandbox: Sandbox | null): {
+  defs: ToolDef[];
+  specs: ToolSpec[];
+  heavy: HeavyToolSpec[];
+} {
   const defs: ToolDef[] = [];
   const touchesFiles = sandbox !== null;
   const hasSources = record.sources.length > 0;
@@ -128,13 +136,23 @@ function bindTools(record: AutomationRecord, sandbox: Sandbox | null): { defs: T
   }
   const specs = toolsFor(record.apps);
   for (const s of specs) defs.push(s.def);
+  // Heavy tools bind only when the record lists them, the person allowed
+  // heavy tasks, and a sandbox exists (they work in the copy).
+  const heavy =
+    sandbox && heavyAllowed() ? heavyToolsFor(record.tools) : [];
+  for (const h of heavy) defs.push(h.def);
   // A record with nothing bound at all still gets the web pair, so the
   // model has a way to say it can't (never zero tools on a tools call).
   if (defs.length === 0) defs.push(...TOOLS.filter((t) => t.function.name === "fetch_page"));
-  return { defs, specs };
+  return { defs, specs, heavy };
 }
 
-function systemPrompt(record: AutomationRecord, inputValues: Record<string, string>, specs: ToolSpec[]): string {
+function systemPrompt(
+  record: AutomationRecord,
+  inputValues: Record<string, string>,
+  specs: ToolSpec[],
+  heavy: HeavyToolSpec[]
+): string {
   const roots = [...new Set([...record.files.reads, ...record.files.writes])].join(", ") || "none";
   const sources = record.sources.join(", ") || "none";
   const apps = (record.apps ?? []).join(", ") || "none";
@@ -143,6 +161,7 @@ function systemPrompt(record: AutomationRecord, inputValues: Record<string, stri
     .map(([k, v]) => `${k} = ${v}`)
     .join("; ");
   const appTools = specs.map((s) => s.def.function.name).join(", ");
+  const heavyTools = heavy.map((h) => h.def.function.name).join(", ");
   const now = new Date();
   const today = now.toLocaleString(undefined, {
     weekday: "short",
@@ -163,6 +182,9 @@ function systemPrompt(record: AutomationRecord, inputValues: Record<string, stri
       : "",
     specs.some((s) => /mail_recent|mail_search/.test(s.def.function.name))
       ? "INBOX TRIAGE: after ONE listing, judge urgency from each message's sender and subject alone. Open a message (…_read) ONLY if you will act on it — draft a reply or describe its details. NEVER open newsletters, promotions, receipts, social or security-alert emails — you already know from the subject that they need no reply. Open at most 3 messages total, then answer. Reading everything wastes the run."
+      : "",
+    heavy.length > 0
+      ? `Heavy tools you may run on files in your folders: ${heavyTools}. They do real work (rename, zip, read scanned documents) in a COPY — the person keeps or discards the results. Give only the folders/files and options; the app builds the command. After a heavy tool succeeds, answer plainly what it did.`
       : "",
     "You are in a loop and can make multiple tool calls before answering. Call exactly one tool per turn.",
     "If the job is to draft, send, or email a message: your final answer IS the message — a subject line, then the body, nothing else. The app shows a Send button; you never send anything yourself and must not say so.",
@@ -242,7 +264,7 @@ export async function runToolLoop(
     {
       role: "system",
       content:
-        systemPrompt(record, inputValues, bound.specs) +
+        systemPrompt(record, inputValues, bound.specs, bound.heavy) +
         (contextNote
           ? `\nContext: ${contextNote} Any condition in the job's own wording has ALREADY been decided — do not re-check it, just do the job.`
           : ""),
@@ -261,6 +283,7 @@ export async function runToolLoop(
     heldBack: null,
     handoffs: [],
     appsRead: 0,
+    heavyRan: false,
   };
   let filesRead = 0;
   let filesWritten = 0;
@@ -269,8 +292,18 @@ export async function runToolLoop(
     memory: new Map<string, unknown>([["inputs.values", Object.values(inputValues)]]),
   };
   const specByName = new Map(bound.specs.map((s) => [s.def.function.name, s]));
+  const heavyByName = new Map(bound.heavy.map((h) => [h.def.function.name, h]));
+  const heavyCtx: HeavyContext | null = sandbox
+    ? {
+        runNote: (line) => onEvent({ text: `Tool loop — ${line}` }),
+        sandbox,
+        binary: findBinary,
+        toSandbox: (display) => toSandboxPath(sandbox, display),
+      }
+    : null;
   const boundNames = bound.defs.map((d) => d.function.name).join(", ");
-  const maxTurns = bound.specs.length > 0 ? MAX_TURNS_APPS : MAX_TURNS;
+  const maxTurns =
+    bound.specs.length > 0 || bound.heavy.length > 0 ? MAX_TURNS_APPS : MAX_TURNS;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
     if (Date.now() - startedAt > STALL_MS) {
@@ -427,6 +460,34 @@ export async function runToolLoop(
             } else {
               // needs_you / broke from an app: stop here, held back. The
               // model never answers from partial app data.
+              outcome.heldBack = r.text;
+              outcome.answer = "";
+              return outcome;
+            }
+          }
+        } else if (heavyByName.has(name) && heavyCtx) {
+          const tool = heavyByName.get(name)!;
+          const parsed = tool.params.safeParse(args);
+          if (!parsed.success) {
+            result = argError(
+              { def: tool.def } as ToolSpec,
+              parsed.error.issues
+            );
+            outcome.logLines.push(`${name}: the arguments didn't fit — asked it to fix them.`);
+          } else {
+            const r = await tool.run(parsed.data as Record<string, unknown>, heavyCtx);
+            outcome.logLines.push(r.logLine);
+            outcome.heavyRan ||= r.ok;
+            if (r.ok) {
+              if (r.corpusText) outcome.corpus += `\n\n=== ${name} ===\n${r.corpusText}`;
+              filesWritten++;
+              result = `${r.text}\n---\n${r.logLine}\nThe job remains: ${record.sentence}`;
+            } else if (r.family === "on_purpose") {
+              outcome.refusals.push(r.text);
+              result = r.text;
+            } else {
+              // A heavy tool that needs you (allow / get the toolkit) or broke
+              // stops the run — never a green answer over half-done work.
               outcome.heldBack = r.text;
               outcome.answer = "";
               return outcome;

@@ -6,6 +6,7 @@
 import { z } from "zod";
 import type { Catalog } from "../catalog";
 import { CONNECTOR_IDS, allConnectorToolNames, connectorOfTool } from "../../connectors/registry";
+import { HEAVY_TOOL_IDS, heavyToolNames } from "../../heavy/registry";
 
 export const CATEGORIES = [
   "Documents",
@@ -55,6 +56,8 @@ export function buildWireSchema(catalog: Catalog) {
     // The apps fence — a closed enum, so an app that doesn't exist can't be
     // sampled at all (same trick as file paths).
     apps: z.array(z.enum(CONNECTOR_IDS)),
+    // The heavy-tools fence — same closed-enum trick.
+    tools: z.array(z.enum(HEAVY_TOOL_IDS)),
     delivers: z.enum(["answer", "files"]),
     schedule: z.union([
       z.strictObject({
@@ -190,6 +193,34 @@ export function buildWireSchema(catalog: Catalog) {
               code: "custom",
               path: ["automations", i, "sources"],
               message: `Spotify is read through its app tools, not ${s} — remove it from sources.`,
+            });
+          }
+        }
+        // Heavy tools: named in a step ⇒ must be in the tools fence; a job
+        // with heavy tools acts on files, so it needs a files fence; and a
+        // watcher may NEVER run a heavy tool.
+        for (const tool of heavyToolNames()) {
+          if (new RegExp(`\\b${tool}\\b`).test(stepText) && !a.tools.includes(tool as (typeof HEAVY_TOOL_IDS)[number])) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "tools"],
+              message: `The steps use ${tool}, so tools must include "${tool}".`,
+            });
+          }
+        }
+        if (a.tools.length > 0) {
+          if (a.files.reads.length === 0 && a.files.writes.length === 0) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "files"],
+              message: "A job that uses heavy tools must name the folders it works on in files.",
+            });
+          }
+          if (a.schedule.trigger === "watch") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "schedule"],
+              message: "Watchers check values — they never run heavy tools. Make it daily, or run it yourself.",
             });
           }
         }
@@ -335,6 +366,7 @@ export function validateEditedAutomation(
     files: { reads: string[]; writes: string[] };
     sources: string[];
     apps?: string[];
+    tools?: string[];
     delivers: string;
     schedule: unknown;
     effort: string;
@@ -355,6 +387,7 @@ export function validateEditedAutomation(
         files: record.files,
         sources: record.sources,
         apps: record.apps ?? [],
+        tools: record.tools ?? [],
         delivers: record.delivers,
         schedule: record.schedule,
         effort: record.effort,

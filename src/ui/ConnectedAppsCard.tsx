@@ -114,6 +114,51 @@ export function ConnectedAppsCard() {
   );
 }
 
+// Heavy tasks — real file work through vetted tools. The model never types a
+// command; the app builds it, and everything runs in a copy → you keep the
+// results. One Allow.
+export function HeavyTasksCard() {
+  const [, setTick] = useState(0);
+  const allowed = getSettings().heavy?.filesAllowed === true;
+  async function setAllowed(on: boolean) {
+    await updateSettings((s) => {
+      s.heavy = { ...(s.heavy ?? {}), filesAllowed: on };
+    });
+    setTick((t) => t + 1);
+  }
+  return (
+    <div className="settings-card" data-testid="heavy-tasks">
+      <div className="settings-card-title">
+        Heavy tasks
+        <button
+          className={allowed ? "btn btn-ghost btn-sm" : "btn btn-primary btn-sm"}
+          onClick={() => void setAllowed(!allowed)}
+          data-testid="heavy-toggle"
+        >
+          {allowed ? "Turn off" : "Allow"}
+        </button>
+      </div>
+      <div className="caption">
+        Let automations do real work on your files — rename in bulk, pack
+        archives, and read scanned or photographed documents (OCR) so you can
+        search and ask questions about them. Everything runs on this computer,
+        in a copy of your folders, with no internet. The model fills in the
+        blanks — which files, what format; it never types commands. Nothing
+        changes until you press Keep.
+      </div>
+      <div
+        className="status-line"
+        data-testid="heavy-status"
+        style={{ color: allowed ? "var(--green)" : "var(--text)" }}
+      >
+        {allowed
+          ? "Allowed — automations can rename, archive, and read documents in a copy."
+          : "Off — automations can't run file tools until you allow it."}
+      </div>
+    </div>
+  );
+}
+
 // Gmail: address + app password → one live IMAP login proves it, then the
 // password is sealed and the field is emptied. Disconnect deletes it.
 function GmailRow({

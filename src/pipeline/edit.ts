@@ -20,6 +20,7 @@ const PATCHABLE = new Set([
   "formats",
   "sources",
   "apps",
+  "tools",
   "delivers",
   "schedule",
   "effort",
@@ -68,6 +69,8 @@ function fieldLabel(key: string, record: AutomationRecord): string {
       return record.sources.join(" · ") || "(none)";
     case "apps":
       return (record.apps ?? []).join(" · ") || "(none)";
+    case "tools":
+      return (record.tools ?? []).join(" · ") || "(none)";
     default: {
       const v = (record as unknown as Record<string, unknown>)[key];
       return typeof v === "string" ? v : JSON.stringify(v);

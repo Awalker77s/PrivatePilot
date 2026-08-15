@@ -66,6 +66,7 @@ export async function runAutomation(
     },
     sources: auto.sources ?? [],
     apps: auto.apps ?? [],
+    tools: auto.tools ?? [],
     steps: auto.steps ?? [],
     inputs: auto.inputs ?? [],
     outputs: auto.outputs ?? [],

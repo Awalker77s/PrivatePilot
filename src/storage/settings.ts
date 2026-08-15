@@ -33,6 +33,11 @@ export interface AppSettings {
     // sealed in secrets.json and never in settings.
     gmail?: { address: string; connectedAt: number } | null;
   };
+  // Heavy tasks — real file work through vetted tools (convert, rename, zip,
+  // OCR). Off by default; nothing runs a tool until the person allows it.
+  heavy?: {
+    filesAllowed?: boolean;
+  };
 }
 
 const DEFAULTS: AppSettings = {

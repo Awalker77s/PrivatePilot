@@ -24,6 +24,8 @@ import * as spotifyMod from "./connectors/spotify";
 import * as computerMod from "./connectors/computer";
 import * as outlookMod from "./connectors/outlook";
 import * as gmailMod from "./connectors/gmail";
+import * as heavyReg from "./heavy/registry";
+import * as heavyRun from "./heavy/runTool";
 
 declare global {
   interface Window {
@@ -74,5 +76,7 @@ export function installDevHook() {
     computerMod,
     outlookMod,
     gmailMod,
+    heavyReg,
+    heavyRun,
   };
 }

@@ -46,6 +46,10 @@ export interface AutomationRecord {
   // The ONLY apps it may look into (connector ids like "outlook", "spotify",
   // "computer") — the same kind of fence as sources. Absent on old records.
   apps?: string[];
+  // The ONLY heavy tools it may run (ids like "bulk_rename", "ocr_pdf") — a
+  // closed fence like apps. Heavy tools act on files in the sandbox; the
+  // model never composes a command line. Absent on old records.
+  tools?: string[];
   delivers: "answer" | "files";
   schedule: Schedule;
   model: string;

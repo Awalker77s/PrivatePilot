@@ -18,7 +18,7 @@ import {
 } from "../providers/featherless";
 import { getSettings, updateSettings } from "../storage/settings";
 import { ensureParakeet, parakeetReady } from "../watchme/transcribe";
-import { ConnectedAppsCard } from "./ConnectedAppsCard";
+import { ConnectedAppsCard, HeavyTasksCard } from "./ConnectedAppsCard";
 
 export function SettingsSheet({ close }: { close: () => void }) {
   const { loadError } = useStore();
@@ -150,6 +150,8 @@ export function SettingsSheet({ close }: { close: () => void }) {
         </div>
 
         <ConnectedAppsCard />
+
+        <HeavyTasksCard />
 
         <ListeningCard />
 

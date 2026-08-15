@@ -60,6 +60,8 @@ mod outlook_classic;
 mod secrets;
 #[cfg(windows)]
 mod gmail;
+#[cfg(windows)]
+mod heavy;
 
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -308,7 +310,8 @@ pub fn run() {
             secrets::secret_clear,
             secrets::secret_has,
             gmail::gmail_imap,
-            gmail::gmail_disconnect_pool
+            gmail::gmail_disconnect_pool,
+            heavy::run_tool
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

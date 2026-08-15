@@ -9,6 +9,7 @@ import { wireJsonSchema } from "./schema";
 import { getSettings } from "../../storage/settings";
 import { COIN_ALIASES, endpointMenu } from "../endpoints";
 import { connectorMenu } from "../../connectors/registry";
+import { heavyMenu } from "../../heavy/registry";
 
 export interface DraftContext {
   userText: string;
@@ -57,6 +58,11 @@ export function draftSystemPrompt(catalog: Catalog): string {
     "- 'my Outlook / my calendar / my meetings' → apps [\"outlook\"] with outlook_* steps. 'my Gmail / my Google mail' → apps [\"gmail\"] with gmail_* steps. Plain 'my email / my inbox' → whichever of outlook/gmail is marked ready above (outlook if both). 'what's playing / pause / skip / Spotify' → apps [\"spotify\"]. Any other desktop app the person names (Discord, Teams, Notepad, a game…) or 'what's on my screen / what does X show' → apps [\"computer\"] with a read_app step naming the app.",
     "- Drafting an email or reply when Outlook or Gmail is listed = an outlook_draft / gmail_draft STEP inside the SAME automation (read → decide → draft is one job; the person presses Send). Reply through the app the message came from — never mix outlook and gmail in one automation, and never use outlook_draft for Gmail mail. Only 'then email/text ME a summary' with no app listed is a separate message-drafting job. Listing limits are ≤25.",
     "- Watchers on Outlook are fine every 5+ minutes; watchers on read_app should stay daily.",
+    "",
+    "Heavy tools an automation can run on files in its folders (real work — the app builds the command, the model only fills the blanks):",
+    heavyMenu(),
+    "- An automation that does real file work MUST list the heavy tool in tools (the fence) AND name the folders in files. Heavy tools never touch the web, and a watcher may NEVER run one.",
+    "- 'rename/convert/zip/unzip/read a scanned or photographed document (OCR)' = a heavy tool + files fence + delivers files. Everything runs in a copy; the person keeps the results.",
     "",
     "- One automation unless the person's words name two distinct jobs (shortest chain wins).",
     "- Two SEPARATE jobs with no hand-off ('and another automation that…', 'also make one that…', 'and then one to check…') = draft BOTH automations and leave chain null. Only set chain.links when one job's outputs actually feed the next — a link whose map is empty and whose onlyWhen is null is invalid.",

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TabId } from "../App";
 import { MicIcon, ArrowRightIcon } from "../icons";
 import { activeModelLabel } from "../../providers";
+import { BrainPicker } from "../BrainPicker";
 import { loadSettings } from "../../storage/settings";
 import {
   ChatItem,
@@ -266,7 +267,14 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
               </>
             ) : (
               <>
-                <span className="chip chip-gray">{modelLabel}</span>
+                <BrainPicker
+                  label={modelLabel}
+                  onChanged={() =>
+                    void activeModelLabel()
+                      .then(setModelLabel)
+                      .catch(() => setModelLabel("Ollama off"))
+                  }
+                />
                 <button
                   className={`btn btn-sm btn-ghost${dict.state === "transcribing" ? " mic-busy" : ""}`}
                   title="Speak instead of typing — tap, or hold to talk"

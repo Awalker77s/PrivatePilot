@@ -431,9 +431,7 @@ async function runEdit(target: EditTarget, request: string) {
     startedAt: Date.now(),
   });
   try {
-    const model = await activeLocalModel();
-    if (!model) throw new Error("No local model.");
-    const result = await editAutomation(auto, request, model);
+    const result = await editAutomation(auto, request);
     replace(progress.id, null);
     if (!result.ok || !result.after) {
       push({
@@ -708,12 +706,18 @@ export async function sendText(text: string) {
     }
     // "a second Morning Brief for the weekend" names an automation only to ask
     // for a VARIANT — compile it fresh, don't patch the original.
-    if (!COPY_INTENT_RE.test(text)) {
+    // A plain mention such as "Bitcoin price and 24-hour change" is also a
+    // fresh job unless it starts with a real change directive.
+    if (DELTA_VERB_RE.test(text) && !COPY_INTENT_RE.test(text)) {
       await runEdit(named[0], text);
       return;
     }
   }
-  if (named.length > 1 && !NEW_TASK_RE.test(text)) {
+  if (
+    named.length > 1 &&
+    !NEW_TASK_RE.test(text) &&
+    DELTA_VERB_RE.test(text)
+  ) {
     askWhichOne(named, text);
     return;
   }

@@ -35,13 +35,13 @@ export const ENDPOINTS: Endpoint[] = [
     cacheTtlSec: 60,
   },
   {
-    intent: "stock / index / fx-pair price",
-    hostnames: ["query1.finance.yahoo.com", "query2.finance.yahoo.com"],
+    intent: "US stock price",
+    hostnames: ["api.nasdaq.com"],
     urlTemplate:
-      "https://query1.finance.yahoo.com/v8/finance/chart/{SYMBOL}?interval=1d&range=1d",
-    slots: "SYMBOL like AAPL, TSLA, ^GSPC, EURUSD=X",
-    jsonPath: "chart.result[0].meta.regularMarketPrice",
-    valueNote: "number; previousClose beside it; check chart.error is null",
+      "https://api.nasdaq.com/api/quote/{SYMBOL}/info?assetclass=stocks",
+    slots: "SYMBOL like AAPL, TSLA, NVDA; fetch /summary too for PreviousClose",
+    jsonPath: "data.primaryData.lastSalePrice",
+    valueNote: "currency string; daily change beside it; previous close in data.summaryData.PreviousClose.value from /summary",
     cacheTtlSec: 120,
   },
   {

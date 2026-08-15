@@ -1,4 +1,5 @@
 import type { AutomationRecord } from "../storage/types";
+import { activeLocalModel, chat } from "../providers";
 import { fetchPage } from "./fetchPage";
 
 export interface DirectOutcome {
@@ -54,20 +55,45 @@ export async function runDirectEndpoint(
   }
 
   try {
-    const answer =
-      kind === "rss"
+    let secondaryBody: Record<string, unknown> | undefined;
+    let secondaryCorpus = "";
+    const logLines = [fetched.logLine];
+    if (kind === "nasdaq") {
+      const summaryUrl = url.replace(/\/info(\?|$)/, "/summary$1");
+      const summary = await fetchPage(summaryUrl, record.sources);
+      if (!summary.ok) {
+        throw new DirectEndpointError(
+          summary.sentence ?? "Nasdaq did not return the stock summary."
+        );
+      }
+      secondaryBody = JSON.parse(summary.text) as Record<string, unknown>;
+      secondaryCorpus = `\n\n=== ${summaryUrl} ===\n${summary.text}`;
+      logLines.push(summary.logLine);
+    }
+    const editorial = record.steps.some((step) =>
+      /\b(Themes|Most important) section\b/i.test(step)
+    );
+    const answer = editorial && (kind === "hackernews" || kind === "rss")
+      ? await formatEditorialAnswer(record, kind, fetched.text, url)
+      : kind === "rss"
         ? formatFeedAnswer(fetched.text, record.name)
         : formatAnswer(
-            kind,
-            JSON.parse(fetched.text) as Record<string, unknown>,
-            new URL(url).hostname,
-            url
-          );
+              kind,
+              JSON.parse(fetched.text) as Record<string, unknown>,
+              new URL(url).hostname,
+              url,
+              secondaryBody
+            );
     if (!answer) return null;
     return {
       answer,
-      corpus: `=== ${url} ===\n${fetched.text}`,
-      logLines: [fetched.logLine, "Read the verified endpoint directly — no model turn needed."],
+      corpus: `=== ${url} ===\n${fetched.text}${secondaryCorpus}`,
+      logLines: [
+        ...logLines,
+        editorial
+          ? "Used one focused local pass to turn the verified headlines into a briefing."
+          : "Read the verified endpoint directly — no model turn needed.",
+      ],
     };
   } catch (error) {
     if (error instanceof DirectEndpointError) throw error;
@@ -77,12 +103,166 @@ export async function runDirectEndpoint(
   }
 }
 
+async function formatEditorialAnswer(
+  record: AutomationRecord,
+  kind: "hackernews" | "rss",
+  fetchedText: string,
+  url: string
+): Promise<string> {
+  const count = Math.max(
+    3,
+    Math.min(20, Number(new URL(url).searchParams.get("hitsPerPage") ?? 10))
+  );
+  let source: string;
+  let headlineList: string | null;
+  let titleOptions: string[] = [];
+  if (kind === "hackernews") {
+    const body = JSON.parse(fetchedText) as { hits?: unknown[] };
+    headlineList = formatAnswer(
+      "hackernews",
+      body as Record<string, unknown>,
+      new URL(url).hostname,
+      url
+    );
+    const compactHits = (body.hits ?? []).slice(0, count).map((raw) => {
+        const hit = raw as {
+          title?: unknown;
+          url?: unknown;
+          story_url?: unknown;
+          points?: unknown;
+        };
+        return {
+          title: hit.title,
+          url: hit.url ?? hit.story_url,
+          points: hit.points,
+        };
+      });
+    titleOptions = compactHits
+      .map((hit) => hit.title)
+      .filter((title): title is string => typeof title === "string");
+    source = JSON.stringify(compactHits);
+  } else {
+    headlineList = formatFeedAnswer(fetchedText, record.name);
+    source = fetchedText.split("\n").slice(0, count * 2 + 2).join("\n");
+  }
+
+  const model = await activeLocalModel();
+  if (!model) {
+    throw new DirectEndpointError(
+      "The local AI isn't running — start Ollama, then try again."
+    );
+  }
+  const requirements = record.steps
+    .filter((step) => /\b(Themes|Most important) section\b/i.test(step))
+    .join("\n- ");
+  const importantCount = Math.max(
+    1,
+    Math.min(5, Number(requirements.match(/Most important section with the (\d+)/i)?.[1] ?? 2))
+  );
+  const themeCount = Math.max(
+    1,
+    Math.min(5, Number(requirements.match(/Themes section covering the (\d+)/i)?.[1] ?? 3))
+  );
+  const result = await chat({
+    model,
+    messages: [
+      {
+        role: "system",
+        content:
+          "Select important headlines and name recurring themes using only the verified titles and points. Never add performance claims, costs, causes, or other facts absent from a title. Keep every explanation under 14 words.",
+      },
+      {
+        role: "user",
+        content: `Job: ${record.sentence}\nRequirements:\n- ${requirements}\n\nVerified headlines:\n${source}`,
+      },
+    ],
+    format: {
+      type: "object",
+      properties: {
+        important: {
+          type: "array",
+          minItems: importantCount,
+          maxItems: importantCount,
+          items: {
+            type: "object",
+            properties: {
+              title: titleOptions.length
+                ? { type: "string", enum: titleOptions }
+                : { type: "string" },
+              why: { type: "string" },
+            },
+            required: ["title", "why"],
+            additionalProperties: false,
+          },
+        },
+        themes: {
+          type: "array",
+          minItems: themeCount,
+          maxItems: themeCount,
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              summary: { type: "string" },
+            },
+            required: ["name", "summary"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["important", "themes"],
+      additionalProperties: false,
+    },
+    options: {
+      num_ctx: 4096,
+      temperature: 0,
+      top_p: 0.9,
+      top_k: 20,
+      max_tokens: 256,
+    },
+    think: false,
+  });
+  let parsed: {
+    important: { title: string; why: string }[];
+    themes: { name: string; summary: string }[];
+  };
+  try {
+    parsed = JSON.parse(result.content) as typeof parsed;
+  } catch {
+    throw new DirectEndpointError(
+      "The local AI returned an unreadable briefing — try again."
+    );
+  }
+  const short = (value: string) =>
+    value.trim().split(/\s+/).slice(0, 14).join(" ").replace(/[,:;]$/, "");
+  const analysis = [
+    "## Most important",
+    ...parsed.important
+      .slice(0, importantCount)
+      .map((item) => `- **${item.title}** — ${short(item.why)}`),
+    "",
+    "## Themes",
+    ...parsed.themes
+      .slice(0, themeCount)
+      .map((item) => `- **${short(item.name)}** — ${short(item.summary)}`),
+  ].join("\n");
+  const briefing = headlineList ? `${headlineList}\n\n${analysis}` : analysis;
+  const output = record.outputs[0]?.name;
+  if (!output) return briefing;
+  const baton = (titleOptions.length ? titleOptions.join(" | ") : source)
+    .replace(/;/g, ",")
+    .replace(/\s*\n\s*/g, " | ")
+    .slice(0, 2_000);
+  return `${briefing}\n\nOUTPUTS: ${output}=${baton}`;
+}
+
 type DirectKind =
   | "status"
   | "coingecko"
   | "coinbase"
   | "frankfurter"
   | "yahoo"
+  | "nasdaq"
   | "hackernews"
   | "rss";
 
@@ -106,6 +286,12 @@ function directKind(url: string): DirectKind | null {
     return "yahoo";
   }
   if (
+    parsed.hostname === "api.nasdaq.com" &&
+    parsed.pathname.endsWith("/info")
+  ) {
+    return "nasdaq";
+  }
+  if (
     parsed.hostname === "hn.algolia.com" &&
     parsed.pathname.includes("/api/v1/search")
   ) {
@@ -124,7 +310,8 @@ function formatAnswer(
   kind: DirectKind,
   body: Record<string, unknown>,
   hostname: string,
-  url: string
+  url: string,
+  secondaryBody?: Record<string, unknown>
 ): string | null {
   if (kind === "status") {
     const status = body.status as { description?: unknown } | undefined;
@@ -207,6 +394,62 @@ function formatAnswer(
       "",
       `Price: **${money(price)}**`,
       ...(Number.isFinite(previous) ? [`Previous close: ${money(previous)}`] : []),
+      "",
+      `OUTPUTS: price=${price}`,
+    ].join("\n");
+  }
+
+  if (kind === "nasdaq") {
+    const data = body.data as
+      | {
+          symbol?: unknown;
+          companyName?: unknown;
+          marketStatus?: unknown;
+          primaryData?: {
+            lastSalePrice?: unknown;
+            netChange?: unknown;
+            percentageChange?: unknown;
+            deltaIndicator?: unknown;
+            lastTradeTimestamp?: unknown;
+          };
+        }
+      | undefined;
+    const summaryData = (
+      secondaryBody?.data as
+        | { summaryData?: Record<string, { value?: unknown }> }
+        | undefined
+    )?.summaryData;
+    const priceText = data?.primaryData?.lastSalePrice;
+    const previousText = summaryData?.PreviousClose?.value;
+    const parseMoney = (value: unknown) =>
+      Number(String(value ?? "").replace(/[$,+%]/g, "").replace(/,/g, ""));
+    const price = parseMoney(priceText);
+    const previous = parseMoney(previousText);
+    if (!Number.isFinite(price)) return null;
+    const symbol = typeof data?.symbol === "string" ? data.symbol : "Stock";
+    const name =
+      typeof data?.companyName === "string" ? data.companyName : symbol;
+    const net = data?.primaryData?.netChange;
+    const percent = data?.primaryData?.percentageChange;
+    const direction = data?.primaryData?.deltaIndicator === "down" ? "down" : "up";
+    const market =
+      typeof data?.marketStatus === "string" ? data.marketStatus : null;
+    const traded =
+      typeof data?.primaryData?.lastTradeTimestamp === "string"
+        ? data.primaryData.lastTradeTimestamp
+        : null;
+    return [
+      `## ${name} (${symbol})`,
+      "",
+      `Price: **$${compactNumber(price)}**`,
+      ...(Number.isFinite(previous)
+        ? [`Previous close: $${compactNumber(previous)}`]
+        : []),
+      ...(typeof net === "string" && typeof percent === "string"
+        ? [`Daily move: ${direction} ${net.replace(/^[-+]/, "")} (${percent.replace(/^[-+]/, "")})`]
+        : []),
+      ...(market ? [`Market: ${market}`] : []),
+      ...(traded ? [`Last trade: ${traded}`] : []),
       "",
       `OUTPUTS: price=${price}`,
     ].join("\n");

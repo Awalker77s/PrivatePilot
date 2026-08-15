@@ -66,7 +66,10 @@ async function ollamaFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  const timeoutMs = path === "/api/chat" ? 300_000 : 20_000;
+  // A single local turn should never hold the UI for five minutes. Common
+  // public-data jobs bypass the model entirely; unusual model-backed turns get
+  // two minutes before surfacing a useful recovery choice.
+  const timeoutMs = path === "/api/chat" ? 120_000 : 20_000;
   const signal = AbortSignal.timeout(timeoutMs);
   try {
     // A wedged request must become a designed sentence, never a forever-hang
@@ -98,7 +101,7 @@ async function ollamaFetch(
       (e instanceof Error && e.name === "TimeoutError");
     throw new ProviderError(
       timedOut
-        ? "The local AI took too long to answer — try again."
+        ? "The local AI took over two minutes — switch to Qwen 4B in Settings, or try again."
         : OLLAMA_DOWN_SENTENCE,
       String(e)
     );

@@ -100,7 +100,7 @@ export default function App() {
         </button>
       )}
 
-      <main className="tabpanel" hidden={tab !== "chat"}>
+      <main className="tabpanel chat-tabpanel" hidden={tab !== "chat"}>
         <ChatTab goTo={setTab} />
       </main>
       <main className="tabpanel" hidden={tab !== "automations"}>

@@ -21,6 +21,7 @@ import {
 import { draftCall, draftMessages, DraftContext } from "./draft";
 import type { WireAutomation } from "./draft/schema";
 import { validateLoop } from "./validate";
+import { tryQuickCompile } from "./quickDraft";
 import {
   draftRevisionFor,
   mergePermissionManifests,
@@ -87,6 +88,88 @@ export async function compile(
     answer: null,
   };
   await appendRun(run);
+
+  // Stable public-data requests do not need a model to decide their shape.
+  // This makes the everyday path (news, prices, service status) effectively
+  // instant while preserving the full compiler for ambiguous or file work.
+  const quick = tryQuickCompile(context);
+  if (quick) {
+    onProgress("draft", "Matching a verified quick request…");
+    const quickStarted = Date.now();
+    const draftLog: StageLog = {
+      stage: "draft",
+      startedAt: quickStarted,
+      finishedAt: Date.now(),
+      status: "ok",
+      lines: [
+        {
+          at: Date.now(),
+          text: `Matched: ${quick.matched.join(", ")}. No model wait needed.`,
+          anchor: anchor(runId, anchorN++),
+        },
+      ],
+      sentence: "Built from verified public-data templates on this computer.",
+    };
+    stages.push(draftLog);
+
+    if (quick.kind === "question") {
+      run.counters.questionCard = true;
+      await updateRun(runId, (r) => {
+        r.status = "needs_you";
+        r.finishedAt = Date.now();
+        r.summary = quick.question.asking;
+      });
+      return {
+        ok: true,
+        automations: [],
+        chain: null,
+        question: quick.question,
+        argument: ["Stopped immediately because this request needs a private service connection."],
+        failSentence: null,
+        runId,
+        keptToOneStep: false,
+      };
+    }
+
+    const assembled = quick.draft.automations.map((automation) =>
+      assembleRecord(automation, "Private Pilot quick path", context)
+    );
+    const validateLog: StageLog = {
+      stage: "validate",
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+      status: "ok",
+      lines: [
+        {
+          at: Date.now(),
+          text: "Hostnames and response shapes came from the verified endpoint catalog.",
+          anchor: anchor(runId, anchorN++),
+        },
+      ],
+      sentence: "Verified template — no model correction pass needed.",
+    };
+    stages.push(validateLog);
+    const summary =
+      assembled.length === 1
+        ? `Built "${assembled[0].name}" — waiting for a watched run`
+        : `Built ${assembled.length} independent automations — waiting for a watched run`;
+    await updateRun(runId, (r) => {
+      r.status = "ok";
+      r.finishedAt = Date.now();
+      r.summary = summary;
+      r.automationId = assembled[0]?.id ?? "draft";
+    });
+    return {
+      ok: true,
+      automations: assembled,
+      chain: null,
+      question: null,
+      argument: ["Matched a verified template — skipped the local AI wait."],
+      failSentence: null,
+      runId,
+      keptToOneStep: assembled.length === 1,
+    };
+  }
 
   const fail = async (sentence: string): Promise<CompileResult> => {
     await updateRun(runId, (r) => {

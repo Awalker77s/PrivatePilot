@@ -1,5 +1,5 @@
 // Stage 3 · The agentic tool loop. Four tools as JSON, one call per turn,
-// cap 15 turns, 30-minute stall timeout, stream off. Sampling: temp 0.6 /
+// bounded turns and stall time, stream off. Sampling: temp 0.6 /
 // top_p 0.95 / top_k 20. Small models sometimes emit the call as JSON text
 // in content — recovered and logged, never dropped.
 import { chat, NUM_CTX_DRAFT, NUM_CTX_TOOLS } from "../providers";
@@ -10,8 +10,6 @@ import { fetchPage } from "./fetchPage";
 import { Sandbox, toSandboxPath } from "./sandbox";
 import { readDir, writeTextFile, exists, mkdir } from "@tauri-apps/plugin-fs";
 
-const MAX_TURNS = 15;
-const STALL_MS = 30 * 60 * 1000;
 const CTX_GUARD = 0.85;
 
 export interface LoopEvent {
@@ -165,6 +163,14 @@ export async function runToolLoop(
   // Online jobs carry no file corpus, so 16k is ample and substantially
   // quicker on CPU-only machines. File jobs retain the full 32k window.
   const contextSize = sandbox ? NUM_CTX_TOOLS : NUM_CTX_DRAFT;
+  const maxTurns = sandbox
+    ? record.effort === "quick"
+      ? 10
+      : 15
+    : record.effort === "quick"
+      ? 4
+      : 10;
+  const stallMs = record.effort === "quick" ? 5 * 60 * 1000 : 30 * 60 * 1000;
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -189,8 +195,8 @@ export async function runToolLoop(
   let filesRead = 0;
   let filesWritten = 0;
 
-  for (let turn = 1; turn <= MAX_TURNS; turn++) {
-    if (Date.now() - startedAt > STALL_MS) {
+  for (let turn = 1; turn <= maxTurns; turn++) {
+    if (Date.now() - startedAt > stallMs) {
       outcome.stalled = true;
       outcome.answer = "";
       return outcome;
@@ -241,7 +247,7 @@ export async function runToolLoop(
 
     if (calls.length === 0) {
       const answer = res.content.trim();
-      if (answer.length === 0 && turn < MAX_TURNS) {
+      if (answer.length === 0 && turn < maxTurns) {
         // An empty turn is never an answer — nudge once, honestly logged.
         outcome.logLines.push("An empty turn — asked it to answer in words.");
         messages.push({
@@ -335,7 +341,7 @@ export async function runToolLoop(
     }
   }
 
-  // 15 turns without a final answer.
+  // The effort-appropriate turn cap was reached without a final answer.
   outcome.answer = "";
   return outcome;
 }

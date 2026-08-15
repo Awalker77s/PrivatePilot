@@ -18,6 +18,7 @@ import * as sandboxMod from "./runner/sandbox";
 import * as diffMod from "./runner/diff";
 import * as fetchMod from "./runner/fetchPage";
 import * as renderMod from "./runner/renderPage";
+import * as quickDraft from "./pipeline/quickDraft";
 
 declare global {
   interface Window {
@@ -62,5 +63,6 @@ export function installDevHook() {
     diffMod,
     fetchMod,
     renderMod,
+    quickDraft,
   };
 }

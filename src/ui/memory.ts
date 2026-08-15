@@ -23,6 +23,19 @@ export const TIMEY_RE =
 export const NEW_TASK_RE =
   /\b(another automation|a new automation|an automation (that|to|which)|a second automation|one more automation|make me (an|a new)|create (an|a new)|build (me )?(an|a))\b/i;
 
+// A question ABOUT an automation ("what can this do?", "when does it run?",
+// "why did it fail?") — answered from the record, never sent to the patcher.
+// "Can you change the time?" is still an edit: a delta verb wins over the
+// question form, because the person wants the change, not an essay.
+const QUESTION_FORM_RE =
+  /^(what|what's|whats|how|why|when|where|which|who|does|do|did|can|could|is|are|was|will|would|should|tell me|explain|describe|walk me through|help me understand|show me what|summarize)\b|\?\s*$/i;
+export function isQuestionAbout(text: string): boolean {
+  const t = text.trim();
+  if (NEW_TASK_RE.test(t)) return false;
+  if (DELTA_VERB_RE.test(t)) return false; // "can you set it to 9am?" = edit
+  return QUESTION_FORM_RE.test(t);
+}
+
 // "…and another automation to check meta" names two independent jobs — split
 // before drafting so the model only ever sees one job per call.
 const SPLIT_RE =

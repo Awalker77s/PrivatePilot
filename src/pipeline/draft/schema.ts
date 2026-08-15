@@ -98,6 +98,24 @@ export function buildWireSchema(catalog: Catalog) {
         ]),
       })
     ),
+    // Branching (use INSTEAD of links when the person's words route on
+    // results: "if…, otherwise…, depending on…"): a flat step list. Each step
+    // names the automations it runs after, the outcome that lets it fire, and
+    // an optional test on the earlier step's answer.
+    steps: z.array(
+      z.strictObject({
+        id: z.string(), // "s1", "s2", …
+        automation: z.string(), // a drafted automation's name
+        after: z.array(z.string()), // step ids; [] = the first step
+        needs: z.enum(["all", "any"]), // "any" = fire after whichever came through
+        when: z.enum(["ran", "held", "broke", "always"]),
+        if_answer_contains: z.union([z.string(), z.null()]),
+        if_answer_lacks: z.union([z.string(), z.null()]),
+        map: z.array(
+          z.strictObject({ output: z.string(), input: z.string() })
+        ),
+      })
+    ),
   });
 
   const questionDraft = z.strictObject({
@@ -229,9 +247,110 @@ export function buildWireSchema(catalog: Catalog) {
           }
         }
       });
+      // The person's words routed on a result ("if…, otherwise…, depending
+      // on…") — several jobs with no chain.steps is the drafter missing the
+      // routing, not a choice. Insist, with the shape spelled out.
+      if (
+        catalog.branchIntent &&
+        v.automations.length > 1 &&
+        (v.chain === null ||
+          (v.chain.steps.length === 0 && v.chain.links.length === 0))
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["chain"],
+          message:
+            'The person said the next automation depends on an earlier RESULT ("if…, otherwise…"). Set chain with steps (links stays []): the first job {"id": "s1", "after": [], …}; each branch after it with if_answer_contains or if_answer_lacks naming the word the result is tested for.',
+        });
+      }
       // Independent automations are fine unchained — a chain is only for
       // hand-offs the person actually asked for.
       if (v.chain) {
+        if (v.chain.links.length > 0 && v.chain.steps.length > 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["chain"],
+            message: "Use links (a straight line) OR steps (branching) — never both.",
+          });
+        }
+        if (v.chain.steps.length > 0) {
+          const steps = v.chain.steps;
+          if (steps.length > 8) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "Branching chains cap at 8 steps.",
+            });
+          }
+          const stepIds = new Set(steps.map((s) => s.id));
+          if (stepIds.size !== steps.length) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "Two steps share an id — give every step its own (s1, s2, …).",
+            });
+          }
+          if (!steps.some((s) => s.after.length === 0)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "One step must have after: [] — the chain needs a first step.",
+            });
+          }
+          steps.forEach((s, i) => {
+            if (!names.has(s.automation)) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["chain", "steps", i, "automation"],
+                message: `"${s.automation}" is not one of the drafted automation names.`,
+              });
+            }
+            for (const dep of s.after) {
+              if (!stepIds.has(dep)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "after"],
+                  message: `Step ${s.id} waits for "${dep}", which isn't a step id in this chain.`,
+                });
+              }
+              if (dep === s.id) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "after"],
+                  message: `Step ${s.id} can't wait for itself.`,
+                });
+              }
+            }
+            if (s.after.length === 0 && (s.if_answer_contains || s.if_answer_lacks)) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["chain", "steps", i],
+                message: "A first step has no earlier result to test — drop the if_answer condition or add after.",
+              });
+            }
+          });
+          // Kahn's on the draft shape — a circle is refused with names.
+          const indeg = new Map(steps.map((s) => [s.id, s.after.filter((d) => stepIds.has(d)).length]));
+          const queue = steps.filter((s) => (indeg.get(s.id) ?? 0) === 0).map((s) => s.id);
+          let settled = 0;
+          while (queue.length) {
+            const id = queue.shift()!;
+            settled++;
+            for (const s of steps) {
+              if (!s.after.includes(id)) continue;
+              const d = (indeg.get(s.id) ?? 0) - 1;
+              indeg.set(s.id, d);
+              if (d === 0) queue.push(s.id);
+            }
+          }
+          if (settled !== steps.length) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "These steps circle back on each other — chains flow one way.",
+            });
+          }
+        }
         if (v.chain.links.length > 3) {
           ctx.addIssue({
             code: "custom",

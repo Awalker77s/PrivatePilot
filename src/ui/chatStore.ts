@@ -13,10 +13,12 @@ import {
   findTargetNamed,
   findTargetsByName,
   focusTargets,
+  isQuestionAbout,
   renderHistory,
   rewriteDeixis,
   splitCoordination,
 } from "./memory";
+import { explainAutomation } from "../pipeline/explain";
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
@@ -61,6 +63,9 @@ type ChatItemVariant =
       keepSentence: string | null;
     }
   | { id: number; kind: "note"; tone: "gray" | "amber" | "red"; text: string }
+  // A grounded answer ABOUT an automation ("what can this do?") — rendered
+  // like a run answer, sourced only from the record + its run history.
+  | { id: number; kind: "explain"; autoName: string; text: string }
   | {
       id: number;
       kind: "edit";
@@ -454,6 +459,40 @@ async function runEdit(target: EditTarget, request: string) {
   }
 }
 
+// A question about an automation answers from the record — never the patcher.
+// This is what makes an automation something you can TALK to: open it from
+// the Library, ask "what can this do?", then keep upgrading it in words.
+async function runExplain(record: AutomationRecord, question: string, history?: string) {
+  busy = true;
+  const progress = push({
+    kind: "progress",
+    stage: "draft",
+    text: `Reading "${record.name}"…`,
+    startedAt: Date.now(),
+  });
+  try {
+    const model = await activeLocalModel();
+    if (!model) throw new Error("No local model.");
+    const result = await explainAutomation(record, question, model, history);
+    replace(progress.id, null);
+    if (!result.ok) {
+      push({
+        kind: "note",
+        tone: "amber",
+        text: result.failSentence ?? "Couldn't answer that one.",
+      });
+    } else {
+      push({ kind: "explain", autoName: record.name, text: result.answer });
+    }
+  } catch (e) {
+    replace(progress.id, null);
+    push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+  } finally {
+    busy = false;
+    emit();
+  }
+}
+
 // A draft edit mutates the built card in place (the Zapier/GPT-builder
 // pattern: one open draft, follow-ups change IT) and drops an already-kept
 // edit card as the visible change summary — Put it back reverses it.
@@ -583,23 +622,32 @@ export async function sendText(text: string) {
     return;
   }
 
-  // An Automation Studio is an explicit edit scope. It replaces the global
-  // chat's name/pronoun heuristics: every new instruction edits this record.
+  // An Automation Studio is an explicit scope for THIS record: a question
+  // answers from it, any instruction edits it. No name/pronoun heuristics.
   if (activeAutomationId) {
     const record = saved.find((candidate) => candidate.id === activeAutomationId);
     if (record) {
-      await runEdit({ record, builtItemId: null }, text);
+      if (isQuestionAbout(text)) {
+        await runExplain(record, text, history);
+      } else {
+        await runEdit({ record, builtItemId: null }, text);
+      }
       return;
     }
   }
 
-  // A single structured reference can be edited without repeating its name.
+  // A single structured reference: questions answer from it, instructions
+  // edit it — no need to repeat its name either way.
   if (references.length === 1 && !NEW_TASK_RE.test(text)) {
     const record = saved.find(
       (candidate) => candidate.id === references[0].automationId
     );
     if (record) {
-      await runEdit({ record, builtItemId: null }, text);
+      if (isQuestionAbout(text)) {
+        await runExplain(record, text, history);
+      } else {
+        await runEdit({ record, builtItemId: null }, text);
+      }
       return;
     }
   }
@@ -624,7 +672,11 @@ export async function sendText(text: string) {
   // of re-building it.
   const named = findTargetsByName(text, thread, saved);
   if (named.length === 1 && !NEW_TASK_RE.test(text)) {
-    await runEdit(named[0], text);
+    if (isQuestionAbout(text)) {
+      await runExplain(named[0].record, text, history);
+    } else {
+      await runEdit(named[0], text);
+    }
     return;
   }
   if (named.length > 1 && !NEW_TASK_RE.test(text)) {

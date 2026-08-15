@@ -51,8 +51,10 @@ export function AutomationSheet({
   const approved = isRevisionApproved(normalized);
   const fullAccess = getSettings().permissions?.fullAccess ?? false;
 
-  const memberChains = chains.records.filter((c) =>
-    c.links.some((l) => l.from === auto.id || l.to === auto.id)
+  const memberChains = chains.records.filter(
+    (c) =>
+      c.links.some((l) => l.from === auto.id || l.to === auto.id) ||
+      c.steps?.some((s) => s.automationId === auto.id)
   );
 
   const rows: Row[] = [];
@@ -138,12 +140,16 @@ export function AutomationSheet({
   });
 
   for (const chain of memberChains) {
-    const order = chainOrder(chain.links);
+    const order = chain.steps?.length
+      ? chain.steps.map((s) => s.automationId)
+      : chainOrder(chain.links);
     const idx = order.indexOf(auto.id);
     rows.push({
       key: `chain-${chain.id}`,
       label: "Part of",
-      value: `${chain.name} — step ${idx + 1} of ${order.length} ›`,
+      value: chain.steps?.length
+        ? `${chain.name} — branching, ${chain.steps.length} steps ›`
+        : `${chain.name} — step ${idx + 1} of ${order.length} ›`,
       sub: chain.components
         ? `This sequence pins revision ${chain.components.find((component) => component.automationId === auto.id)?.revisionNumber ?? "?"}.`
         : "Legacy sequence — it follows the current automation version.",

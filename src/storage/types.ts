@@ -133,10 +133,27 @@ export interface ChainLink {
   onlyWhen: ChainCondition | null;
 }
 
+// A branching chain step (GitHub-Actions shape: flat list, each step names
+// what it runs after and the condition that lets it fire). "if the check
+// finds something, run A and B; otherwise run C; after either, run D."
+export interface ChainStep {
+  id: string; // "s1" — local to this chain
+  automationId: string;
+  after: string[]; // step ids this one waits for; [] = a root step
+  needs: "all" | "any"; // how several deps combine ("any" joins exclusive branches)
+  when: "ran" | "held" | "broke" | "always"; // the dep outcome that lets this fire
+  // Result predicate, read from the first dep's answer (case-insensitive).
+  ifAnswerContains: string | null;
+  ifAnswerLacks: string | null;
+  map: Record<string, string>; // first dep's outputs → this step's inputs
+}
+
 export interface ChainRecord {
   id: string; // "chain-m1"
   name: string;
   links: ChainLink[];
+  // Branching chains use steps; when present, steps win and links is empty.
+  steps?: ChainStep[];
   timeoutMinutes: number;
   // A workflow pins the exact member revisions it was tested with. Legacy
   // chains are upgraded from their links at load time.

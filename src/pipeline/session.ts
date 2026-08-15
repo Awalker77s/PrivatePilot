@@ -294,7 +294,10 @@ export async function compile(
     assembleRecord(a, model, context)
   );
   let chain: ChainRecord | null = null;
-  if (draft.chain && draft.chain.links.length > 0) {
+  if (
+    draft.chain &&
+    (draft.chain.links.length > 0 || (draft.chain.steps?.length ?? 0) > 0)
+  ) {
     const nameToId = new Map(assembled.map((r) => [r.name, r.id]));
     chain = {
       id: newId("chain"),
@@ -305,6 +308,21 @@ export async function compile(
         map: Object.fromEntries(l.map.map((p) => [p.output, p.input])),
         onlyWhen: l.onlyWhen,
       })),
+      // Branching: the flat step list, automation names resolved to ids.
+      ...((draft.chain.steps?.length ?? 0) > 0
+        ? {
+            steps: draft.chain.steps!.map((s) => ({
+              id: s.id,
+              automationId: nameToId.get(s.automation) ?? s.automation,
+              after: s.after,
+              needs: s.needs,
+              when: s.when,
+              ifAnswerContains: s.if_answer_contains,
+              ifAnswerLacks: s.if_answer_lacks,
+              map: Object.fromEntries(s.map.map((p) => [p.output, p.input])),
+            })),
+          }
+        : {}),
       timeoutMinutes: 30,
       createdAt: Date.now(),
       components: assembled.map((record) => ({

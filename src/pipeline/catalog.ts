@@ -39,6 +39,9 @@ export interface Catalog {
   apps: ConnectorSnapshot[];
   // Knowledge bases (named document collections) the person has built.
   knowledgeBases: string[];
+  // The person's words route on a result ("if…, otherwise…") — the validator
+  // insists on chain.steps when multiple jobs arrive unchained.
+  branchIntent?: boolean;
 }
 
 // Online requests do not need 150 real paths embedded into the JSON grammar.
@@ -47,10 +50,17 @@ export interface Catalog {
 const FILE_INTENT =
   /\b(file|folder|document|documents|pdf|spreadsheet|sheet|excel|csv|xlsx|docx|invoice|invoices|receipt|receipts|ledger|downloads?|desktop|directory|directories|scan|scanned|scans|image|images|photo|photos|picture|pictures|jpe?g|png|tiff?|ocr|searchable|rename|zip|archive|convert)\b/i;
 
+// Result-dependent routing in the person's own words. Deliberately narrow:
+// a bare "if" appears in single-job requests ("check if…") all the time.
+const BRANCH_INTENT =
+  /\b(otherwise|or else|if not\b|if it (does not|doesn't)|depending on (what|the|that|it)|if the (result|answer|outcome|check)|if (it|that|this) (fails|breaks|finds|says|mentions|succeeds))\b/i;
+
 export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
-  if (FILE_INTENT.test(userText)) return catalog;
+  const branchIntent = BRANCH_INTENT.test(userText);
+  if (FILE_INTENT.test(userText)) return { ...catalog, branchIntent };
   return {
     ...catalog,
+    branchIntent,
     files: [],
     readTargets: [],
     writeTargets: [],

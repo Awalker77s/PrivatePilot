@@ -30,6 +30,9 @@ function shortHash(value: unknown): string {
 export function workflowContentHash(workflow: ChainRecord): string {
   return shortHash({
     links: workflow.links,
+    // A changed branch (condition, dependency, member) is a different
+    // workflow — it must never inherit an old approval.
+    steps: workflow.steps ?? [],
     components: workflow.components ?? [],
     permissions: workflow.permissions,
     timeoutMinutes: workflow.timeoutMinutes,

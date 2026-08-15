@@ -51,6 +51,18 @@ export async function runAutomation(
   auto: AutomationRecord,
   opts: RunOptions
 ): Promise<RunRecord> {
+  // A malformed record (imported, hand-built) must degrade, not crash.
+  auto = {
+    ...auto,
+    files: {
+      reads: auto.files?.reads ?? [],
+      writes: auto.files?.writes ?? [],
+    },
+    sources: auto.sources ?? [],
+    steps: auto.steps ?? [],
+    inputs: auto.inputs ?? [],
+    outputs: auto.outputs ?? [],
+  };
   const runId = newId("run");
   const onProgress = opts.onProgress ?? (() => {});
   let anchorN = 0;

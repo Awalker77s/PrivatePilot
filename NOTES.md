@@ -245,6 +245,25 @@ day. This becomes the writeup.
   answers in a real browser — use read_page") and the compiler still
   prefers APIs when one covers the goal; watchers stay on API sources
   (rendering is too slow to poll).
+- **Full functional verification (8-agent fleet, Aug 15).** Three parallel
+  agents on isolated layers + four sequential agents driving the real app
+  over CDP + a strict adjudicator (designed honesty sentences = pass,
+  undesigned errors = fail). Verdict: functional, 35+ checks green — speech
+  stack (both engines × both fixtures; parakeet says "rows" where whisper
+  says "rose"), all 11 endpoint intents live with zero 429s, read_page 7/7
+  (Bing answer box in 2.0-2.7s, every guard sentence verbatim, no window
+  leaks, busy-serialization refuses instantly rather than queueing),
+  compile→run→verify→results-shelf clean ($0.07 dogecoin in 13.3s with the
+  traces-to-the-source line), no-fetch probe correctly Held, watch-me E2E +
+  dictation states + edit lints 3/3 + watcher tick + storage self-test all
+  green. Three findings fixed same-day: (1) runAutomation normalized against
+  malformed records (was a TypeError on a hand-built record missing files);
+  (2) the repo's one uncommented silent catch got its comment; (3) the
+  login-wall detector now catches auth-host redirects (accounts.google.com
+  had returned sign-in form text instead of the guidance sentence). One
+  open observation, unexplained and low: a tester saw a watch-me review
+  card discard itself after ~1-2 idle minutes — no auto-discard timer
+  exists in the code; watch for recurrence.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

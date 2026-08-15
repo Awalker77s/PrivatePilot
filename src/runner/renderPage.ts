@@ -25,7 +25,9 @@ export interface RenderOutcome extends FetchOutcome {
 }
 
 const LOGIN_HINTS =
-  /sign in to continue|log in to continue|please sign in|to continue to|enter your password|create an account to/i;
+  /sign in to continue|log in to continue|please sign in|to continue to|enter your password|create an account to|use your google account|use your microsoft account|email or phone/i;
+const AUTH_URLS =
+  /accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|appleid\.apple\.com|okta\.com\/login|auth0\.com|\/signin\b|\/sign-in\b|\/login\b|\/sso\b/i;
 const CAPTCHA_HINTS =
   /verify you are human|unusual traffic|are you a robot|complete the captcha|press and hold/i;
 
@@ -90,7 +92,13 @@ export async function readRenderedPage(
       `${host} challenged the request with a puzzle meant for humans. I don't solve those.`
     );
   }
-  if (LOGIN_HINTS.test(text.slice(0, 4000)) && text.length < 2500) {
+  // A login wall shows either as an auth-host redirect or a page that is
+  // mostly a sign-in form — both get guidance, never form noise.
+  const redirectedToAuth = AUTH_URLS.test(r.final_url ?? "");
+  if (
+    redirectedToAuth ||
+    (LOGIN_HINTS.test(text.slice(0, 4000)) && text.length < 2500)
+  ) {
     return fail(
       `${host} wants a sign-in before it will show this page. Private Pilot visits sites as a stranger — it never carries your logins. Pick a public source, or sign in yourself and read it there.`
     );

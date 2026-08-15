@@ -25,6 +25,10 @@ export interface ToolContext {
   // Run-scoped memory a connector may use (short ids → real ids, addresses
   // seen this run so a draft can't be addressed to someone it never read).
   memory: Map<string, unknown>;
+  // Write a file into the run's sandbox (present only when the record has a
+  // files fence). Returns the display path written, or null if no sandbox /
+  // no writable root. Used by gmail_save_attachment to land bytes for OCR.
+  writeSandboxFile?: (name: string, bytes: Uint8Array) => Promise<string | null>;
 }
 
 export interface ToolSpec {

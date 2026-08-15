@@ -79,18 +79,33 @@ Three real scanned SROIE receipts (150-DPI ScanSnap scans — genuinely dirty):
   Book Tak RM 9.60 [2]" — cited.
 - "capital of France?" → "I couldn't find that in your documents."
 
+## Built since v1
+
+- **Scanned PDF input** — `ocr_pdf` now takes PDFs too. A PDF that already has
+  a text layer (checked with unpdf) is indexed as-is, no OCR. An image-only
+  scan goes through pdfium (`ocr_raster.rs::rasterize_pdf`, the Chromium PDF
+  engine, bound once per process from `tools/pdfium.dll`) at 300 DPI to page
+  PNGs, then Tesseract reads the page list into ONE multi-page searchable PDF
+  + text. Verified with a real image-only receipt PDF.
+- **Attachments from email** — `gmail_save_attachment{id, name?}` pulls an
+  attachment (MIME-walked, 25 MB cap) from a listed message into the run's
+  sandbox write folder, so "clean the invoice from this email" flows straight
+  into `ocr_pdf` → Keep → the knowledge base. Reads only; nothing is sent or
+  marked. Verified against a real inbox message (790 KB PDF, valid header).
+- **Code-summed totals** — a total/sum question makes the model EXTRACT each
+  document's final amount (strict-JSON, its strength) while the SUM is
+  computed in `rag/totals.ts` (its weakness — a 4B model added 3 receipts to
+  190.51 instead of 156.41 in testing). The verified line lands in the corpus,
+  so number-verification accepts the derived figure. Both `answerFromKb` and
+  the runner's `rag_ask` use it; verified end-to-end: "RM 156.41" with the
+  right per-receipt breakdown.
+
 ## What's next (documented, not built)
 
-- **Scanned PDF input** — v1 OCR handles images (jpg/png/tiff) directly; a
-  scanned *PDF* needs pdfium (BSD/Apache) to rasterize pages first. The tool
-  refuses a PDF honestly today. pdfium-render + `rasterize_pdf_page` is the
-  next slice.
 - **`convert_media`** (ffmpeg) — held until the AppContainer OS sandbox lands
   (it's the one injectable, network-capable binary); see
   `terminal-access-plan.md`.
-- **Attachments from email** — `gmail_save_attachment` to run "clean the
-  invoice from this email" straight from the inbox.
-- **Receipt fields** (`.fields.json` with subtotal/tax/total) for code-verified
-  spend totals.
+- **Receipt fields** (`.fields.json` with subtotal/tax/total) for richer
+  code-verified spend queries (per-month, per-store).
 - **A Documents/Knowledge surface** — today KBs are created by filing into a
   name and listed in the drafter; a browse/manage UI is a follow-up.

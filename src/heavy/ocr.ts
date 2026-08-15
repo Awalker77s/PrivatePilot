@@ -4,22 +4,45 @@
 // builds the argv and appends the literal `txt pdf` output selectors, so the
 // model never composes a command. Runs in the sandbox via run_tool.
 //
-// v1 handles IMAGES directly (jpg/png/tiff/webp/bmp) — Tesseract reads them
-// with no rasterizer. Scanned image-only PDFs (which need pdfium to rasterize
-// pages first) are the documented next step; a PDF here is refused honestly.
+// Images (jpg/png/tiff/webp/bmp) go to Tesseract directly. PDFs branch: one
+// that already has a text layer is indexed as-is (no OCR — native text beats
+// OCR); an image-only scan is rasterized to 300-DPI page PNGs by pdfium
+// (rasterize_pdf, Rust) and Tesseract reads the page list into ONE multi-page
+// searchable PDF.
 import { readTextFile, writeTextFile, rename, exists, readDir, stat } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 import { z } from "zod";
-import { runTool } from "./runTool";
+import { runTool, findBinary } from "./runTool";
 import type { HeavyContext, HeavyResult, HeavyToolSpec } from "./types";
 
 const IMG = /\.(png|jpe?g|tiff?|bmp|webp)$/i;
+const PDF = /\.pdf$/i;
 const LOW_CONF_CHARS = 20; // below this, a page came back unreadable — say so
+const DIGITAL_PDF_CHARS = 100; // per-doc chars above which a PDF already has text
 
 const params = z.object({
   files: z.array(z.string().min(1)).min(1),
   language: z.string().regex(/^[a-z]{3}(\+[a-z]{3})*$/).default("eng"),
   clean: z.coerce.boolean().default(true),
 });
+
+// If a PDF already carries a real text layer, return that text (skip OCR —
+// native text beats OCR and OCR-ing it is wasted minutes). Returns null when
+// it's image-only (a scan) and must be OCR'd.
+async function pdfTextIfDigital(sandboxPath: string): Promise<string | null> {
+  try {
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const { extractText, getDocumentProxy } = await import("unpdf");
+    const bytes = await readFile(sandboxPath);
+    const pdf = await getDocumentProxy(new Uint8Array(bytes));
+    const { text } = await extractText(pdf, { mergePages: true });
+    const merged = Array.isArray(text) ? text.join("\n") : text;
+    return merged.replace(/\s+/g, "").length >= DIGITAL_PDF_CHARS ? merged.trim() : null;
+  } catch {
+    // Unreadable as a text PDF → treat as scanned.
+    return null;
+  }
+}
 
 function baseName(path: string): { dir: string; stem: string; sep: string } {
   const sep = path.includes("\\") ? "\\" : "/";
@@ -47,8 +70,8 @@ export const realOcrRun = async (
   const tessdata = exe.replace(/tesseract\.exe$/i, "tessdata");
   const roots = ctx.sandbox.roots.map((r) => r.sandboxPath);
 
-  // Expand any folders in `files` to the image files they contain — the model
-  // often names the folder, not each scan.
+  // Expand any folders in `files` to the images AND PDFs they contain — the
+  // model often names the folder, not each scan.
   const targets: string[] = [];
   for (const display of a.files) {
     const sb = ctx.toSandbox(display);
@@ -63,7 +86,7 @@ export const realOcrRun = async (
     if (isDir && sb) {
       const sep = display.includes("\\") ? "\\" : "/";
       for (const e of await readDir(sb)) {
-        if (e.isFile && IMG.test(e.name)) targets.push(`${display}${sep}${e.name}`);
+        if (e.isFile && (IMG.test(e.name) || PDF.test(e.name))) targets.push(`${display}${sep}${e.name}`);
       }
     } else {
       targets.push(display);
@@ -73,8 +96,8 @@ export const realOcrRun = async (
     return {
       ok: false,
       family: "on_purpose",
-      text: "No scanned images (jpg, png, tiff) were found to read.",
-      logLine: "ocr_pdf: no images in the given files/folders.",
+      text: "No scanned images or PDFs were found to read.",
+      logLine: "ocr_pdf: no images/PDFs in the given files/folders.",
     };
   }
 
@@ -82,16 +105,15 @@ export const realOcrRun = async (
   const lowConf: string[] = [];
   const allText: string[] = [];
   let pdfs = 0;
+  const pdfiumDll = await findBinary("pdfium.dll");
 
   for (const display of targets) {
-    if (!IMG.test(display)) {
-      // A digital PDF is read directly elsewhere; a scanned PDF needs the
-      // rasterizer that isn't wired yet — refuse honestly rather than fail.
+    if (!IMG.test(display) && !PDF.test(display)) {
       return {
         ok: false,
         family: "on_purpose",
-        text: `${display} isn't a photo or scan image — right now I can read scanned images (jpg, png, tiff). Scanned PDFs are coming; a PDF that already has text can be read as-is.`,
-        logLine: `ocr_pdf: ${display} is not a supported image.`,
+        text: `${display} isn't a scan I can read — I read images (jpg, png, tiff) and PDFs.`,
+        logLine: `ocr_pdf: ${display} is not a supported type.`,
       };
     }
     const src = ctx.toSandbox(display);
@@ -103,14 +125,58 @@ export const realOcrRun = async (
     }
     const { dir, stem, sep } = baseName(src);
     const outBase = `${dir}${sep}${stem}.ocr`; // tesseract writes outBase.txt + outBase.pdf
+
+    // The images Tesseract will read: the file itself, or the rasterized pages
+    // of a scanned PDF. A PDF that already has a text layer skips OCR.
+    let pageImages: string[] = [src];
+    if (PDF.test(display)) {
+      const digital = await pdfTextIfDigital(src);
+      if (digital !== null) {
+        // Already searchable — index its own text, no OCR, no new PDF.
+        allText.push(`=== ${stem} ===\n${digital}`);
+        await writeTextFile(`${dir}${sep}${stem}.txt`, digital);
+        await writeTextFile(
+          `${dir}${sep}${stem}.ocr.json`,
+          JSON.stringify({ source: display, method: "digital", chars: digital.replace(/\s+/g, "").length, readable: true }, null, 2)
+        );
+        done.push(stem);
+        ctx.runNote(`${stem} already has text — indexed directly.`);
+        continue;
+      }
+      if (!pdfiumDll) {
+        return {
+          ok: false,
+          family: "needs_you",
+          text: "Reading a scanned PDF needs the PDF toolkit (pdfium) — Settings → Heavy tasks explains how to add it.",
+          logLine: "ocr_pdf: pdfium.dll not found for a scanned PDF.",
+        };
+      }
+      ctx.runNote(`Rendering the pages of ${stem}…`);
+      try {
+        pageImages = (await invoke("rasterize_pdf", {
+          dllPath: pdfiumDll,
+          pdfPath: src,
+          dpi: 300,
+          outDir: `${dir}${sep}${stem}-pages`,
+        })) as string[];
+      } catch (e) {
+        return { ok: false, family: "broke", text: `Couldn't render ${stem} — ${String(e).slice(0, 100)}`, logLine: `ocr_pdf: rasterize failed on ${stem}.` };
+      }
+    }
     ctx.runNote(`Reading ${stem}…`);
 
+    // Tesseract accepts an image-list file → one multi-page searchable PDF.
+    let imageArg = pageImages[0];
+    if (pageImages.length > 1) {
+      const listPath = `${dir}${sep}${stem}.pagelist.txt`;
+      await writeTextFile(listPath, pageImages.join("\n"));
+      imageArg = listPath;
+    }
     const report = await runTool({
       exe,
       // -l/--oem/--psm/--dpi precede the literal output selectors (txt pdf).
-      // psm 3 = full auto page segmentation (documents & receipts).
       argv: [
-        src,
+        imageArg,
         outBase,
         "-l",
         a.language,
@@ -125,8 +191,8 @@ export const realOcrRun = async (
       ],
       cwd: ctx.sandbox.base,
       allowed_roots: roots,
-      timeout_ms: 120_000,
-      max_output_bytes: 500_000,
+      timeout_ms: 60_000 * Math.max(1, pageImages.length),
+      max_output_bytes: 1_000_000,
       env: [["TESSDATA_PREFIX", tessdata]],
     });
     if (report.timed_out) {
@@ -200,11 +266,11 @@ export const ocrPdfTool: HeavyToolSpec = {
     function: {
       name: "ocr_pdf",
       description:
-        "Read a scanned or photographed document (an image: jpg, png, tiff) and turn it into a searchable PDF plus clean text. Use for dirty documents that plain reading can't handle.",
+        "Read a scanned or photographed document (an image — jpg, png, tiff — or a scanned PDF) and turn it into a searchable PDF plus clean text. A PDF that already has text is used as-is. Use for dirty documents that plain reading can't handle.",
       parameters: {
         type: "object",
         properties: {
-          files: { type: "array", items: { type: "string" }, description: "the scanned images to read" },
+          files: { type: "array", items: { type: "string" }, description: "the scanned images or PDFs to read (or a folder of them)" },
           language: { type: "string", description: "3-letter language, e.g. eng" },
           clean: { type: "boolean", description: "straighten and de-noise dirty scans" },
         },

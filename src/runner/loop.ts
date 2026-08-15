@@ -309,6 +309,19 @@ export async function runToolLoop(
   const toolCtx: ToolContext = {
     runNote: (line) => onEvent({ text: `Tool loop — ${line}` }),
     memory: new Map<string, unknown>([["inputs.values", Object.values(inputValues)]]),
+    // A connector (gmail_save_attachment) can drop a file into the sandbox's
+    // first write root so a heavy tool can then work on it.
+    writeSandboxFile: sandbox
+      ? async (name, bytes) => {
+          const root = sandbox.roots.find((r) => record.files.writes.some((w) => w === r.display || w.startsWith(r.display + "/"))) ?? sandbox.roots[0];
+          if (!root) return null;
+          const sep = root.sandboxPath.includes("\\") ? "\\" : "/";
+          const path = `${root.sandboxPath}${sep}${name}`;
+          const { writeFile } = await import("@tauri-apps/plugin-fs");
+          await writeFile(path, bytes);
+          return `${root.display}/${name}`;
+        }
+      : undefined,
   };
   const specByName = new Map(bound.specs.map((s) => [s.def.function.name, s]));
   const heavyByName = new Map(bound.heavy.map((h) => [h.def.function.name, h]));
@@ -471,12 +484,20 @@ export async function runToolLoop(
             outcome.answer = "";
             return outcome;
           }
-          outcome.corpus += `\n\n=== ${kb} (your documents) ===\n${r.context}`;
+          // Total/sum questions: extract amounts with the model, sum in code,
+          // and hand the model the verified total (never its own arithmetic).
+          let ragContext = r.context;
+          const { asksForTotal, computeVerifiedTotal } = await import("../rag/totals");
+          if (asksForTotal(question)) {
+            const verified = await computeVerifiedTotal(r.sources, model);
+            if (verified) ragContext = `${r.context}\n\n${verified}`;
+          }
+          outcome.corpus += `\n\n=== ${kb} (your documents) ===\n${ragContext}`;
           outcome.appsRead++;
           outcome.logLines.push(
             `Searched "${kb}" — the top ${r.sources.length} matching passage${r.sources.length === 1 ? "" : "s"} from your filed documents.`
           );
-          result = `Answer ONLY from these numbered passages of the person's own documents. Cite each fact like [1]. If the answer isn't here, reply exactly: "I couldn't find that in your documents."\n\n${r.context}\n\nThe question: ${question}`;
+          result = `Answer ONLY from these numbered passages of the person's own documents. Cite each fact like [1]. If a line marked "COMPUTED IN CODE" is present, use that exact total — it is the trustworthy sum. Otherwise you MAY add/compare/count the numbers that appear here and cite every passage used. If the answer isn't here, reply exactly: "I couldn't find that in your documents."\n\n${ragContext}\n\nThe question: ${question}`;
         } else if (specByName.has(name)) {
           const spec = specByName.get(name)!;
           const parsed = spec.params.safeParse(args);

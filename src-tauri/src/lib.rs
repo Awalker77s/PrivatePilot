@@ -62,6 +62,7 @@ mod secrets;
 mod gmail;
 #[cfg(windows)]
 mod heavy;
+mod ocr_raster;
 
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -311,7 +312,8 @@ pub fn run() {
             secrets::secret_has,
             gmail::gmail_imap,
             gmail::gmail_disconnect_pool,
-            heavy::run_tool
+            heavy::run_tool,
+            ocr_raster::rasterize_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

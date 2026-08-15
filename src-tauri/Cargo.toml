@@ -28,6 +28,11 @@ imap = "2.4"
 native-tls = "0.2"
 mailparse = "0.16"
 chrono = "0.4"
+# ocr_raster.rs — rasterize scanned PDF pages to PNG for OCR. pdfium-render
+# binds pdfium.dll at runtime (libloading; no windows-crate conflict); png
+# encodes the frames. Both permissive-licensed.
+pdfium-render = "0.9"
+png = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 # Pinned to what wry already links — 0.39 pulls windows 0.62 and won't unify.

@@ -6,6 +6,7 @@ import { chat } from "../providers";
 import { activeLocalModel } from "../providers";
 import { NUM_CTX_TOOLS } from "../providers";
 import { RAG_REFUSAL, RagSource, retrieve } from "./ask";
+import { asksForTotal, computeVerifiedTotal } from "./totals";
 
 export interface RagAnswer {
   ok: boolean;
@@ -18,8 +19,9 @@ export interface RagAnswer {
 const SYSTEM = [
   "You answer a question using ONLY the numbered sources provided — the person's own documents.",
   "After each fact, cite the source number(s) in square brackets like [1] or [2][3].",
+  "You MAY do arithmetic over numbers that appear in the sources — add them for a grand total, compare them to find the largest, count them — and cite every source you used. When a question asks for a total or 'in total' or 'altogether', give the SUM (only add amounts in the same currency; if they differ, total each currency separately and say so).",
   "If the answer is not in the sources, reply with exactly this and nothing else: " + JSON.stringify(RAG_REFUSAL),
-  "Do not use any outside knowledge. Do not guess. Quote numbers and names exactly as they appear.",
+  "Do not use any outside knowledge beyond that arithmetic. Do not guess. Quote numbers and names exactly as they appear.",
   "Answer in at most four sentences.",
 ].join("\n");
 
@@ -36,11 +38,18 @@ export async function answerFromKb(
   if (!model) {
     return { ok: false, answer: "The local AI isn't running.", refused: true, citations: [], sources: r.sources };
   }
+  // A total/sum question: extract each amount with the model, sum in code, and
+  // hand the model the verified total to quote — never its own arithmetic.
+  let context = r.context;
+  if (asksForTotal(question)) {
+    const verified = await computeVerifiedTotal(r.sources, model);
+    if (verified) context = `${r.context}\n\n${verified}`;
+  }
   const res = await chat({
     model,
     messages: [
       { role: "system", content: SYSTEM },
-      { role: "user", content: `Sources:\n\n${r.context}\n\nQuestion: ${question}` },
+      { role: "user", content: `Sources:\n\n${context}\n\nQuestion: ${question}` },
     ],
     options: { num_ctx: NUM_CTX_TOOLS, temperature: 0.2 },
     think: false,

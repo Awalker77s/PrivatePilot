@@ -5,6 +5,7 @@
 // sends from Gmail. Never a SEND. The password lives DPAPI-sealed and is
 // unsealed here, used for the login, and dropped — it never crosses IPC.
 use crate::secrets;
+use base64::Engine;
 use mailparse::{parse_headers, parse_mail, MailHeaderMap, ParsedMail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -48,7 +49,11 @@ struct Args {
     to: Option<String>,
     subject: Option<String>,
     body: Option<String>,
+    // save_attachment: which attachment (by filename substring), if not the first
+    name: Option<String>,
 }
+
+const ATTACH_CAP: usize = 25 * 1024 * 1024; // 25 MB — refuse larger honestly
 
 #[derive(Serialize)]
 struct Row {
@@ -283,6 +288,58 @@ fn op_search(session: &mut Session, a: &Args) -> Result<serde_json::Value, Strin
     Ok(json!({ "rows": rows }))
 }
 
+fn op_save_attachment(session: &mut Session, a: &Args) -> Result<serde_json::Value, String> {
+    let uid = a.uid.ok_or_else(|| "Gmail:Args:uid".to_string())?;
+    let mut got: Option<Vec<u8>> = None;
+    for mbox in ["INBOX", "[Gmail]/All Mail"] {
+        if session.examine(mbox).is_err() {
+            continue;
+        }
+        let f = session
+            .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
+            .map_err(|e| format!("Gmail:Fetch:{e}"))?;
+        if let Some(m) = f.iter().next() {
+            if let Some(b) = m.body() {
+                got = Some(b.to_vec());
+                break;
+            }
+        }
+    }
+    let raw = got.ok_or_else(|| "Gmail:NoSuchMessage".to_string())?;
+    let mail = parse_mail(&raw).map_err(|e| format!("Gmail:Parse:{e}"))?;
+
+    // Walk the MIME tree, decoding each attachment (a part with a filename)
+    // to (name, bytes) as we go — no stored references, no lifetime tangle.
+    fn collect(m: &ParsedMail, out: &mut Vec<(String, Vec<u8>)>) {
+        if let Some(fname) = m.get_content_disposition().params.get("filename") {
+            if let Ok(bytes) = m.get_body_raw() {
+                out.push((fname.clone(), bytes));
+            }
+        }
+        for p in &m.subparts {
+            collect(p, out);
+        }
+    }
+    let mut atts: Vec<(String, Vec<u8>)> = Vec::new();
+    collect(&mail, &mut atts);
+    let count = atts.len();
+    if count == 0 {
+        return Err("Gmail:NoAttachment".to_string());
+    }
+    let chosen = if let Some(want) = a.name.as_deref().map(|s| s.to_lowercase()) {
+        atts.into_iter().find(|(n, _)| n.to_lowercase().contains(&want))
+    } else {
+        atts.into_iter().next()
+    }
+    .ok_or_else(|| "Gmail:NoAttachment".to_string())?;
+
+    if chosen.1.len() > ATTACH_CAP {
+        return Err(format!("Gmail:TooBig:{}", chosen.1.len()));
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&chosen.1);
+    Ok(json!({ "name": chosen.0, "bytes_b64": b64, "size": chosen.1.len(), "count": count }))
+}
+
 fn op_read(session: &mut Session, a: &Args) -> Result<serde_json::Value, String> {
     let uid = a.uid.ok_or_else(|| "Gmail:Args:uid".to_string())?;
     // Search-listed ids come from All Mail; recent from INBOX. Try both.
@@ -402,6 +459,7 @@ pub fn gmail_imap(app: tauri::AppHandle, account: String, op: String, args: Stri
         "recent" => op_recent(&mut session, &a),
         "search" => op_search(&mut session, &a),
         "read" => op_read(&mut session, &a),
+        "save_attachment" => op_save_attachment(&mut session, &a),
         "draft" => op_draft(&mut session, &acct, &a),
         other => Err(format!("Gmail:UnknownOp:{other}")),
     };

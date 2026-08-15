@@ -352,14 +352,83 @@ const draft: ToolSpec = {
   },
 };
 
+const saveAttachment: ToolSpec = {
+  writes: false,
+  def: {
+    type: "function",
+    function: {
+      name: "gmail_save_attachment",
+      description:
+        "Save an attachment from a Gmail message (by its short id, e.g. g2) into this automation's folder so other tools (like ocr_pdf) can work on it. Optionally name which attachment.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "short id like g2 from a listing" },
+          name: { type: "string", description: "part of the attachment filename, if there are several" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  params: z.object({ id: z.string().min(1), name: z.string().optional().nullable() }),
+  async run(args, ctx) {
+    if (!account()) return NOT_CONNECTED;
+    if (!ctx.writeSandboxFile) {
+      return {
+        ok: false,
+        family: "on_purpose",
+        text: "This automation has no folder to save into — give it a folder in files first.",
+        logLine: "gmail_save_attachment: no sandbox to write to.",
+      };
+    }
+    const uid = resolve(ctx, String(args.id));
+    if (uid === null) {
+      return {
+        ok: false,
+        family: "on_purpose",
+        text: `There is no message ${args.id} in this run — list messages first (gmail_recent/gmail_search).`,
+        logLine: `gmail_save_attachment: ${args.id} before any listing — refused.`,
+      };
+    }
+    ctx.runNote("Saving the attachment…");
+    try {
+      const r = await op<{ name: string; bytes_b64: string; size: number; count: number }>("save_attachment", {
+        uid,
+        ...(args.name ? { name: args.name } : {}),
+      });
+      const bin = atob(r.bytes_b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const safeName = r.name.replace(/[\\/:*?"<>|]/g, "_") || "attachment";
+      const written = await ctx.writeSandboxFile(safeName, bytes);
+      if (!written) {
+        return { ok: false, family: "broke", text: `Couldn't save ${safeName} into the automation's folder.`, logLine: "gmail_save_attachment: write failed." };
+      }
+      const line = `Saved "${r.name}" (${(r.size / 1024).toFixed(0)} KB) from message ${args.id} into ${written}.`;
+      return {
+        ok: true,
+        family: "ok",
+        text: `${line} You can now clean or read it.`,
+        corpusText: line,
+        logLine: `gmail_save_attachment: wrote ${safeName} (${r.size} bytes) into the sandbox. Nothing sent.`,
+      };
+    } catch (e) {
+      const s = String(e);
+      if (s.includes("NoAttachment")) return { ok: false, family: "on_purpose", text: `Message ${args.id} has no attachment${args.name ? ` matching "${args.name}"` : ""}.`, logLine: "gmail_save_attachment: no attachment." };
+      if (s.includes("TooBig")) return { ok: false, family: "on_purpose", text: "That attachment is over 25 MB — too big to bring in.", logLine: "gmail_save_attachment: too big." };
+      return failure(e, "save the attachment");
+    }
+  },
+};
+
 export const gmailConnector: Connector = {
   id: "gmail",
   label: "Gmail",
   blurb:
-    "Reads your Gmail inbox over IMAP with an app password you paste once — no Google sign-in screens, no developer setup. Saves drafts into Gmail's Drafts; never sends; never marks mail as read.",
-  tools: [recent, search, read, draft],
+    "Reads your Gmail inbox over IMAP with an app password you paste once — no Google sign-in screens, no developer setup. Saves drafts into Gmail's Drafts and can save attachments into your folders; never sends; never marks mail as read.",
+  tools: [recent, search, read, draft, saveAttachment],
   menuLine:
-    "gmail_recent{since_hours?, unread_only?, from?, limit?} · gmail_search{query} · gmail_read{id} · gmail_draft{reply_to|to+subject, body} — reads Gmail mail; saves drafts, never sends.",
+    "gmail_recent{since_hours?, unread_only?, from?, limit?} · gmail_search{query} · gmail_read{id} · gmail_draft{reply_to|to+subject, body} · gmail_save_attachment{id, name?} — reads Gmail mail; saves drafts and attachments; never sends.",
   async status() {
     const addr = account();
     if (!addr) return { state: "needs_allow", detail: "Not connected — paste a Gmail app password." };

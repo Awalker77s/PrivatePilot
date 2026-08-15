@@ -14,9 +14,9 @@ import { localModels, NUM_CTX_DRAFT, ollama } from "../providers";
 import type { ModelInfo } from "../providers/types";
 import {
   CLOUD_MODELS,
-  fetchPlan,
   onCloudMeter,
   prewarm,
+  verifyKey,
 } from "../providers/featherless";
 import { getSettings, updateSettings } from "../storage/settings";
 import { ensureParakeet, parakeetReady } from "../watchme/transcribe";
@@ -537,13 +537,26 @@ function BorrowCloudCard() {
   const [, force] = useState(0);
   const f = getSettings().featherless;
   const [keyDraft, setKeyDraft] = useState(f.key ?? "");
-  const [planLine, setPlanLine] = useState<string | null>(null);
+  // The key's last-checked truth: null = never checked, "checking", or the
+  // verdict. A dead key looked identical to a good one before — the person
+  // pasted a key, a run 401'd a day later, and the card never said a word.
+  const [keyState, setKeyState] = useState<
+    { kind: "checking" | "good" | "bad"; line: string } | null
+  >(null);
   const [meter, setMeter] = useState(0);
 
   useEffect(() => onCloudMeter(setMeter), []);
   useEffect(() => {
-    if (f.key) fetchPlan(f.key).then((p) => setPlanLine(p.line));
-  }, [f.key]);
+    // On open with a stored key: re-verify quietly so the card is honest
+    // about TODAY, not about the day the key was pasted.
+    if (f.key) {
+      setKeyState({ kind: "checking", line: "Checking the saved key…" });
+      verifyKey(f.key, getSettings().featherless.model).then((v) =>
+        setKeyState({ kind: v.ok ? "good" : "bad", line: v.line })
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function toggle() {
     if (!f.enabled && !f.key) return;
@@ -564,7 +577,14 @@ function BorrowCloudCard() {
     });
     force((n) => n + 1);
     const key = getSettings().featherless.key;
-    if (key) setPlanLine((await fetchPlan(key)).line);
+    if (!key) {
+      setKeyState(null);
+      return;
+    }
+    // Verify with a REAL test call, not just the plan endpoint — and say so.
+    setKeyState({ kind: "checking", line: "Checking the key with a real test call…" });
+    const v = await verifyKey(key, getSettings().featherless.model);
+    setKeyState({ kind: v.ok ? "good" : "bad", line: v.line });
   }
 
   return (
@@ -601,7 +621,22 @@ function BorrowCloudCard() {
           Save key
         </button>
       </div>
-      {planLine && <div className="caption">Your plan: {planLine}</div>}
+      {keyState && (
+        <div
+          className="status-line"
+          data-testid="cloud-key-state"
+          style={{
+            color:
+              keyState.kind === "good"
+                ? "var(--green)"
+                : keyState.kind === "bad"
+                  ? "var(--red)"
+                  : "var(--text-dim)",
+          }}
+        >
+          {keyState.line}
+        </div>
+      )}
       <select
         className="run-search"
         style={{ width: "100%" }}

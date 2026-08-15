@@ -134,6 +134,38 @@ export class FeatherlessProvider implements ModelProvider {
 
     return enqueue(async () => {
       const started = Date.now();
+      // OpenAI-compatible replay needs assistant tool_calls and their tool
+      // results PAIRED by id (Ollama pairs by order and never carries ids).
+      // Our loop appends results in call order right after the assistant
+      // message, so a queue reconstructs the pairing exactly. Featherless's
+      // current parser tolerates missing ids — stricter models won't.
+      let pendingIds: string[] = [];
+      const wireMessages = req.messages.map((m, mi) => {
+        if (m.role === "assistant" && m.tool_calls?.length) {
+          const ids = m.tool_calls.map((_, i) => `call_${mi}_${i}`);
+          pendingIds = [...ids];
+          return {
+            role: m.role,
+            content: m.content,
+            tool_calls: m.tool_calls.map((c, i) => ({
+              id: ids[i],
+              type: "function",
+              function: {
+                name: c.function.name,
+                arguments: JSON.stringify(c.function.arguments),
+              },
+            })),
+          };
+        }
+        if (m.role === "tool") {
+          return {
+            role: m.role,
+            content: m.content,
+            tool_call_id: pendingIds.shift() ?? "call_0_0",
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
       for (let attempt = 0; attempt < 3; attempt++) {
         const res = await fetch(`${BASE}/chat/completions`, {
           method: "POST",
@@ -144,22 +176,7 @@ export class FeatherlessProvider implements ModelProvider {
           signal: AbortSignal.timeout(180_000),
           body: JSON.stringify({
             model: req.model,
-            messages: req.messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-              ...(m.tool_calls
-                ? {
-                    tool_calls: m.tool_calls.map((c, i) => ({
-                      id: `call_${i}`,
-                      type: "function",
-                      function: {
-                        name: c.function.name,
-                        arguments: JSON.stringify(c.function.arguments),
-                      },
-                    })),
-                  }
-                : {}),
-            })),
+            messages: wireMessages,
             // No json_schema response format on Featherless — json_object
             // only; the schema already rides in the prompt and the validator
             // loop takes it from there.
@@ -207,7 +224,7 @@ export class FeatherlessProvider implements ModelProvider {
         };
         const choice = body.choices?.[0];
         return {
-          content: choice?.message?.content ?? "",
+          content: stripThink(choice?.message?.content ?? ""),
           toolCalls: (choice?.message?.tool_calls ?? []).map((c) => ({
             function: {
               name: c.function.name,
@@ -229,6 +246,17 @@ function safeParseArgs(s: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+// Thinking models (a catalog pick, or a template change upstream) leak
+// <think>…</think> into content — poison for JSON drafts and ugly in answers.
+// Closed blocks are cut; an unclosed block (truncated mid-think) leaves
+// nothing usable, so empty comes back and the caller's honesty path speaks.
+function stripThink(s: string): string {
+  return s
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/^\s*<think>[\s\S]*$/gi, "")
+    .trim();
 }
 
 export interface PlanInfo {
@@ -262,6 +290,50 @@ export async function fetchPlan(key: string): Promise<PlanInfo> {
       ok: true,
       line: `${name}${units ? ` · ${units} concurrent unit${units === 1 ? "" : "s"}` : ""}`,
     };
+  } catch (e) {
+    return { ok: false, line: `Couldn't reach Featherless — ${String(e).slice(0, 80)}` };
+  }
+}
+
+// The proof a pasted key actually works: the plan endpoint names the plan,
+// and one real 1-token completion proves inference is enabled on the account
+// (a key can pass /plan yet 401 on completions when billing isn't set up —
+// the exact trap where a bad first day silently becomes distrust).
+export interface KeyCheck {
+  ok: boolean;
+  line: string; // colored status line for the card — designed, never raw
+}
+
+export async function verifyKey(key: string, model: string): Promise<KeyCheck> {
+  const plan = await fetchPlan(key);
+  if (!plan.ok) return { ok: false, line: plan.line };
+  try {
+    const started = Date.now();
+    const res = await fetch(`${BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "Answer with one word: ready" }],
+        max_tokens: 4,
+        temperature: 0,
+      }),
+    });
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        line: `The key was turned away (${res.status}) — check it on featherless.ai (billing may need setting up).`,
+      };
+    }
+    if (!res.ok) {
+      return { ok: false, line: `Featherless answered ${res.status} on a test call — try again in a bit.` };
+    }
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    return { ok: true, line: `Key works — ${plan.line} · test call answered in ${secs}s.` };
   } catch (e) {
     return { ok: false, line: `Couldn't reach Featherless — ${String(e).slice(0, 80)}` };
   }

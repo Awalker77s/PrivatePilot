@@ -108,7 +108,9 @@ export function buildWireSchema(catalog: Catalog) {
         automation: z.string(), // a drafted automation's name
         after: z.array(z.string()), // step ids; [] = the first step
         needs: z.enum(["all", "any"]), // "any" = fire after whichever came through
-        when: z.enum(["ran", "held", "broke", "always"]),
+        // "failed" = the earlier step didn't work (held or broke) — use it for
+        // "if it fails / if it's down". "ran" = it succeeded.
+        when: z.enum(["ran", "held", "broke", "failed", "always"]),
         if_answer_contains: z.union([z.string(), z.null()]),
         if_answer_lacks: z.union([z.string(), z.null()]),
         map: z.array(

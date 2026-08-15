@@ -56,7 +56,7 @@ const FILE_INTENT =
 // Result-dependent routing in the person's own words. Deliberately narrow:
 // a bare "if" appears in single-job requests ("check if…") all the time.
 const BRANCH_INTENT =
-  /\b(otherwise|or else|if not\b|if it (does not|doesn't)|depending on (what|the|that|it)|if the (result|answer|outcome|check)|if (it|that|this) (fails|breaks|finds|says|mentions|succeeds))\b/i;
+  /\b(otherwise|or else|if not\b|if it (does not|doesn't)|depending on (what|the|that|it)|if the \w+ (fails|breaks|is down|works|succeeds)|if the (result|answer|outcome|check)|if (it|that|this)(\s+\w+)? (fails|breaks|finds|says|mentions|succeeds|is down|works))\b/i;
 
 export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
   const branchIntent = BRANCH_INTENT.test(userText);

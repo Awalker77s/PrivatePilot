@@ -141,7 +141,10 @@ export interface ChainStep {
   automationId: string;
   after: string[]; // step ids this one waits for; [] = a root step
   needs: "all" | "any"; // how several deps combine ("any" joins exclusive branches)
-  when: "ran" | "held" | "broke" | "always"; // the dep outcome that lets this fire
+  // The dep outcome that lets this fire. "failed" = held OR broke — the
+  // everyday "if it didn't work" (a dead source stops as `held`, not `broke`,
+  // so plain "broke" would miss the case people actually mean).
+  when: "ran" | "held" | "broke" | "failed" | "always";
   // Result predicate, read from the first dep's answer (case-insensitive).
   ifAnswerContains: string | null;
   ifAnswerLacks: string | null;

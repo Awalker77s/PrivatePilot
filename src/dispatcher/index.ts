@@ -267,12 +267,20 @@ function stepVerdict(
       if (!st || st.kind === "skipped") return false;
       if (s.when === "ran") return st.kind === "ran";
       if (s.when === "held") return st.kind === "held";
-      return st.kind === "broke";
+      if (s.when === "broke") return st.kind === "broke";
+      // "failed" = anything that didn't succeed (held or broke).
+      return st.kind === "held" || st.kind === "broke";
     });
     const ok = s.needs === "any" ? matches.some(Boolean) : matches.every(Boolean);
     if (!ok) {
       const verb =
-        s.when === "ran" ? "didn't finish" : s.when === "held" ? "wasn't held back" : "didn't break";
+        s.when === "ran"
+          ? "didn't finish"
+          : s.when === "held"
+            ? "wasn't held back"
+            : s.when === "broke"
+              ? "didn't break"
+              : "worked (nothing to catch)";
       const who = deps
         .filter((_, i) => !matches[i])
         .map(({ id }) => nameOf(id))

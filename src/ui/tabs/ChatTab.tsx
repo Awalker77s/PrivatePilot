@@ -702,11 +702,13 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
                       </b>
                       {s.when === "broke"
                         ? " if this one breaks"
-                        : s.when === "held"
-                          ? " if this one is held back"
-                          : s.when === "always"
-                            ? " either way"
-                            : ""}
+                        : s.when === "failed"
+                          ? " if this one doesn't work"
+                          : s.when === "held"
+                            ? " if this one is held back"
+                            : s.when === "always"
+                              ? " either way"
+                              : ""}
                       {s.ifAnswerContains
                         ? ` — when the result mentions “${s.ifAnswerContains}”`
                         : ""}

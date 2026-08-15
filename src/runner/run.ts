@@ -308,6 +308,19 @@ async function runInner(
   }
   verifyLog.finishedAt = Date.now();
 
+  // A run that reached none of its sources delivered nothing — a purposeful
+  // stop, never a green checkmark that earns Save.
+  if (
+    auto.delivers === "answer" &&
+    auto.sources.length > 0 &&
+    loop.corpus.trim().length === 0
+  ) {
+    const sentence =
+      "Held back — it couldn't read anything from its sources, so there's nothing real to answer with.";
+    event("on_purpose", "Nothing fetched", sentence);
+    return finish("held", sentence);
+  }
+
   // ---- diff (only when a sandbox exists) ----
   if (!sandbox) {
     const summary = cleanAnswer.split("\n")[0].slice(0, 140) || "Ran.";

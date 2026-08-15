@@ -203,6 +203,23 @@ day. This becomes the writeup.
   GGUF) gets a real CPU benchmark — then offer it as an optional accuracy
   mode; (3) Moonshine v2 Medium (ONNX, 258ms) if we ever add live captions;
   (4) an NVIDIA GPU appears — canary-qwen-2.5b becomes king.
+- **First real user recording found the intent-vs-imitation gap.** The owner
+  demonstrated "search Bing for Tesla stock" — capture, transcription, and
+  vision all worked, but the compiler copied the HUMAN's method (a Bing
+  search) instead of the goal, and programs can't read search results pages;
+  the runner then tried a Yahoo web page (JS-walled) and even fetched the
+  literal phrase "google com finance quote tsla" (punycoded into gibberish,
+  correctly refused by the fence). Three-layer fix: (1) drafting rule — a
+  demonstration shows WHAT, not HOW; goals matching a known-good endpoint
+  must use the endpoint even when demoed via a search engine, and search
+  engines are banned from sources/steps; (2) fetch_page guards — phrases
+  aren't URLs, and search-engine hosts get a redirect-to-the-data-source
+  sentence the model can act on mid-run; (3) honesty — a run that reached
+  none of its sources finishes "Held back — nothing real to answer with"
+  and does NOT earn Save. Verified with an exact repro: the same Bing demo
+  context now compiles to query1.finance.yahoo.com and a live run answered
+  $342.27 — and the demo's own stale on-screen price did not leak into the
+  answer.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

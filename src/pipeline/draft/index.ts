@@ -63,6 +63,8 @@ export function draftSystemPrompt(catalog: Catalog): string {
     "- schedule: what the person asked for; manual if they didn't say.",
     "- effort: thorough only if the person wants care over speed.",
     "- When the request comes from a recorded demonstration: the narration is the authority for WHAT the job is; the screen evidence only supplies exact URLs, filenames, and values. Never invent beyond either.",
+    "- A demonstration shows WHAT the person wants, not HOW the automation should get it. A person uses a search engine or a pretty webpage; a program must use the data source directly. If the goal matches a known-good endpoint above (a stock price, crypto price, weather, news, rates…), the steps MUST use that endpoint's exact URL — even when the person demonstrated it via Bing, Google, or a finance webpage.",
+    "- NEVER put a search engine in sources or steps (bing.com, google.com, duckduckgo.com, search.yahoo.com) — search results pages don't work for programs and the run will fail.",
     "- Any concrete demonstrated value the person would likely vary next time (a month, a name, a search term, an amount) becomes an inputs[] entry whose example is the demonstrated value — and steps reference it as {input_name}.",
     "",
     `Folders in the catalog (only for jobs that name files): ${folders}`,

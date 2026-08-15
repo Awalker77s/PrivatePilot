@@ -715,6 +715,10 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
       if (run.status === "broke") {
         patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
         push({ kind: "note", tone: "red", text: run.summary ?? "Broke." });
+      } else if (run.status === "held") {
+        // Nothing real happened — the watched run didn't earn Save.
+        patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
+        push({ kind: "note", tone: "amber", text: run.summary ?? "Held back." });
       } else {
         patchBuilt(itemId, { state: "ran", progress: null, runId: run.id });
       }

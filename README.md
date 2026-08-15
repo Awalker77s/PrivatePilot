@@ -118,6 +118,20 @@ provable "nothing left this computer."**
   If an app isn't allowed or open, the run stops
   held-back with the sentence that says what to do — never an answer from
   half-read data.
+- **Does real work on your files — safely**: allow "Heavy tasks" and an
+  automation can rename in bulk, pack archives, and **read scanned or
+  photographed documents (OCR)** into searchable PDFs + clean text. It's not a
+  terminal — the model fills validated blanks (which files, what format) and
+  the app builds the command; nothing is ever a shell string, everything runs
+  in a sandbox copy under a job object, and nothing touches real files until
+  you press Keep. (Full design + safety model in
+  [docs/heavy-tools-and-documents.md](docs/heavy-tools-and-documents.md).)
+- **Ask your documents**: "clean the scanned receipts in Downloads and file
+  them into a Receipts knowledge base", then "ask my Receipts what I spent" —
+  answered **only from your documents**, with citations to the exact receipt,
+  or an honest "I couldn't find that in your documents." Fully local: OCR via
+  Tesseract, embeddings via `nomic-embed-text`, a plain-file vector store, and
+  the same grounded-answer verification the rest of the app uses.
 - **Never silent**: every failure state is a designed sentence in one of
   three families — stopped on purpose (gray), needs you (amber), broke (red).
   A rate-limited API is "asked us to slow down", never a price of 0.

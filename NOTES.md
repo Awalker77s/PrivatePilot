@@ -420,3 +420,37 @@ day. This becomes the writeup.
   sitting in Gmail Drafts (in:drafts search). End to end works; the residual
   ~2-3 min is this network's latency to Gmail, not the code (a normal network
   is sub-second per op).
+- **Heavy tools + OCR + local RAG (Aug 15, branch local-models).** Built the
+  terminal Tier-1 "fourth fence" (typed heavy tools, argv built by our code,
+  never a shell string) then OCR and a local RAG layer on top, per the
+  research fleets (3-lens OCR/RAG/usecases + architect + adversarial critic).
+  run_tool (Rust): job object kill-on-close + active-process/4GB/timeout caps,
+  output caps, .exe-only, every path arg re-checked inside the sandbox; env
+  field for TESSDATA_PREFIX. Heavy tools: bulk_rename (pure TS, renames in the
+  sandbox copy), zip/unzip (7za), ocr_pdf (Tesseract 5.4.0 -> searchable PDF +
+  clean text; v1 images only, scanned-PDF rasterization via pdfium is the
+  documented next slice). tools fence = closed enum in the wire schema;
+  validators tie each tool in the steps to the fence, require a files fence,
+  and BAN watchers from heavy tools. RAG (src/rag/): embed via Ollama
+  /api/embed + nomic-embed-text with the required search_document:/search_query:
+  prefixes and num_ctx 8192 (both classic local-RAG bugs), L2-normalized;
+  recursive chunker with page metadata; per-KB store (kb.json manifest +
+  base64 Float32 vectors); dedup on content SHA-256; plain-TS cosine (top-6
+  dense + keyword); grounded answer that cites [n] and refuses out-of-context
+  in code (a citation-free answer becomes "I couldn't find that in your
+  documents"). Wired into the chat: a knowledge fence, a rag_ask tool bound
+  when a KB is named, keep-time indexing (RunRecord.indexInto so an unsaved
+  automation still indexes on Keep). Critic-caught fixes: /api/embed added to
+  the Rust allowlist AND given the long timeout (the 20s ceiling would break
+  indexing); catalog FILE_INTENT + image extensions so "clean the scanned
+  receipts" grounds; picked sub-folders display ~/Downloads/x not ~/…/x (a
+  small model read the ellipsis as out-of-scope and refused). Verified live
+  end-to-end over CDP with 3 real 150-DPI SROIE receipt scans: run_tool guards
+  (path-escape, non-exe), bulk_rename/zip in the sandbox, OCR recovered the
+  text, "clean into a Groceries KB" -> 9 staged outputs -> Keep applied +
+  "Indexed 3 documents", "what was each total?" -> "Yongfatt RM 80.91 [1],
+  Indah Gift RM 65.90 [3], Book Tak RM 9.60 [2]" cited, "capital of France?"
+  refused. Binaries dev-installed to %APPDATA%/tools (7za, tesseract/); the
+  installer will bundle them from resources/binaries like whisper-cli. Full
+  usage + safety model in docs/heavy-tools-and-documents.md; the terminal plan
+  and its critic in docs/terminal-access-plan.md.

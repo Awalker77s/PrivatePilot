@@ -3,8 +3,14 @@ import { XIcon } from "./icons";
 import { runStorageSelfTest, SelfTestResult } from "../storage/selftest";
 import { useStore } from "../storage/useStore";
 import { DoctorReport, runModelDoctor } from "../providers/ollama";
-import { chat } from "../providers";
-import { NUM_CTX_DRAFT } from "../providers";
+import { NUM_CTX_DRAFT, ollama } from "../providers";
+import {
+  CLOUD_MODELS,
+  fetchPlan,
+  onCloudMeter,
+  prewarm,
+} from "../providers/featherless";
+import { getSettings, updateSettings } from "../storage/settings";
 
 export function SettingsSheet({ close }: { close: () => void }) {
   const { loadError } = useStore();
@@ -23,8 +29,8 @@ export function SettingsSheet({ close }: { close: () => void }) {
     setWaking(true);
     setWakeLine(null);
     try {
-      // A real chat round trip — explicit num_ctx like every call.
-      const res = await chat({
+      // A real LOCAL chat round trip — explicit num_ctx like every call.
+      const res = await ollama.chat({
         model: doctor.installedTag,
         messages: [
           { role: "user", content: "Answer with the single word: ready" },
@@ -112,6 +118,8 @@ export function SettingsSheet({ close }: { close: () => void }) {
           )}
         </div>
 
+        <BorrowCloudCard />
+
         <div className="settings-card">
           <div className="settings-card-title">
             Storage
@@ -155,6 +163,106 @@ export function SettingsSheet({ close }: { close: () => void }) {
         <div style={{ flex: 1 }} />
         <div className="caption">Private Pilot 0.1.0</div>
       </div>
+    </div>
+  );
+}
+
+// "Borrow cloud compute (Featherless) — this leaves your computer."
+// Default OFF; the moment it's on, every runs-on line in the app changes.
+function BorrowCloudCard() {
+  const [, force] = useState(0);
+  const f = getSettings().featherless;
+  const [keyDraft, setKeyDraft] = useState(f.key ?? "");
+  const [planLine, setPlanLine] = useState<string | null>(null);
+  const [meter, setMeter] = useState(0);
+
+  useEffect(() => onCloudMeter(setMeter), []);
+  useEffect(() => {
+    if (f.key) fetchPlan(f.key).then((p) => setPlanLine(p.line));
+  }, [f.key]);
+
+  async function toggle() {
+    if (!f.enabled && !f.key) return;
+    await updateSettings((s) => {
+      s.featherless.enabled = !s.featherless.enabled;
+    });
+    force((n) => n + 1);
+    if (getSettings().featherless.enabled) {
+      // warming up the borrowed computer — cold models add seconds
+      void prewarm(getSettings().featherless.model);
+    }
+  }
+
+  async function saveKey() {
+    await updateSettings((s) => {
+      s.featherless.key = keyDraft.trim() || null;
+      if (!s.featherless.key) s.featherless.enabled = false;
+    });
+    force((n) => n + 1);
+    const key = getSettings().featherless.key;
+    if (key) setPlanLine((await fetchPlan(key)).line);
+  }
+
+  return (
+    <div className="settings-card" data-testid="borrow-cloud">
+      <div className="settings-card-title">
+        Borrow cloud compute (Featherless)
+        <button
+          className={`chip ${f.enabled ? "chip-blue" : "chip-gray"}`}
+          onClick={toggle}
+          disabled={!f.key}
+          title={f.key ? undefined : "Paste a key first"}
+          data-testid="cloud-toggle"
+          style={{ cursor: f.key ? "pointer" : "default" }}
+        >
+          {f.enabled ? "On — borrowing" : "Off"}
+        </button>
+      </div>
+      <div className="status-line">— this leaves your computer.</div>
+      <div className="caption">
+        Featherless's FAQ, verbatim: "We do not log any of the prompts or
+        completions sent to our API."
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          className="run-search"
+          style={{ flex: 1, width: "auto" }}
+          type="password"
+          placeholder="Featherless API key (stays on this computer)"
+          value={keyDraft}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          data-testid="cloud-key"
+        />
+        <button className="btn btn-sm" onClick={saveKey}>
+          Save key
+        </button>
+      </div>
+      {planLine && <div className="caption">Your plan: {planLine}</div>}
+      <select
+        className="run-search"
+        style={{ width: "100%" }}
+        value={f.model}
+        onChange={async (e) => {
+          await updateSettings((s) => {
+            s.featherless.model = e.target.value;
+          });
+          force((n) => n + 1);
+        }}
+      >
+        {CLOUD_MODELS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.id} — {m.role}
+          </option>
+        ))}
+      </select>
+      {f.enabled && (
+        <div className="status-line" data-testid="cloud-meter">
+          <span className={`dot ${meter > 0 ? "dot-green" : "dot-gray"}`} />
+          {meter > 0
+            ? `borrowed compute in use — ${meter} call in flight`
+            : "idle — nothing borrowed right now"}
+        </div>
+      )}
     </div>
   );
 }

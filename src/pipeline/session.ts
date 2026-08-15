@@ -1,7 +1,8 @@
 // The compile session: catalog → draft (stage 1) → validator loop (stage 2)
 // → an assembled draft the user can watch run, or a grounded question card.
 // Counters land in runs.json; the validator's argument is visible in the UI.
-import { activeLocalModel } from "../providers";
+import { activeLocalModel, cloudActive, ranOnLabel } from "../providers";
+import { getSettings } from "../storage/settings";
 import { ProviderError } from "../providers/types";
 import { appendRun, newId, updateRun } from "../storage/stores";
 import type {
@@ -67,7 +68,7 @@ export async function compile(
     startedAt,
     finishedAt: null,
     status: "running",
-    ranOn: "local",
+    ranOn: ranOnLabel(),
     sandbox: null,
     baton: null,
     summary: null,
@@ -125,13 +126,22 @@ export async function compile(
     anchor: anchor(runId, anchorN++),
   });
 
-  const model = await activeLocalModel();
+  const model = cloudActive()
+    ? getSettings().featherless.model
+    : await activeLocalModel();
   if (!model) {
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();
     draftLog.sentence = "No local model to draft with.";
     return fail("No Qwen model is pulled yet — run: ollama pull qwen3.5:9b");
   }
+  draftLog.lines.push({
+    at: Date.now(),
+    text: cloudActive()
+      ? "Drafting on the borrowed computer — validated after (cloud), not grammar-locked."
+      : "Drafting locally — schema locked by grammar (local).",
+    anchor: anchor(runId, anchorN++),
+  });
 
   onProgress("draft", "Drafting…");
   const messages = draftMessages(catalog, context);

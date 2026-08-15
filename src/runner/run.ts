@@ -1,7 +1,8 @@
 // The runner: sandbox → tool loop → thorough → grounded verification → diff.
 // Every stop is a designed sentence in one of the three families; the run
 // record is the only thing any surface reads.
-import { activeLocalModel } from "../providers";
+import { activeLocalModel, cloudActive, ranOnLabel } from "../providers";
+import { getSettings } from "../storage/settings";
 import { ProviderError } from "../providers/types";
 import { buildCatalog } from "../pipeline/catalog";
 import { appendRun, newId, updateRun, getAutomation, saveAutomation } from "../storage/stores";
@@ -65,7 +66,7 @@ export async function runAutomation(
     startedAt: Date.now(),
     finishedAt: null,
     status: "running",
-    ranOn: "local",
+    ranOn: ranOnLabel(), // the honest line — where compute actually happens
     sandbox: null,
     baton: null,
     summary: null,
@@ -135,7 +136,9 @@ async function runInner(
     return run;
   };
 
-  const model = await activeLocalModel();
+  const model = cloudActive()
+    ? getSettings().featherless.model
+    : await activeLocalModel();
   if (!model) {
     return finish("broke", OLLAMA_DOWN_SENTENCE);
   }

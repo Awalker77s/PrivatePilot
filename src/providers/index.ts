@@ -6,9 +6,12 @@ import {
   OllamaProvider,
   friendlyName,
 } from "./ollama";
+import { FeatherlessProvider } from "./featherless";
 import type { ChatRequest, ChatResponse, ModelInfo, ModelProvider } from "./types";
+import { getSettings } from "../storage/settings";
 
 export const ollama = new OllamaProvider();
+export const featherless = new FeatherlessProvider();
 
 export type Effort = "quick" | "thorough";
 
@@ -35,15 +38,36 @@ export async function activeLocalModel(): Promise<string | null> {
   );
 }
 
+// The toggle decides where compute happens — and the UI never lies about it.
+export function cloudActive(): boolean {
+  const f = getSettings().featherless;
+  return f.enabled && !!f.key;
+}
+
 export function activeProvider(): ModelProvider {
-  return ollama; // step 8 swaps this per the Featherless toggle
+  return cloudActive() ? featherless : ollama;
+}
+
+// The honest line every run record stores.
+export function ranOnLabel(): string {
+  return cloudActive() ? `featherless:${getSettings().featherless.model}` : "local";
 }
 
 export async function activeModelLabel(): Promise<string> {
+  if (cloudActive()) return getSettings().featherless.model;
   const tag = await activeLocalModel();
   return tag ? friendlyName(tag) : "No model";
 }
 
 export async function chat(req: ChatRequest): Promise<ChatResponse> {
-  return activeProvider().chat(req);
+  if (cloudActive()) {
+    // Same pipeline, different computer: swap the local tag for the chosen
+    // cloud model; grammar-locked drafting is local-only, so format falls
+    // back to json_object inside the provider.
+    return featherless.chat({
+      ...req,
+      model: getSettings().featherless.model,
+    });
+  }
+  return ollama.chat(req);
 }

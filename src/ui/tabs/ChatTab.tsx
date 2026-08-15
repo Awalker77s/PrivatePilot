@@ -518,13 +518,15 @@ function QuestionCard({
             {o.label}
           </button>
         ))}
-        <button
-          className="btn btn-sm btn-ghost"
-          disabled={item.answered !== null}
-          onClick={() => chooseFile(item.id)}
-        >
-          Choose…
-        </button>
+        {(item.q.kind === "file" || item.q.kind === "folder") && (
+          <button
+            className="btn btn-sm btn-ghost"
+            disabled={item.answered !== null}
+            onClick={() => chooseFile(item.id)}
+          >
+            Choose…
+          </button>
+        )}
       </div>
       {item.answered && (
         <div className="caption">You picked: {item.answered}</div>

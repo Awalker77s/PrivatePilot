@@ -7,6 +7,12 @@ export interface DirectOutcome {
   logLines: string[];
 }
 
+export class DirectEndpointError extends Error {
+  constructor(public sentence: string) {
+    super(sentence);
+  }
+}
+
 function firstUrl(record: AutomationRecord): string | null {
   for (const step of record.steps) {
     const match = step.match(/https?:\/\/[^\s]+/);
@@ -41,23 +47,44 @@ export async function runDirectEndpoint(
   const kind = directKind(url);
   if (!kind) return null;
   const fetched = await fetchPage(url, record.sources);
-  if (!fetched.ok) return null;
+  if (!fetched.ok) {
+    throw new DirectEndpointError(
+      fetched.sentence ?? "The verified data source did not return an answer."
+    );
+  }
 
   try {
-    const body = JSON.parse(fetched.text) as Record<string, unknown>;
-    const answer = formatAnswer(kind, body, new URL(url).hostname);
+    const answer =
+      kind === "rss"
+        ? formatFeedAnswer(fetched.text, record.name)
+        : formatAnswer(
+            kind,
+            JSON.parse(fetched.text) as Record<string, unknown>,
+            new URL(url).hostname,
+            url
+          );
     if (!answer) return null;
     return {
       answer,
       corpus: `=== ${url} ===\n${fetched.text}`,
       logLines: [fetched.logLine, "Read the verified endpoint directly — no model turn needed."],
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof DirectEndpointError) throw error;
+    throw new DirectEndpointError(
+      `I reached ${new URL(url).hostname}, but couldn't read a verified answer from it.`
+    );
   }
 }
 
-type DirectKind = "status" | "coingecko" | "coinbase" | "frankfurter";
+type DirectKind =
+  | "status"
+  | "coingecko"
+  | "coinbase"
+  | "frankfurter"
+  | "yahoo"
+  | "hackernews"
+  | "rss";
 
 function directKind(url: string): DirectKind | null {
   const parsed = new URL(url);
@@ -71,13 +98,33 @@ function directKind(url: string): DirectKind | null {
   if (parsed.hostname === "api.frankfurter.dev" && parsed.pathname.includes("/v1/latest")) {
     return "frankfurter";
   }
+  if (
+    (parsed.hostname === "query1.finance.yahoo.com" ||
+      parsed.hostname === "query2.finance.yahoo.com") &&
+    parsed.pathname.includes("/v8/finance/chart/")
+  ) {
+    return "yahoo";
+  }
+  if (
+    parsed.hostname === "hn.algolia.com" &&
+    parsed.pathname.includes("/api/v1/search")
+  ) {
+    return "hackernews";
+  }
+  if (
+    parsed.hostname === "news.google.com" ||
+    parsed.hostname === "feeds.bbci.co.uk"
+  ) {
+    return "rss";
+  }
   return null;
 }
 
 function formatAnswer(
   kind: DirectKind,
   body: Record<string, unknown>,
-  hostname: string
+  hostname: string,
+  url: string
 ): string | null {
   if (kind === "status") {
     const status = body.status as { description?: unknown } | undefined;
@@ -119,10 +166,93 @@ function formatAnswer(
     return `${asset} is $${compactNumber(amount)}. OUTPUTS: price=${amount}`;
   }
 
+  if (kind === "yahoo") {
+    const chart = body.chart as
+      | {
+          result?: {
+            meta?: {
+              symbol?: unknown;
+              shortName?: unknown;
+              longName?: unknown;
+              currency?: unknown;
+              regularMarketPrice?: unknown;
+              previousClose?: unknown;
+              chartPreviousClose?: unknown;
+            };
+          }[];
+          error?: unknown;
+        }
+      | undefined;
+    const meta = chart?.result?.[0]?.meta;
+    const price = Number(meta?.regularMarketPrice);
+    const previous = Number(meta?.previousClose ?? meta?.chartPreviousClose);
+    if (chart?.error || !Number.isFinite(price)) return null;
+    const symbol =
+      typeof meta?.symbol === "string"
+        ? meta.symbol
+        : decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "Stock");
+    const name =
+      typeof meta?.shortName === "string"
+        ? meta.shortName
+        : typeof meta?.longName === "string"
+          ? meta.longName
+          : symbol;
+    const currency = typeof meta?.currency === "string" ? meta.currency : "USD";
+    const money = (value: number) =>
+      currency === "USD"
+        ? `$${compactNumber(value, 4)}`
+        : `${compactNumber(value, 4)} ${currency}`;
+    return [
+      `## ${name} (${symbol})`,
+      "",
+      `Price: **${money(price)}**`,
+      ...(Number.isFinite(previous) ? [`Previous close: ${money(previous)}`] : []),
+      "",
+      `OUTPUTS: price=${price}`,
+    ].join("\n");
+  }
+
+  if (kind === "hackernews") {
+    const hits = Array.isArray(body.hits) ? body.hits : [];
+    const limit = Math.max(
+      1,
+      Math.min(20, Number(new URL(url).searchParams.get("hitsPerPage") ?? 10))
+    );
+    const stories = hits
+      .slice(0, limit)
+      .map((raw) => {
+        const hit = raw as {
+          title?: unknown;
+          url?: unknown;
+          story_url?: unknown;
+          objectID?: unknown;
+        };
+        if (typeof hit.title !== "string" || !hit.title.trim()) return null;
+        const storyUrl =
+          typeof hit.url === "string"
+            ? hit.url
+            : typeof hit.story_url === "string"
+              ? hit.story_url
+              : typeof hit.objectID === "string"
+                ? `https://news.ycombinator.com/item?id=${hit.objectID}`
+                : null;
+        return `- **${hit.title.trim()}**${storyUrl ? ` — [Read story](${storyUrl})` : ""}`;
+      })
+      .filter((story): story is string => !!story);
+    if (stories.length === 0) return null;
+    return `## Top tech news\n\n${stories.join("\n")}`;
+  }
+
   const base = typeof body.base === "string" ? body.base : null;
   const rates = body.rates as Record<string, unknown> | undefined;
   const quote = rates ? Object.keys(rates)[0] : null;
   const rate = quote ? Number(rates?.[quote]) : Number.NaN;
   if (!base || !quote || !Number.isFinite(rate)) return null;
   return `One ${base} buys ${compactNumber(rate, 6)} ${quote}. OUTPUTS: rate=${rate}`;
+}
+
+function formatFeedAnswer(text: string, recordName: string): string | null {
+  const items = text.replace(/^Feed headlines:\s*/i, "").trim();
+  if (!items || !/^[-*]\s+/m.test(items)) return null;
+  return `## ${recordName}\n\n${items}`;
 }

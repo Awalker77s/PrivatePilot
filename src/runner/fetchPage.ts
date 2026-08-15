@@ -3,7 +3,8 @@
 // non-text Content-Types, 2 MB body cap, ~24k char trim. The fence check
 // (hostname ∈ sources) runs BEFORE any fetch. 403 = identity rejection,
 // never retry; 429 honors Retry-After.
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { isDesktopApp } from "../platform";
 
 const BODY_CAP = 2 * 1024 * 1024;
 const TEXT_CAP = 24_000;
@@ -87,7 +88,10 @@ export async function fetchPage(
 
   let res: Response;
   try {
-    res = await fetch(full, {
+    const request = isDesktopApp()
+      ? tauriFetch
+      : globalThis.fetch.bind(globalThis);
+    res = await request(full, {
       signal: AbortSignal.timeout(15_000),
       headers: {
         // One coherent Chrome-like header set.

@@ -1,7 +1,8 @@
 // OllamaProvider — every network call goes through plugin-http (never
 // window.fetch: the packaged origin http://tauri.localhost is not on Ollama's
 // CORS allowlist, so window.fetch dies only in the build you demo).
-import { fetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
+import { isDesktopApp } from "../platform";
 import {
   ChatRequest,
   ChatResponse,
@@ -9,6 +10,7 @@ import {
   ModelProvider,
   ProviderError,
 } from "./types";
+import { getSettings } from "../storage/settings";
 
 const OLLAMA = "http://127.0.0.1:11434";
 
@@ -18,6 +20,12 @@ export const OLLAMA_DOWN_SENTENCE =
 // Local default and fallbacks, verified in Ollama's library (Aug 2026).
 export const LOCAL_DEFAULT = "qwen3.5:9b";
 export const LOCAL_FALLBACKS = ["qwen3.5:4b", "qwen2.5:7b"];
+
+export function localModelCandidates(preferred?: string | null): string[] {
+  return [...new Set([preferred, LOCAL_DEFAULT, ...LOCAL_FALLBACKS].filter(
+    (tag): tag is string => !!tag
+  ))];
+}
 
 const FRIENDLY: Record<string, string> = {
   "qwen3.5:9b": "Qwen 9B",
@@ -56,17 +64,38 @@ export function currentKeepAlive(): string | number {
 
 async function ollamaFetch(
   path: string,
-  init?: Parameters<typeof fetch>[1]
+  init?: RequestInit
 ): Promise<Response> {
+  const timeoutMs = path === "/api/chat" ? 300_000 : 20_000;
+  const signal = AbortSignal.timeout(timeoutMs);
   try {
     // A wedged request must become a designed sentence, never a forever-hang
     // (the tool loop's 30-min stall check only runs between turns).
-    return await fetch(`${OLLAMA}${path}`, {
-      signal: AbortSignal.timeout(path === "/api/chat" ? 300_000 : 20_000),
+    if (isDesktopApp()) {
+      const native = await invoke<{ status: number; body: string }>(
+        "ollama_request",
+        {
+          path,
+          method: init?.method ?? "GET",
+          body: typeof init?.body === "string" ? init.body : null,
+          timeoutMs,
+        }
+      );
+      return new Response(native.body, {
+        status: native.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const request = globalThis.fetch.bind(globalThis);
+    return await request(`${OLLAMA}${path}`, {
+      signal,
       ...init,
     });
   } catch (e) {
-    const timedOut = String(e).toLowerCase().includes("timeout");
+    const timedOut =
+      signal.aborted ||
+      String(e).toLowerCase().includes("timeout") ||
+      (e instanceof Error && e.name === "TimeoutError");
     throw new ProviderError(
       timedOut
         ? "The local AI took too long to answer — try again."
@@ -200,7 +229,8 @@ export async function runModelDoctor(): Promise<DoctorReport> {
   report.up = true;
   const names = tags.map((t) => t.name);
   report.installedTag =
-    [LOCAL_DEFAULT, ...LOCAL_FALLBACKS].find((t) => names.includes(t)) ?? null;
+    localModelCandidates(getSettings().localModel).find((t) => names.includes(t)) ??
+    null;
   if (!report.installedTag) {
     report.sentence = `No Qwen model is pulled yet — run: ollama pull ${LOCAL_DEFAULT}`;
     return report;

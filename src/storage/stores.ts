@@ -4,6 +4,7 @@
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { exists, mkdir, readTextFile } from "@tauri-apps/plugin-fs";
 import { atomicWriteJson } from "./atomic";
+import { isDesktopApp } from "../platform";
 import type { AutomationRecord, ChainRecord, RunRecord } from "./types";
 
 const VERSIONS_KEPT = 10;
@@ -81,11 +82,29 @@ export async function storePath(
 }
 
 // ---- load ----
-async function readStore<T>(name: string, fallback: T): Promise<T> {
+type StoreName = "automations" | "chains" | "runs";
+
+function browserStoreKey(name: StoreName): string {
+  return `private-pilot:${name}`;
+}
+
+async function readStore<T>(name: StoreName, fallback: T): Promise<T> {
+  if (!isDesktopApp()) {
+    const text = localStorage.getItem(browserStoreKey(name));
+    return text ? (JSON.parse(text) as T) : fallback;
+  }
   const path = await join(await baseDir(), `${name}.json`);
   if (!(await exists(path))) return fallback;
   const text = await readTextFile(path);
   return JSON.parse(text) as T;
+}
+
+async function persistStore(name: StoreName, data: unknown): Promise<void> {
+  if (!isDesktopApp()) {
+    localStorage.setItem(browserStoreKey(name), JSON.stringify(data));
+    return;
+  }
+  await atomicWriteJson(await storePath(name), data);
 }
 
 export async function loadAll(): Promise<void> {
@@ -96,6 +115,7 @@ export async function loadAll(): Promise<void> {
     });
     state.chains = await readStore("chains", { records: [] });
     state.runs = await readStore("runs", { records: [] });
+    await recoverInterruptedRuns();
     state.loaded = true;
     state.loadError = null;
   } catch (e) {
@@ -104,6 +124,47 @@ export async function loadAll(): Promise<void> {
     state.loadError = `Couldn't read the saved records — ${String(e)}`;
   }
   emit();
+}
+
+// A persisted "running" record cannot still belong to this fresh app
+// process. Turn interrupted work into a designed failure instead of leaving
+// Activity, tiles, and the red-dot system stuck in a forever-running state.
+async function recoverInterruptedRuns(): Promise<void> {
+  const interrupted = state.runs.records.filter((run) => run.status === "running");
+  if (interrupted.length === 0) return;
+
+  const recoveredAt = Date.now();
+  const sentence = "The app closed before this run finished — run it again.";
+  for (const run of interrupted) {
+    run.status = "broke";
+    run.finishedAt = recoveredAt;
+    run.summary = sentence;
+    const activeStage = [...run.stages]
+      .reverse()
+      .find((stage) => stage.status === "running");
+    if (activeStage) {
+      activeStage.status = "broke";
+      activeStage.finishedAt = recoveredAt;
+      activeStage.sentence = sentence;
+    }
+    run.events.push({
+      at: recoveredAt,
+      family: "broke",
+      state: "Interrupted",
+      sentence,
+      anchor: `${run.id}#interrupted`,
+    });
+
+    const automation = state.automations.records.find(
+      (candidate) => candidate.id === run.automationId
+    );
+    if (automation && (!automation.lastRun || automation.lastRun.at <= run.startedAt)) {
+      automation.lastRun = { at: recoveredAt, status: "broke", summary: sentence };
+    }
+  }
+
+  await persistStore("runs", state.runs);
+  await persistStore("automations", state.automations);
 }
 
 // ---- automations (with version history) ----
@@ -118,7 +179,7 @@ export async function saveAutomation(record: AutomationRecord): Promise<void> {
   } else {
     file.records.push(record);
   }
-  await atomicWriteJson(await storePath("automations"), file);
+  await persistStore("automations", file);
   emit();
 }
 
@@ -126,7 +187,7 @@ export async function deleteAutomation(id: string): Promise<void> {
   const file = state.automations;
   file.records = file.records.filter((r) => r.id !== id);
   delete file.versions[id];
-  await atomicWriteJson(await storePath("automations"), file);
+  await persistStore("automations", file);
   emit();
 }
 
@@ -150,7 +211,7 @@ export async function restoreVersion(id: string): Promise<boolean> {
   const current = file.records[idx];
   file.records[idx] = prev;
   file.versions[id] = [current, ...versions.slice(1)].slice(0, VERSIONS_KEPT);
-  await atomicWriteJson(await storePath("automations"), file);
+  await persistStore("automations", file);
   emit();
   return true;
 }
@@ -161,20 +222,20 @@ export async function saveChain(record: ChainRecord): Promise<void> {
   const idx = file.records.findIndex((r) => r.id === record.id);
   if (idx >= 0) file.records[idx] = record;
   else file.records.push(record);
-  await atomicWriteJson(await storePath("chains"), file);
+  await persistStore("chains", file);
   emit();
 }
 
 export async function deleteChain(id: string): Promise<void> {
   state.chains.records = state.chains.records.filter((r) => r.id !== id);
-  await atomicWriteJson(await storePath("chains"), state.chains);
+  await persistStore("chains", state.chains);
   emit();
 }
 
 // ---- runs (append-only; the chain resume checkpoint) ----
 export async function appendRun(run: RunRecord): Promise<void> {
   state.runs.records.push(run);
-  await atomicWriteJson(await storePath("runs"), state.runs);
+  await persistStore("runs", state.runs);
   emit();
 }
 
@@ -188,7 +249,7 @@ export async function updateRun(
   const run = state.runs.records.find((r) => r.id === id);
   if (!run) return;
   mutate(run);
-  if (persist) await atomicWriteJson(await storePath("runs"), state.runs);
+  if (persist) await persistStore("runs", state.runs);
   emit();
 }
 

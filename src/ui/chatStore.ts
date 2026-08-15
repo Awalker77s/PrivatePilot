@@ -213,6 +213,18 @@ export function pushNote(tone: "gray" | "amber" | "red", text: string) {
   push({ kind: "note", tone, text });
 }
 
+// The sheet's Change link seeds the composer with the row quoted.
+let composerSeed: string | null = null;
+export function seedComposer(text: string) {
+  composerSeed = text;
+  emit();
+}
+export function consumeComposerSeed(): string | null {
+  const s = composerSeed;
+  composerSeed = null;
+  return s;
+}
+
 function builtItem(itemId: number) {
   const item = items.find((i) => i.id === itemId);
   return item && item.kind === "built" ? item : null;
@@ -277,11 +289,20 @@ export function toggleDiffEntry(itemId: number, relPath: string) {
   emit();
 }
 
-// Save is earned: enabled only after the watched run completed.
+// Save is earned: enabled only after the watched run completed. The watched
+// run's outcome rides onto the saved record so the tile is born live.
 export async function saveBuilt(itemId: number) {
   const item = builtItem(itemId);
   if (!item || item.state !== "ran") return;
+  const run = item.runId ? getRun(item.runId) : undefined;
   for (const auto of item.result.automations) {
+    if (run && run.automationId === auto.id) {
+      auto.lastRun = {
+        at: run.finishedAt ?? run.startedAt,
+        status: run.status === "needs_you" ? "ok" : run.status,
+        summary: run.summary ?? "",
+      };
+    }
     await saveAutomation(auto);
   }
   if (item.result.chain) await saveChain(item.result.chain);

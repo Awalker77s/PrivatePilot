@@ -4,10 +4,12 @@
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { exists, readTextFile } from "@tauri-apps/plugin-fs";
 import { atomicWriteJson } from "./atomic";
+import { isDesktopApp } from "../platform";
 
 export interface AppSettings {
   aliases: Record<string, string>; // "which tracking sheet?" → "~/Documents/invoices-2026.xlsx"
   pickedFolders: string[]; // real paths the user allowed at pick time
+  localModel: string | null; // null = prefer the documented local default
   featherless: {
     enabled: boolean;
     key: string | null;
@@ -36,11 +38,15 @@ export interface AppSettings {
 const DEFAULTS: AppSettings = {
   aliases: {},
   pickedFolders: [],
+  localModel: null,
   featherless: { enabled: false, key: null, model: "Qwen/Qwen3-32B" },
   apps: {},
 };
 
-let settings: AppSettings = { ...DEFAULTS };
+const BROWSER_SETTINGS_KEY = "private-pilot:settings";
+let settings: AppSettings = isDesktopApp()
+  ? { ...DEFAULTS }
+  : { ...DEFAULTS, localModel: "qwen3.5:4b" };
 let loaded = false;
 
 async function settingsPath(): Promise<string> {
@@ -50,12 +56,21 @@ async function settingsPath(): Promise<string> {
 export async function loadSettings(): Promise<AppSettings> {
   if (!loaded) {
     try {
-      const p = await settingsPath();
-      if (await exists(p)) {
-        settings = { ...DEFAULTS, ...JSON.parse(await readTextFile(p)) };
+      if (!isDesktopApp()) {
+        const saved = localStorage.getItem(BROWSER_SETTINGS_KEY);
+        settings = saved
+          ? { ...DEFAULTS, ...JSON.parse(saved) }
+          : { ...DEFAULTS, localModel: "qwen3.5:4b" };
+      } else {
+        const p = await settingsPath();
+        if (await exists(p)) {
+          settings = { ...DEFAULTS, ...JSON.parse(await readTextFile(p)) };
+        }
       }
     } catch {
-      settings = { ...DEFAULTS };
+      settings = isDesktopApp()
+        ? { ...DEFAULTS }
+        : { ...DEFAULTS, localModel: "qwen3.5:4b" };
     }
     loaded = true;
   }
@@ -71,5 +86,9 @@ export async function updateSettings(
 ): Promise<void> {
   await loadSettings();
   mutate(settings);
-  await atomicWriteJson(await settingsPath(), settings);
+  if (isDesktopApp()) {
+    await atomicWriteJson(await settingsPath(), settings);
+  } else {
+    localStorage.setItem(BROWSER_SETTINGS_KEY, JSON.stringify(settings));
+  }
 }

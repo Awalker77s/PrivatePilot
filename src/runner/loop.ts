@@ -2,7 +2,7 @@
 // cap 15 turns, 30-minute stall timeout, stream off. Sampling: temp 0.6 /
 // top_p 0.95 / top_k 20. Small models sometimes emit the call as JSON text
 // in content — recovered and logged, never dropped.
-import { chat, NUM_CTX_TOOLS } from "../providers";
+import { chat, NUM_CTX_DRAFT, NUM_CTX_TOOLS } from "../providers";
 import type { ChatMessage, ToolCall, ToolDef } from "../providers/types";
 import type { AutomationRecord } from "../storage/types";
 import { readAnyFile } from "./readFile";
@@ -235,6 +235,9 @@ export async function runToolLoop(
 ): Promise<LoopOutcome> {
   const startedAt = Date.now();
   const bound = bindTools(record, sandbox);
+  // Online jobs carry no file corpus, so 16k is ample and substantially
+  // quicker on CPU-only machines. File jobs retain the full 32k window.
+  const contextSize = sandbox ? NUM_CTX_TOOLS : NUM_CTX_DRAFT;
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -283,7 +286,7 @@ export async function runToolLoop(
     // Truncation guard: estimate tokens (chars/4); over 85% of num_ctx →
     // drop the oldest tool results (never the system prompt).
     let estTokens = messages.reduce((n, m) => n + m.content.length, 0) / 4;
-    while (estTokens > NUM_CTX_TOOLS * CTX_GUARD) {
+    while (estTokens > contextSize * CTX_GUARD) {
       const idx = messages.findIndex(
         (m, i) => i > 1 && m.role === "tool" && m.content !== "(forgotten)"
       );
@@ -296,8 +299,14 @@ export async function runToolLoop(
     const res = await chat({
       model,
       messages,
-      tools: bound.defs, // NO format — never both
-      options: { num_ctx: NUM_CTX_TOOLS, temperature: 0.6, top_p: 0.95, top_k: 20 },
+      tools: bound.defs, // per-record binding — NO format, never both
+      options: {
+        num_ctx: contextSize,
+        temperature: 0.6,
+        top_p: 0.95,
+        top_k: 20,
+        max_tokens: 512,
+      },
       think: false, // thinking models otherwise spend whole turns saying nothing
     });
 

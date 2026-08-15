@@ -113,7 +113,12 @@ export async function validateLoop(
       model,
       messages: fixMessages,
       format: wireJsonSchema(catalog),
-      options: { num_ctx: NUM_CTX_DRAFT, temperature: 0, seed: 7 },
+      options: {
+        num_ctx: NUM_CTX_DRAFT,
+        temperature: 0,
+        seed: 7,
+        max_tokens: 2048,
+      },
       think: false,
     });
     content = res.content;

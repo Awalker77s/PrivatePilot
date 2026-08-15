@@ -1,250 +1,339 @@
-// Surface 4 · Activity — what needs you pinned first, then everything that
-// happened, grouped by day, footer telling the truth about where compute
-// ran. A red strip pins the newest broken thing; clicking opens the Errors
-// drawer.
+// Activity is an outcomes surface. Completed answers are the default view;
+// paused work is grouped into one clearly labelled panel, and pipeline logs
+// stay behind an explicit "View run details" action.
 import { useState } from "react";
 import type { TabId } from "../App";
-import { getState } from "../../storage/stores";
+import { getAutomation, getState } from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
 import type { RunRecord } from "../../storage/types";
 import { clockTime, dayLabel, relTime } from "../fmt";
-import { RunDetail } from "../RunDetail";
+import { RunDetail, SendDraftButton } from "../RunDetail";
 import { LinkIcon } from "../icons";
 import { CategoryGlyph } from "../glyphs";
 import { StarterGallery } from "../StarterGallery";
 import { answerAlreadyTrue, isAlreadyTrueAsk } from "../../dispatcher/watchers";
 import { Sparkline, numberSeries } from "../Sparkline";
 
-// The one value worth showing big: a money amount, a number, or the first
-// line of the answer — from the record, never recomputed.
-function headlineValue(r: RunRecord): string {
-  const answer = r.answer ?? r.summary ?? "";
+function headlineValue(run: RunRecord): string {
+  const answer = run.answer ?? run.summary ?? "";
   const money = answer.match(/\$[\d,]+(?:\.\d+)?/);
   if (money) return money[0];
   const firstLine = answer.split("\n")[0];
-  return firstLine.length > 80 ? firstLine.slice(0, 80) + "…" : firstLine;
+  return firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
 }
 
-export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
+type FeedItem =
+  | { kind: "run"; run: RunRecord }
+  | { kind: "chain"; runs: RunRecord[] };
+
+export function ActivityTab(props: { goTo: (tab: TabId) => void }) {
   useStoreVersion();
   const [openRun, setOpenRun] = useState<string | null>(null);
+  const [showNeeds, setShowNeeds] = useState(false);
   const { runs, automations } = getState();
+  const all = [...runs.records].reverse();
 
-  const all = [...runs.records].reverse(); // newest first
   const needsYou = all.filter(
-    (r) => r.status === "needs_you" && !(r.diff?.applied ?? false)
+    (run) => run.status === "needs_you" && !(run.diff?.applied ?? false)
   );
-  const rest = all.filter((r) => !needsYou.includes(r));
+  const completed = all.filter(
+    (run) =>
+      run.status === "ok" &&
+      !!run.answer?.trim() &&
+      run.automationId !== "draft"
+  );
 
-  const nameOf = (r: RunRecord): string => {
-    const auto = automations.records.find((a) => a.id === r.automationId);
-    if (auto) return auto.name;
-    if (r.cause === "you described a task") return "Built a draft";
-    return "A draft";
+  const nameOf = (run: RunRecord): string => {
+    const automation = automations.records.find(
+      (candidate) => candidate.id === run.automationId
+    );
+    if (automation) return automation.name;
+    return run.automationId === "draft" ? "Automation setup" : "Result";
   };
 
   if (all.length === 0) {
     return (
       <div className="activity">
-        <StarterGallery goToChat={() => _props.goTo("chat")} />
+        <StarterGallery goToChat={() => props.goTo("chat")} />
       </div>
     );
   }
 
-  // A chain run is ONE row that folds open into per-step lines: collapse
-  // consecutive runs sharing a chainId.
-  type FeedItem = { kind: "run"; run: RunRecord } | { kind: "chain"; runs: RunRecord[] };
   const feed: FeedItem[] = [];
-  for (const r of rest) {
-    const last = feed[feed.length - 1];
+  for (const run of completed) {
+    const previous = feed[feed.length - 1];
     if (
-      r.chainId &&
-      last?.kind === "chain" &&
-      last.runs[0].chainId === r.chainId
+      run.chainId &&
+      previous?.kind === "chain" &&
+      previous.runs[0].chainId === run.chainId
     ) {
-      last.runs.push(r);
-    } else if (r.chainId) {
-      feed.push({ kind: "chain", runs: [r] });
+      previous.runs.push(run);
+    } else if (run.chainId) {
+      feed.push({ kind: "chain", runs: [run] });
     } else {
-      feed.push({ kind: "run", run: r });
+      feed.push({ kind: "run", run });
     }
   }
 
-  // Day groups over the feed.
   const groups: { label: string; items: FeedItem[] }[] = [];
-  for (const it of feed) {
-    const at = it.kind === "run" ? it.run.startedAt : it.runs[0].startedAt;
+  for (const item of feed) {
+    const at = item.kind === "run" ? item.run.startedAt : item.runs[0].startedAt;
     const label = dayLabel(at);
-    const g = groups.find((g) => g.label === label);
-    if (g) g.items.push(it);
-    else groups.push({ label, items: [it] });
+    const group = groups.find((candidate) => candidate.label === label);
+    if (group) group.items.push(item);
+    else groups.push({ label, items: [item] });
   }
 
-  const allLocal = runs.records.every((r) => r.ranOn === "local");
-  const cloudCount = runs.records.filter((r) => r.ranOn !== "local").length;
-
-  // The results shelf: the newest delivered answers, one per automation —
-  // a price, a summary, a status — read straight from run records.
-  const results: RunRecord[] = [];
-  for (const r of all) {
-    if (r.status !== "ok" || !r.answer) continue;
-    if (results.some((x) => x.automationId === r.automationId)) continue;
-    results.push(r);
-    if (results.length >= 4) break;
+  const latestResults: RunRecord[] = [];
+  for (const run of completed) {
+    if (latestResults.some((item) => item.automationId === run.automationId)) continue;
+    latestResults.push(run);
+    if (latestResults.length >= 4) break;
   }
+
+  const allLocal = runs.records.every((run) => run.ranOn === "local");
+  const cloudCount = runs.records.filter((run) => run.ranOn !== "local").length;
 
   return (
     <div className="activity" data-testid="activity">
-      {results.length > 0 && (
+      <div className="activity-section-head">
+        <div>
+          <div className="activity-title">Latest results</div>
+          <div className="activity-subtitle">
+            Finished answers only. Run steps stay hidden unless you ask for them.
+          </div>
+        </div>
+        <span className="chip chip-gray">
+          {completed.length} result{completed.length === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      {latestResults.length > 0 ? (
         <div className="results-shelf" data-testid="results-shelf">
-          {results.map((r) => {
-            const auto = automations.records.find(
-              (a) => a.id === r.automationId
+          {latestResults.map((run) => {
+            const automation = automations.records.find(
+              (candidate) => candidate.id === run.automationId
             );
+            const resultKey = `result:${run.id}`;
             return (
               <button
-                key={r.id}
+                key={run.id}
                 className="result-card card"
-                onClick={() => setOpenRun(openRun === r.id ? null : r.id)}
+                onClick={() => setOpenRun(openRun === resultKey ? null : resultKey)}
+                aria-expanded={openRun === resultKey}
               >
                 <div className="result-name">
-                  {auto && <CategoryGlyph category={auto.category} size={20} />}
-                  <span>{auto?.name ?? nameOf(r)}</span>
-                  <span className="caption">{relTime(r.startedAt)}</span>
+                  {automation && (
+                    <CategoryGlyph category={automation.category} size={20} />
+                  )}
+                  <span>{automation?.name ?? nameOf(run)}</span>
+                  <span className="caption">{relTime(run.finishedAt ?? run.startedAt)}</span>
                 </div>
                 <div className="result-value-row">
-                  <span className="result-value">{headlineValue(r)}</span>
-                  <DeltaChip run={r} all={all} />
-                  <Sparkline
-                    values={numberSeries(runs.records, r.automationId)}
-                  />
+                  <span className="result-value">{headlineValue(run)}</span>
+                  <DeltaChip run={run} all={all} />
+                  <Sparkline values={numberSeries(runs.records, run.automationId)} />
                 </div>
-                {auto && auto.sources.length > 0 && (
-                  <span className="caption">{auto.sources[0]}</span>
+                {automation?.sources[0] && (
+                  <span className="caption">{automation.sources[0]}</span>
                 )}
               </button>
             );
           })}
         </div>
-      )}
-      {results.some((r) => openRun === r.id) && (
-        <div className="activity-detail card" style={{ padding: "0 14px" }}>
-          <RunDetail runId={openRun!} />
+      ) : (
+        <div className="empty-results card">
+          No completed results yet. Run an automation and its answer will appear here.
         </div>
       )}
-      {needsYou.map((r) => (
-        <div key={r.id} className="pinned-card card" data-testid="pinned">
-          <div className="pinned-head">
-            <b>{nameOf(r)}</b>
-            <span className="status-line" style={{ color: "var(--amber)" }}>
-              {r.summary ?? "Needs you."}
-            </span>
-            {isAlreadyTrueAsk(r) ? (
-              <>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => answerAlreadyTrue(r.id, true)}
-                >
-                  Fire once
-                </button>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => answerAlreadyTrue(r.id, false)}
-                >
-                  Wait
-                </button>
-              </>
-            ) : (
-              <button
-                className="btn btn-sm"
-                onClick={() => setOpenRun(openRun === r.id ? null : r.id)}
-              >
-                Look first
-              </button>
-            )}
-          </div>
-          {openRun === r.id && <RunDetail runId={r.id} />}
-        </div>
-      ))}
 
-      <div className="activity-feed">
-        {groups.map((g) => (
-          <div key={g.label}>
-            <div className="caption day-label">{g.label.toUpperCase()}</div>
-            {g.items.map((it) =>
-              it.kind === "run" ? (
-                <PlainRow
-                  key={it.run.id}
-                  r={it.run}
-                  name={nameOf(it.run)}
-                  open={openRun}
-                  setOpen={setOpenRun}
-                />
-              ) : (
-                <ChainRow
-                  key={it.runs[0].id}
-                  runs={it.runs}
-                  nameOf={nameOf}
-                  open={openRun}
-                  setOpen={setOpenRun}
-                />
-              )
-            )}
+      {latestResults.some((run) => openRun === `result:${run.id}`) && (
+        <div className="activity-detail card result-detail-card">
+          <OutcomeDetail runId={openRun!.slice("result:".length)} />
+        </div>
+      )}
+
+      {needsYou.length > 0 && (
+        <NeedsPanel
+          runs={needsYou}
+          expanded={showNeeds}
+          setExpanded={setShowNeeds}
+          nameOf={nameOf}
+          openRun={openRun}
+          setOpenRun={setOpenRun}
+          openChat={() => props.goTo("chat")}
+        />
+      )}
+
+      {groups.length > 0 && (
+        <div className="activity-feed">
+          <div className="activity-section-head history-head">
+            <div>
+              <div className="activity-title">Result history</div>
+              <div className="activity-subtitle">Every delivered answer, newest first.</div>
+            </div>
           </div>
-        ))}
-      </div>
+          {groups.map((group) => (
+            <div key={group.label}>
+              <div className="caption day-label">{group.label.toUpperCase()}</div>
+              {group.items.map((item) =>
+                item.kind === "run" ? (
+                  <ResultRow
+                    key={item.run.id}
+                    run={item.run}
+                    name={nameOf(item.run)}
+                    open={openRun}
+                    setOpen={setOpenRun}
+                  />
+                ) : (
+                  <ResultChainRow
+                    key={item.runs[0].id}
+                    runs={item.runs}
+                    nameOf={nameOf}
+                    open={openRun}
+                    setOpen={setOpenRun}
+                  />
+                )
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       <FooterMark allLocal={allLocal} cloudCount={cloudCount} />
     </div>
   );
 }
 
-// ▲/▼ vs the previous answer of the same automation — the ticker feel
-// without a ticker, computed from persisted run records only.
-function DeltaChip({ run, all }: { run: RunRecord; all: RunRecord[] }) {
-  const firstNum = (s: string | null): number | null => {
-    const m = s?.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
-    return m ? Number(m[0]) : null;
-  };
-  const current = firstNum(run.answer);
-  if (current === null) return null;
-  const prev = all.find(
-    (r) =>
-      r.automationId === run.automationId &&
-      r.id !== run.id &&
-      r.startedAt < run.startedAt &&
-      r.status === "ok" &&
-      r.answer
-  );
-  const prevNum = prev ? firstNum(prev.answer) : null;
-  if (prevNum === null || prevNum === 0) return null;
-  const pct = ((current - prevNum) / prevNum) * 100;
-  if (!Number.isFinite(pct) || Math.abs(pct) < 0.005) return null;
-  const up = pct > 0;
+function NeedsPanel({
+  runs,
+  expanded,
+  setExpanded,
+  nameOf,
+  openRun,
+  setOpenRun,
+  openChat,
+}: {
+  runs: RunRecord[];
+  expanded: boolean;
+  setExpanded: (expanded: boolean) => void;
+  nameOf: (run: RunRecord) => string;
+  openRun: string | null;
+  setOpenRun: (id: string | null) => void;
+  openChat: () => void;
+}) {
   return (
-    <span className={`chip ${up ? "chip-green" : "chip-red"}`}>
-      {up ? "▲" : "▼"} {Math.abs(pct).toFixed(1)}%
-    </span>
+    <section className="needs-panel card" data-testid="needs-panel">
+      <button className="needs-panel-toggle" onClick={() => setExpanded(!expanded)}>
+        <span className="needs-icon">!</span>
+        <span className="needs-copy">
+          <b>
+            Needs your input <span className="chip chip-amber">{runs.length}</span>
+          </b>
+          <span>
+            These jobs paused before producing a result. Nothing was changed or sent.
+          </span>
+        </span>
+        <span className="btn btn-sm">{expanded ? "Hide" : "Review"}</span>
+      </button>
+
+      {expanded && (
+        <div className="needs-list">
+          {runs.map((run) => {
+            const key = `need:${run.id}`;
+            const hasChanges = !!run.diff?.entries.length;
+            return (
+              <div className="needs-item" key={run.id}>
+                <div className="needs-item-main">
+                  <div>
+                    <b>{nameOf(run)}</b>
+                    <div className="status-line">{run.summary ?? "Waiting for your choice."}</div>
+                  </div>
+                  <span className="caption">{relTime(run.startedAt)}</span>
+                </div>
+                <div className="needs-actions">
+                  {isAlreadyTrueAsk(run) ? (
+                    <>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => answerAlreadyTrue(run.id, true)}
+                      >
+                        Fire once
+                      </button>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => answerAlreadyTrue(run.id, false)}
+                      >
+                        Wait for next crossing
+                      </button>
+                    </>
+                  ) : hasChanges ? (
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => setOpenRun(openRun === key ? null : key)}
+                    >
+                      {openRun === key ? "Close review" : "Review changes"}
+                    </button>
+                  ) : (
+                    <button className="btn btn-sm" onClick={openChat}>
+                      Continue in Chat
+                    </button>
+                  )}
+                </div>
+                {openRun === key && (
+                  <div className="needs-detail">
+                    <RunDetail runId={run.id} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
-function statusDot(status: RunRecord["status"]): string {
-  return status === "ok"
-    ? "dot-green"
-    : status === "broke"
-      ? "dot-red"
-      : status === "needs_you"
-        ? "dot-amber"
-        : "dot-gray";
+function OutcomeDetail({ runId }: { runId: string }) {
+  useStoreVersion();
+  const [showTechnical, setShowTechnical] = useState(false);
+  const run = getState().runs.records.find((candidate) => candidate.id === runId);
+  if (!run) return <div className="caption">This result is no longer available.</div>;
+  const automation = getAutomation(run.automationId);
+  const completedAt = run.finishedAt ?? run.startedAt;
+  return (
+    <div className="outcome-detail" data-testid="outcome-detail">
+      <div className="outcome-answer">{run.answer ?? run.summary ?? "Completed."}</div>
+      <div className="outcome-meta">
+        <span>{new Date(completedAt).toLocaleString()}</span>
+        {automation?.sources.length ? (
+          <span>Source: {automation.sources.join(", ")}</span>
+        ) : null}
+        <span>{run.ranOn === "local" ? "Ran on this computer" : `Ran on ${run.ranOn}`}</span>
+      </div>
+      <SendDraftButton run={run} />
+      <button
+        className="btn btn-sm outcome-technical-toggle"
+        onClick={() => setShowTechnical(!showTechnical)}
+      >
+        {showTechnical ? "Hide run details" : "View run details"}
+      </button>
+      {showTechnical && (
+        <div className="outcome-technical">
+          <RunDetail runId={run.id} />
+        </div>
+      )}
+    </div>
+  );
 }
 
-function PlainRow({
-  r,
+function ResultRow({
+  run,
   name,
   open,
   setOpen,
 }: {
-  r: RunRecord;
+  run: RunRecord;
   name: string;
   open: string | null;
   setOpen: (id: string | null) => void;
@@ -252,103 +341,93 @@ function PlainRow({
   return (
     <div>
       <button
-        className="activity-row"
-        onClick={() => setOpen(open === r.id ? null : r.id)}
-        data-testid="activity-row"
+        className="activity-row result-history-row"
+        onClick={() => setOpen(open === run.id ? null : run.id)}
+        data-testid="activity-result-row"
+        aria-expanded={open === run.id}
       >
-        <span className={`dot ${statusDot(r.status)}`} />
+        <span className="dot dot-green" />
         <span className="activity-name">{name}</span>
-        <span className="activity-summary">
-          {r.status === "running" ? "running…" : (r.summary ?? "")}
-        </span>
-        <span className="caption">{clockTime(r.startedAt)}</span>
+        <span className="activity-summary">{headlineValue(run)}</span>
+        <span className="caption">{clockTime(run.finishedAt ?? run.startedAt)}</span>
       </button>
-      {open === r.id && (
+      {open === run.id && (
         <div className="activity-detail">
-          <RunDetail runId={r.id} />
+          <OutcomeDetail runId={run.id} />
         </div>
       )}
     </div>
   );
 }
 
-// One row per chain run; folds open into per-step lines, numbers inline.
-function ChainRow({
+function ResultChainRow({
   runs,
   nameOf,
   open,
   setOpen,
 }: {
   runs: RunRecord[];
-  nameOf: (r: RunRecord) => string;
+  nameOf: (run: RunRecord) => string;
   open: string | null;
   setOpen: (id: string | null) => void;
 }) {
-  const key = `chain-${runs[0].id}`;
-  const { chains } = getState();
-  const chain = chains.records.find((c) => c.id === runs[0].chainId);
-  const okCount = runs.filter((r) => r.status === "ok" || r.status === "needs_you").length;
-  const anyBroke = runs.some((r) => r.status === "broke");
-  const running = runs.some((r) => r.status === "running");
-  const batons = runs
-    .filter((r) => r.baton)
-    .flatMap((r) => Object.keys(r.baton!));
-  const last = runs[runs.length - 1];
-  const stalledMin = running
-    ? Math.floor((Date.now() - (runs.find((r) => r.status === "running")?.startedAt ?? Date.now())) / 60000)
-    : 0;
-
-  const summary = running
-    ? `Waiting for ${nameOf(runs.find((r) => r.status === "running")!)} — ${stalledMin} min`
-    : anyBroke
-      ? (runs.find((r) => r.status === "broke")?.summary ?? "broke")
-      : `${okCount} steps ✓${batons.length ? ` — handed ${[...new Set(batons)].map((b) => b.replace(/_/g, " ")).join(", ")}` : ""} → ${last.summary ?? ""}`;
-
+  const key = `chain:${runs[0].chainId ?? runs[0].id}`;
+  const chain = getState().chains.records.find(
+    (candidate) => candidate.id === runs[0].chainId
+  );
+  const latest = runs[0];
   return (
     <div>
       <button
-        className="activity-row"
+        className="activity-row result-history-row"
         onClick={() => setOpen(open === key ? null : key)}
-        data-testid="activity-chain-row"
+        data-testid="activity-result-chain-row"
+        aria-expanded={open === key}
       >
-        <span
-          className={`dot ${anyBroke ? "dot-red" : running ? "dot-gray" : "dot-green"}`}
-        />
+        <span className="dot dot-green" />
         <LinkIcon size={12} />
-        <span className="activity-name">{chain?.name ?? "Chain"}</span>
-        <span className="activity-summary">{summary}</span>
-        <span className="caption">{clockTime(runs[0].startedAt)}</span>
+        <span className="activity-name">{chain?.name ?? "Automation chain"}</span>
+        <span className="activity-summary">{headlineValue(latest)}</span>
+        <span className="caption">{clockTime(latest.finishedAt ?? latest.startedAt)}</span>
       </button>
       {open === key && (
-        <div className="activity-detail">
-          <ChainSteps runs={runs} nameOf={nameOf} />
+        <div className="activity-detail chain-outcomes">
+          {runs.map((run) => (
+            <div className="chain-outcome" key={run.id}>
+              <div className="activity-name">{nameOf(run)}</div>
+              <OutcomeDetail runId={run.id} />
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-// Per-step lines, each with its own expandable run detail.
-function ChainSteps({
-  runs,
-  nameOf,
-}: {
-  runs: RunRecord[];
-  nameOf: (r: RunRecord) => string;
-}) {
-  const [openStep, setOpenStep] = useState<string | null>(null);
+function DeltaChip({ run, all }: { run: RunRecord; all: RunRecord[] }) {
+  const firstNumber = (text: string | null): number | null => {
+    const match = text?.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : null;
+  };
+  const current = firstNumber(run.answer);
+  if (current === null) return null;
+  const previous = all.find(
+    (candidate) =>
+      candidate.automationId === run.automationId &&
+      candidate.id !== run.id &&
+      candidate.startedAt < run.startedAt &&
+      candidate.status === "ok" &&
+      candidate.answer
+  );
+  const previousNumber = previous ? firstNumber(previous.answer) : null;
+  if (previousNumber === null || previousNumber === 0) return null;
+  const percent = ((current - previousNumber) / previousNumber) * 100;
+  if (!Number.isFinite(percent) || Math.abs(percent) < 0.005) return null;
+  const up = percent > 0;
   return (
-    <>
-      {runs.map((r) => (
-        <PlainRow
-          key={r.id}
-          r={r}
-          name={`${(r.stepIndex ?? 0) + 1} · ${nameOf(r)}`}
-          open={openStep}
-          setOpen={setOpenStep}
-        />
-      ))}
-    </>
+    <span className={`chip ${up ? "chip-green" : "chip-red"}`}>
+      {up ? "▲" : "▼"} {Math.abs(percent).toFixed(1)}%
+    </span>
   );
 }
 

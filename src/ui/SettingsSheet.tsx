@@ -3,7 +3,8 @@ import { XIcon } from "./icons";
 import { runStorageSelfTest, SelfTestResult } from "../storage/selftest";
 import { useStore } from "../storage/useStore";
 import { DoctorReport, runModelDoctor } from "../providers/ollama";
-import { NUM_CTX_DRAFT, ollama } from "../providers";
+import { localModels, NUM_CTX_DRAFT, ollama } from "../providers";
+import type { ModelInfo } from "../providers/types";
 import {
   CLOUD_MODELS,
   fetchPlan,
@@ -19,11 +20,16 @@ export function SettingsSheet({ close }: { close: () => void }) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<SelfTestResult | null>(null);
   const [doctor, setDoctor] = useState<DoctorReport | null>(null);
+  const [localChoices, setLocalChoices] = useState<ModelInfo[]>([]);
+  const [localChoice, setLocalChoice] = useState(
+    getSettings().localModel ?? ""
+  );
   const [waking, setWaking] = useState(false);
   const [wakeLine, setWakeLine] = useState<string | null>(null);
 
   useEffect(() => {
     runModelDoctor().then(setDoctor);
+    localModels(true).then(setLocalChoices);
   }, []);
 
   async function wake() {
@@ -37,7 +43,13 @@ export function SettingsSheet({ close }: { close: () => void }) {
         messages: [
           { role: "user", content: "Answer with the single word: ready" },
         ],
-        options: { num_ctx: NUM_CTX_DRAFT, temperature: 0, seed: 7 },
+        options: {
+          num_ctx: NUM_CTX_DRAFT,
+          max_tokens: 8,
+          temperature: 0,
+          seed: 7,
+        },
+        think: false,
       });
       const word = res.content.trim().slice(0, 40) || "(empty)";
       setWakeLine(
@@ -112,6 +124,35 @@ export function SettingsSheet({ close }: { close: () => void }) {
                 : "Can't call tools — runs will use the drafting protocol."}
               {doctor.visionCapable ? " Can look at screenshots." : ""}
             </div>
+          )}
+          {localChoices.length > 1 && (
+            <>
+              <select
+                className="run-search"
+                style={{ width: "100%" }}
+                value={localChoice}
+                onChange={async (e) => {
+                  const value = e.target.value;
+                  setLocalChoice(value);
+                  await updateSettings((settings) => {
+                    settings.localModel = value || null;
+                  });
+                  setDoctor(await runModelDoctor());
+                }}
+                data-testid="local-model"
+              >
+                <option value="">Automatic — prefer Qwen 9B</option>
+                {localChoices.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
+                  </option>
+                ))}
+              </select>
+              <div className="caption">
+                Qwen 4B is faster on CPU-only computers; Qwen 9B usually makes
+                stronger drafts.
+              </div>
+            </>
           )}
           {wakeLine && (
             <div className="caption" data-testid="wake-line">

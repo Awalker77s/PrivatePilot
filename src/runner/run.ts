@@ -14,6 +14,7 @@ import type {
 } from "../storage/types";
 import { buildSandbox, Sandbox, SandboxRefusal } from "./sandbox";
 import { runToolLoop } from "./loop";
+import { runDirectEndpoint } from "./direct";
 import { scanDiff, applyDiff, putBack } from "./diff";
 import { parseOutputs, thoroughPass, verifyNumbers } from "./verify";
 import { holdModelInMemory, OLLAMA_DOWN_SENTENCE } from "../providers/ollama";
@@ -160,13 +161,6 @@ async function runInner(
     return run;
   };
 
-  const model = cloudActive()
-    ? getSettings().featherless.model
-    : await activeLocalModel();
-  if (!model) {
-    return finish("broke", OLLAMA_DOWN_SENTENCE);
-  }
-
   // ---- sandbox (pre-flight + copy) — only when files are involved ----
   const touchesFiles =
     auto.files.reads.length > 0 || auto.files.writes.length > 0;
@@ -228,15 +222,43 @@ async function runInner(
 
   // ---- stage 3 · tool loop ----
   let loop;
+  let model: string | null = null;
   try {
-    loop = await runToolLoop(
-      auto,
-      model,
-      sandbox,
-      opts.inputValues ?? {},
-      (e) => onProgress(e.text),
-      opts.contextNote
-    );
+    const direct = sandbox ? null : await runDirectEndpoint(auto);
+    if (direct) {
+      loop = {
+          answer: direct.answer,
+          turns: 0,
+          corpus: direct.corpus,
+          contextTrimmed: false,
+          recoveredCalls: 0,
+          refusals: [],
+          logLines: direct.logLines,
+          stalled: false,
+          // A direct-endpoint job never touches apps — empty connector fields.
+          heldBack: null,
+          handoffs: [],
+          appsRead: 0,
+        };
+    } else {
+      model = cloudActive()
+        ? getSettings().featherless.model
+        : await activeLocalModel();
+      if (!model) {
+        toolsLog.status = "broke";
+        toolsLog.finishedAt = Date.now();
+        toolsLog.sentence = OLLAMA_DOWN_SENTENCE;
+        return finish("broke", OLLAMA_DOWN_SENTENCE);
+      }
+      loop = await runToolLoop(
+          auto,
+          model,
+          sandbox,
+          opts.inputValues ?? {},
+          (e) => onProgress(e.text),
+          opts.contextNote
+        );
+    }
   } catch (e) {
     const sentence =
       e instanceof ProviderError ? e.sentence : `The tool loop broke — ${String(e)}`;
@@ -293,12 +315,21 @@ async function runInner(
   }
   toolsLog.status = "ok";
   toolsLog.finishedAt = Date.now();
-  line(toolsLog, `Finished in ${loop.turns} turns.`);
+  line(
+    toolsLog,
+    loop.turns === 0
+      ? "Finished directly from a verified endpoint."
+      : `Finished in ${loop.turns} turns.`
+  );
 
   // ---- stage 4 · thorough mode ----
   const thoroughLog = stage("thorough");
   let answer = loop.answer;
-  if (auto.effort === "thorough" && loop.corpus.trim().length > 0) {
+  if (
+    auto.effort === "thorough" &&
+    loop.corpus.trim().length > 0 &&
+    model
+  ) {
     onProgress("Thorough — re-reading its own answer against the source…");
     try {
       const revised = await thoroughPass(model, answer, loop.corpus);
@@ -335,7 +366,12 @@ async function runInner(
         ...auto.steps,
         JSON.stringify(opts.inputValues ?? {}),
       ].join("\n");
-      const v = await verifyNumbers(model, cleanAnswer, loop.corpus, contextText);
+      const v = await verifyNumbers(
+        model ?? auto.model,
+        cleanAnswer,
+        loop.corpus,
+        contextText
+      );
       for (const c of v.checkedLines) line(verifyLog, c);
       if (!v.ok) {
         verifyLog.status = "broke";

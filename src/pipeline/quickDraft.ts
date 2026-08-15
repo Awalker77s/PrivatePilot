@@ -83,6 +83,11 @@ function automation(
     ...fields,
     inputs: [],
     files: { reads: [], writes: [] },
+    // Fences added since this fast path was written — public-data drafts touch
+    // no apps, heavy tools, or knowledge bases.
+    apps: [],
+    tools: [],
+    knowledge: [],
     delivers: "answer",
     schedule: scheduleFrom(text),
     effort: "quick",

@@ -353,3 +353,60 @@
 .dot-gray {
   background: var(--caption);
 }
+
+/* ---------- brain picker: the composer chip opens the model switch ---------- */
+.brain-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 340px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  z-index: 60;
+  text-align: left;
+}
+.brain-sec {
+  font-size: var(--fs-caption, 11px);
+  color: var(--caption);
+  padding: 7px 8px 4px;
+  letter-spacing: 0.02em;
+}
+.brain-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.brain-row:hover {
+  background: var(--nested);
+}
+.brain-dot {
+  width: 10px;
+  flex: 0 0 10px;
+  color: var(--green);
+  font-size: 9px;
+}
+.brain-title {
+  display: block;
+  font-size: var(--fs-status, 12.5px);
+  font-weight: 560;
+}
+.brain-sub {
+  display: block;
+  font-size: var(--fs-caption, 11px);
+  color: var(--muted);
+  margin-top: 1px;
+}

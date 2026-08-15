@@ -23,6 +23,21 @@ export interface AppSettings {
   lastWatchTick?: Record<string, number>;
   // One-time multi-image sanity probe result, per model tag.
   visionProbe?: Record<string, boolean>;
+  // Connected apps — which local senses the person has allowed. Absent
+  // means off: nothing looks into an app until the person says so.
+  apps?: {
+    computerAllowed?: boolean; // read what open app windows show
+    outlookClassicAllowed?: boolean; // read classic Outlook on this PC
+    spotifyAllowed?: boolean; // what's playing / pause / skip on this PC
+    // Gmail over IMAP: the address lives here; the app password is DPAPI-
+    // sealed in secrets.json and never in settings.
+    gmail?: { address: string; connectedAt: number } | null;
+  };
+  // Heavy tasks — real file work through vetted tools (convert, rename, zip,
+  // OCR). Off by default; nothing runs a tool until the person allows it.
+  heavy?: {
+    filesAllowed?: boolean;
+  };
   permissions?: {
     fullAccess: boolean;
     // revisionId -> immutable content hash. A changed revision cannot reuse
@@ -41,6 +56,7 @@ const DEFAULTS: AppSettings = {
   pickedFolders: [],
   localModel: null,
   featherless: { enabled: false, key: null, model: "Qwen/Qwen3-32B" },
+  apps: {},
   permissions: {
     fullAccess: false,
     approvedRevisions: {},

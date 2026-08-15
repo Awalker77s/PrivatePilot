@@ -5,18 +5,22 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { readChatFile, writeChatFile } from "../storage/chat";
 import {
+  COPY_INTENT_RE,
   DEIXIS_RE,
   DELTA_VERB_RE,
   EditTarget,
   NEW_TASK_RE,
+  SCHEDULE_FIELD_RE,
   TIMEY_RE,
   findTargetNamed,
   findTargetsByName,
   focusTargets,
+  isQuestionAbout,
   renderHistory,
   rewriteDeixis,
   splitCoordination,
 } from "./memory";
+import { explainAutomation } from "../pipeline/explain";
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
@@ -61,6 +65,9 @@ type ChatItemVariant =
       keepSentence: string | null;
     }
   | { id: number; kind: "note"; tone: "gray" | "amber" | "red"; text: string }
+  // A grounded answer ABOUT an automation ("what can this do?") — rendered
+  // like a run answer, sourced only from the record + its run history.
+  | { id: number; kind: "explain"; autoName: string; text: string }
   | {
       id: number;
       kind: "edit";
@@ -454,6 +461,40 @@ async function runEdit(target: EditTarget, request: string) {
   }
 }
 
+// A question about an automation answers from the record — never the patcher.
+// This is what makes an automation something you can TALK to: open it from
+// the Library, ask "what can this do?", then keep upgrading it in words.
+async function runExplain(record: AutomationRecord, question: string, history?: string) {
+  busy = true;
+  const progress = push({
+    kind: "progress",
+    stage: "draft",
+    text: `Reading "${record.name}"…`,
+    startedAt: Date.now(),
+  });
+  try {
+    const model = await activeLocalModel();
+    if (!model) throw new Error("No local model.");
+    const result = await explainAutomation(record, question, model, history);
+    replace(progress.id, null);
+    if (!result.ok) {
+      push({
+        kind: "note",
+        tone: "amber",
+        text: result.failSentence ?? "Couldn't answer that one.",
+      });
+    } else {
+      push({ kind: "explain", autoName: record.name, text: result.answer });
+    }
+  } catch (e) {
+    replace(progress.id, null);
+    push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+  } finally {
+    busy = false;
+    emit();
+  }
+}
+
 // A draft edit mutates the built card in place (the Zapier/GPT-builder
 // pattern: one open draft, follow-ups change IT) and drops an already-kept
 // edit card as the visible change summary — Put it back reverses it.
@@ -557,16 +598,17 @@ export async function sendText(text: string) {
     | undefined;
 
   if (lastQuestion && pendingEditRequest) {
-    replace(lastQuestion.id, { ...lastQuestion, answered: text });
     const target = findTargetNamed(text, thread, saved);
-    const request = pendingEditRequest;
-    pendingEditRequest = null;
     if (target) {
+      replace(lastQuestion.id, { ...lastQuestion, answered: text });
+      const request = pendingEditRequest;
+      pendingEditRequest = null;
       await runEdit(target, request);
-    } else {
-      push({ kind: "note", tone: "amber", text: `No automation is named "${text.trim()}".` });
+      return;
     }
-    return;
+    // Not a name — a correction or a new thought ("actually make it 8am").
+    // The which-one question stays open; the message routes normally instead
+    // of dead-ending on an amber "No automation is named that".
   }
 
   if (lastQuestion && pending) {
@@ -583,23 +625,33 @@ export async function sendText(text: string) {
     return;
   }
 
-  // An Automation Studio is an explicit edit scope. It replaces the global
-  // chat's name/pronoun heuristics: every new instruction edits this record.
-  if (activeAutomationId) {
+  // An Automation Studio is an explicit scope for THIS record: a question
+  // answers from it, an instruction edits it — but "make me a NEW automation"
+  // is never an edit of this one; it falls through to a fresh compile.
+  if (activeAutomationId && !NEW_TASK_RE.test(text)) {
     const record = saved.find((candidate) => candidate.id === activeAutomationId);
     if (record) {
-      await runEdit({ record, builtItemId: null }, text);
+      if (isQuestionAbout(text)) {
+        await runExplain(record, text, history);
+      } else {
+        await runEdit({ record, builtItemId: null }, text);
+      }
       return;
     }
   }
 
-  // A single structured reference can be edited without repeating its name.
+  // A single structured reference: questions answer from it, instructions
+  // edit it — no need to repeat its name either way.
   if (references.length === 1 && !NEW_TASK_RE.test(text)) {
     const record = saved.find(
       (candidate) => candidate.id === references[0].automationId
     );
     if (record) {
-      await runEdit({ record, builtItemId: null }, text);
+      if (isQuestionAbout(text)) {
+        await runExplain(record, text, history);
+      } else {
+        await runEdit({ record, builtItemId: null }, text);
+      }
       return;
     }
   }
@@ -609,12 +661,38 @@ export async function sendText(text: string) {
   // 1's card and doesn't re-create it), chain null by construction.
   const segments = splitCoordination(text);
   if (segments.length > 1) {
-    for (const seg of segments) {
-      await runCompile({
-        userText: seg,
-        answers: [],
-        history: renderHistory(scopedItems(), saved),
-      });
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      // Each segment routes on its own: a segment that names a saved/drafted
+      // automation to CHANGE it patches that record (a duplicate compile would
+      // otherwise leave the real one untouched); everything else compiles as
+      // one job.
+      const segNamed = findTargetsByName(seg, scopedItems(), saved);
+      if (
+        segNamed.length === 1 &&
+        DELTA_VERB_RE.test(seg) &&
+        !NEW_TASK_RE.test(seg)
+      ) {
+        await runEdit(segNamed[0], seg);
+      } else {
+        await runCompile({
+          userText: seg,
+          answers: [],
+          history: renderHistory(scopedItems(), saved),
+          singleJob: true, // a split segment is one job by construction
+        });
+      }
+      // A segment that opened a question owns the conversation now — running
+      // the next segment would clobber its pending context and orphan the
+      // card. Stop and say what's left rather than silently dropping it.
+      if (pending && i < segments.length - 1) {
+        push({
+          kind: "note",
+          tone: "gray",
+          text: "Answer the question above first — then send me the rest of that request.",
+        });
+        break;
+      }
     }
     return;
   }
@@ -624,8 +702,16 @@ export async function sendText(text: string) {
   // of re-building it.
   const named = findTargetsByName(text, thread, saved);
   if (named.length === 1 && !NEW_TASK_RE.test(text)) {
-    await runEdit(named[0], text);
-    return;
+    if (isQuestionAbout(text)) {
+      await runExplain(named[0].record, text, history);
+      return;
+    }
+    // "a second Morning Brief for the weekend" names an automation only to ask
+    // for a VARIANT — compile it fresh, don't patch the original.
+    if (!COPY_INTENT_RE.test(text)) {
+      await runEdit(named[0], text);
+      return;
+    }
   }
   if (named.length > 1 && !NEW_TASK_RE.test(text)) {
     askWhichOne(named, text);
@@ -637,7 +723,10 @@ export async function sendText(text: string) {
   if (
     !NEW_TASK_RE.test(text) &&
     DELTA_VERB_RE.test(text) &&
-    (DEIXIS_RE.test(text) || TIMEY_RE.test(text))
+    // A real pronoun aimed at the focus, OR a schedule tweak that names an
+    // existing FIELD ("change the time to 9am"). TIMEY alone is not enough —
+    // "set up a daily backup of my Documents folder" is a new job, not an edit.
+    (DEIXIS_RE.test(text) || (TIMEY_RE.test(text) && SCHEDULE_FIELD_RE.test(text)))
   ) {
     const focus = focusTargets(thread, saved);
     if (focus.length === 1) {
@@ -1119,6 +1208,11 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
   if (!item || item.state === "running") return;
   const autos = item.result.automations;
   if (autos.length === 0) return;
+  // Hold the conversation while the watched run executes — otherwise an edit
+  // typed mid-run patches the draft the run isn't executing, and when the run
+  // finishes the untested edit gets stamped "tested" and Save unlocks.
+  busy = true;
+  emit();
   patchBuilt(itemId, { state: "running", progress: "Starting…" });
   try {
     if (autos.length === 1 || !item.result.chain) {
@@ -1130,8 +1224,9 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
       if (run.status === "broke") {
         patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
         push({ kind: "note", tone: "red", text: run.summary ?? "Broke." });
-      } else if (run.status === "held") {
-        // Nothing real happened — the watched run didn't earn Save.
+      } else if (run.status === "held" || (run.status === "needs_you" && !run.diff)) {
+        // Nothing real happened — the watched run didn't earn Save. (A
+        // needs_you WITH a diff is different: files changed, Keep waits.)
         patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
         push({ kind: "note", tone: "amber", text: run.summary ?? "Held back." });
       } else {
@@ -1162,6 +1257,9 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
   } catch (e) {
     patchBuilt(itemId, { state: "fresh", progress: null });
     push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+  } finally {
+    busy = false;
+    emit();
   }
 }
 

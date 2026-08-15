@@ -10,6 +10,7 @@ import {
 import { readDir } from "@tauri-apps/plugin-fs";
 import { getState } from "../storage/stores";
 import { getSettings, loadSettings } from "../storage/settings";
+import { connectorStatuses, ConnectorSnapshot } from "../connectors/registry";
 import { isDesktopApp } from "../platform";
 
 export interface CatalogFile {
@@ -34,18 +35,35 @@ export interface Catalog {
   readTargets: string[]; // folder + file displays — the reads enum
   writeTargets: string[];
   displayToReal: Record<string, string>;
+  // Apps automations can look into, with live status — the drafter's menu.
+  apps: ConnectorSnapshot[];
+  // Knowledge bases (named document collections) the person has built.
+  knowledgeBases: string[];
+  // The person's words route on a result ("if…, otherwise…") — the validator
+  // insists on chain.steps when multiple jobs arrive unchained.
+  branchIntent?: boolean;
+  // This request is ONE job by construction (a coordination-split segment) —
+  // the validator refuses drafts with more than one automation.
+  singleJob?: boolean;
 }
 
 // Online requests do not need 150 real paths embedded into the JSON grammar.
 // Keeping those enums out makes local CPU drafting materially faster while
 // preserving the closed catalog whenever the person actually mentions files.
 const FILE_INTENT =
-  /\b(file|folder|document|documents|pdf|spreadsheet|sheet|excel|csv|xlsx|docx|invoice|invoices|receipt|receipts|ledger|downloads?|desktop|directory|directories)\b/i;
+  /\b(file|folder|document|documents|pdf|spreadsheet|sheet|excel|csv|xlsx|docx|invoice|invoices|receipt|receipts|ledger|downloads?|desktop|directory|directories|scan|scanned|scans|image|images|photo|photos|picture|pictures|jpe?g|png|tiff?|ocr|searchable|rename|zip|archive|convert)\b/i;
+
+// Result-dependent routing in the person's own words. Deliberately narrow:
+// a bare "if" appears in single-job requests ("check if…") all the time.
+const BRANCH_INTENT =
+  /\b(otherwise|or else|if not\b|if it (does not|doesn't)|depending on (what|the|that|it)|if the \w+ (fails|breaks|is down|works|succeeds)|if the (result|answer|outcome|check)|if (it|that|this)(\s+\w+)? (fails|breaks|finds|says|mentions|succeeds|is down|works))\b/i;
 
 export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
-  if (FILE_INTENT.test(userText)) return catalog;
+  const branchIntent = BRANCH_INTENT.test(userText);
+  if (FILE_INTENT.test(userText)) return { ...catalog, branchIntent };
   return {
     ...catalog,
+    branchIntent,
     files: [],
     readTargets: [],
     writeTargets: [],
@@ -76,6 +94,14 @@ const FORMAT_BY_EXT: Record<string, string> = {
   htm: "text",
 };
 
+// Images can't be READ as text (readAnyFile refuses them) but they ARE valid
+// targets for the OCR heavy tool, so the catalog must be able to name them.
+const OCR_EXTS = new Set(["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"]);
+
+export function isOcrImage(display: string): boolean {
+  return OCR_EXTS.has(display.split(".").pop()?.toLowerCase() ?? "");
+}
+
 export function formatForPath(display: string): string {
   const ext = display.split(".").pop()?.toLowerCase() ?? "";
   return FORMAT_BY_EXT[ext] ?? "text";
@@ -105,9 +131,20 @@ export async function buildCatalog(): Promise<Catalog> {
     await tryDir("Downloads", downloadDir);
   await tryDir("Documents", documentDir);
   await tryDir("Desktop", desktopDir);
+  // A picked folder displays relative to home when it sits under a standard
+  // folder (~/Downloads/receipts), so the model sees a resolvable path — a
+  // "~/…/x" abbreviation reads as out-of-scope to a small model.
+  const fwd = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const knownReals = folderSpecs.map((f) => ({ realFwd: fwd(f.real), display: f.display }));
   for (const picked of getSettings().pickedFolders) {
-    const name = picked.split(/[\\/]/).filter(Boolean).pop() ?? picked;
-    folderSpecs.push({ label: name, real: picked, display: `~/…/${name}` });
+    const norm = picked.replace(/[\\/]+$/, "");
+    const pf = fwd(norm);
+    const parent = knownReals.find((k) => pf.startsWith(k.realFwd + "/"));
+    const name = norm.split(/[\\/]/).filter(Boolean).pop() ?? norm;
+    const display = parent
+      ? `${parent.display}/${pf.slice(parent.realFwd.length + 1)}`
+      : `~/…/${name}`;
+    folderSpecs.push({ label: name, real: norm, display });
   }
 
   }
@@ -125,10 +162,10 @@ export async function buildCatalog(): Promise<Catalog> {
       for (const e of entries) {
         if (!e.isFile) continue;
         if (e.name.startsWith(".") || e.name.startsWith("~$")) continue;
-        // Only formats the runner can actually read — images and binaries
-        // would bloat the closed enum without being automatable targets.
+        // Text formats the runner can read, PLUS image formats the OCR tool
+        // can turn into searchable text — both are automatable targets.
         const ext = e.name.split(".").pop()?.toLowerCase() ?? "";
-        if (!(ext in FORMAT_BY_EXT)) continue;
+        if (!(ext in FORMAT_BY_EXT) && !OCR_EXTS.has(ext)) continue;
         if (bucket.length >= MAX_FILES_PER_FOLDER) break;
         const display = `${spec.display}/${e.name}`;
         const real = await join(spec.real, e.name);
@@ -170,6 +207,20 @@ export async function buildCatalog(): Promise<Catalog> {
   const automationNames = getState().automations.records.map((r) => r.name);
   const folderDisplays = folders.filter((f) => f.readable).map((f) => f.display);
   const fileDisplays = files.map((f) => f.display);
+  let apps: ConnectorSnapshot[] = [];
+  try {
+    apps = await connectorStatuses();
+  } catch {
+    // A status probe that breaks must not block compiling — the drafter
+    // just sees no app menu this time.
+  }
+  let knowledgeBases: string[] = [];
+  try {
+    const { listKnowledgeBases } = await import("../rag/store");
+    knowledgeBases = (await listKnowledgeBases()).map((k) => k.name);
+  } catch {
+    // no KBs yet, or the store is unavailable
+  }
 
   return {
     folders,
@@ -178,6 +229,8 @@ export async function buildCatalog(): Promise<Catalog> {
     readTargets: [...folderDisplays, ...fileDisplays],
     writeTargets: [...folderDisplays, ...fileDisplays],
     displayToReal,
+    apps,
+    knowledgeBases,
   };
 }
 

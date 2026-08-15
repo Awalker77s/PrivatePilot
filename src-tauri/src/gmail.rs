@@ -1,0 +1,488 @@
+// Gmail over IMAP with an app password — no developer registration, no
+// OAuth screens: the person generates an app password in their Google
+// account and pastes it once. Reads never mark mail as read (BODY.PEEK);
+// the only write is a DRAFT appended to [Gmail]/Drafts, which the person
+// sends from Gmail. Never a SEND. The password lives DPAPI-sealed and is
+// unsealed here, used for the login, and dropped — it never crosses IPC.
+use crate::secrets;
+use base64::Engine;
+use mailparse::{parse_headers, parse_mail, MailHeaderMap, ParsedMail};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+const HOST: &str = "imap.gmail.com";
+const PORT: u16 = 993;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const IO_TIMEOUT: Duration = Duration::from_secs(90);
+const BODY_CAP: usize = 6000;
+pub const SECRET_NAME: &str = "gmail.app_password";
+
+// Gmail's IMAP login costs 25-45s each time and it throttles rapid re-logins,
+// so a run that lists then reads several messages would pile up into minutes
+// and trip the IO timeout. Keep ONE authenticated session alive and reuse it
+// across the run's tool calls; a NOOP proves it's still good, and it's
+// dropped when it goes stale. One account is connected at a time, which
+// matches reality. The Mutex also serializes Gmail ops process-wide (correct
+// — one IMAP conversation at a time).
+static POOL: Mutex<Option<Pooled>> = Mutex::new(None);
+const SESSION_TTL: Duration = Duration::from_secs(4 * 60);
+const NOOP_SKIP: Duration = Duration::from_secs(45);
+
+struct Pooled {
+    account: String,
+    session: Session,
+    last_used: Instant,
+}
+
+#[derive(Deserialize, Default)]
+struct Args {
+    since_hours: Option<f64>,
+    unread_only: Option<bool>,
+    from: Option<String>,
+    limit: Option<usize>,
+    query: Option<String>,
+    uid: Option<u32>,
+    reply_to: Option<u32>,
+    to: Option<String>,
+    subject: Option<String>,
+    body: Option<String>,
+    // save_attachment: which attachment (by filename substring), if not the first
+    name: Option<String>,
+}
+
+const ATTACH_CAP: usize = 25 * 1024 * 1024; // 25 MB — refuse larger honestly
+
+#[derive(Serialize)]
+struct Row {
+    id: u32,
+    when: String,
+    from: String,
+    address: String,
+    subject: String,
+    unread: bool,
+    size: u32,
+}
+
+type Session = imap::Session<native_tls::TlsStream<TcpStream>>;
+
+fn connect(account: &str, password: &str) -> Result<Session, String> {
+    // Prefer the resolved IPv4 — some networks stall on Gmail's IPv6 for
+    // tens of seconds before falling back, which is most of the "slow login".
+    let addr = (HOST, PORT)
+        .to_socket_addrs()
+        .map_err(|e| format!("Gmail:Dns:{e}"))?
+        .min_by_key(|a| if a.is_ipv4() { 0 } else { 1 })
+        .ok_or_else(|| "Gmail:Dns:no address".to_string())?;
+    let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| format!("Gmail:Connect:{e}"))?;
+    tcp.set_read_timeout(Some(IO_TIMEOUT)).ok();
+    tcp.set_write_timeout(Some(IO_TIMEOUT)).ok();
+    tcp.set_nodelay(true).ok();
+    let tls = native_tls::TlsConnector::new().map_err(|e| format!("Gmail:Tls:{e}"))?;
+    let stream = tls.connect(HOST, tcp).map_err(|e| format!("Gmail:Tls:{e}"))?;
+    let client = imap::Client::new(stream);
+    // Gmail's greeting is read by Client::new's caller through the first
+    // command; login handles it.
+    match client.login(account, password) {
+        Ok(session) => Ok(session),
+        Err((e, _)) => Err(format!("Gmail:Login:{e}")),
+    }
+}
+
+// Hand back a live session for this account: reuse the pooled one (proven
+// with a NOOP) or log in fresh. The caller runs its op, then returns the
+// session with `put_back`.
+fn take_session(account: &str, password: &str) -> Result<Session, String> {
+    {
+        let mut pool = POOL.lock().map_err(|_| "Gmail:Lock".to_string())?;
+        if let Some(p) = pool.take() {
+            let age = p.last_used.elapsed();
+            if p.account == account && age < SESSION_TTL {
+                let mut s = p.session;
+                // Within a run, calls are seconds apart — the session is
+                // certainly alive, so skip the NOOP liveness round-trip (a
+                // full ~5-9s on this network). Only pay for it after a lull.
+                if age < NOOP_SKIP || s.noop().is_ok() {
+                    return Ok(s);
+                }
+                let _ = s.logout(); // stale — drop and reconnect
+            } else {
+                let mut s = p.session;
+                let _ = s.logout();
+            }
+        }
+    }
+    connect(account, password)
+}
+
+fn put_back(account: &str, session: Session) {
+    if let Ok(mut pool) = POOL.lock() {
+        *pool = Some(Pooled {
+            account: account.to_string(),
+            session,
+            last_used: Instant::now(),
+        });
+    }
+}
+
+fn header_of(bytes: &[u8], name: &str) -> String {
+    parse_headers(bytes)
+        .map(|(h, _)| h.get_first_value(name).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+fn split_address(from: &str) -> (String, String) {
+    // "Jane Doe <jane@x.com>" → ("Jane Doe", "jane@x.com"); bare address → both.
+    if let Some(start) = from.find('<') {
+        if let Some(end) = from[start..].find('>') {
+            let addr = from[start + 1..start + end].trim().to_string();
+            let name = from[..start].trim().trim_matches('"').to_string();
+            return (if name.is_empty() { addr.clone() } else { name }, addr);
+        }
+    }
+    (from.trim().to_string(), from.trim().to_string())
+}
+
+fn imap_date(days_ago: f64) -> String {
+    let secs = (days_ago * 86400.0) as i64;
+    let t = chrono::Utc::now() - chrono::Duration::seconds(secs);
+    t.format("%d-%b-%Y").to_string()
+}
+
+fn rows_for(session: &mut Session, uids: &[u32]) -> Result<Vec<Row>, String> {
+    if uids.is_empty() {
+        return Ok(vec![]);
+    }
+    let set = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+    let fetches = session
+        .uid_fetch(set, "(UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER])")
+        .map_err(|e| format!("Gmail:Fetch:{e}"))?;
+    let mut rows = Vec::new();
+    for f in fetches.iter() {
+        let hdr = f.header().unwrap_or(&[]);
+        let (from, address) = split_address(&header_of(hdr, "From"));
+        let when = f
+            .internal_date()
+            .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%dT%H:%M").to_string())
+            .unwrap_or_default();
+        rows.push(Row {
+            id: f.uid.unwrap_or(0),
+            when,
+            from,
+            address,
+            subject: header_of(hdr, "Subject"),
+            unread: !f.flags().iter().any(|fl| matches!(fl, imap::types::Flag::Seen)),
+            size: f.size.unwrap_or(0),
+        });
+    }
+    // Newest first.
+    rows.sort_by(|a, b| b.when.cmp(&a.when));
+    Ok(rows)
+}
+
+fn text_of(mail: &ParsedMail) -> String {
+    // Prefer text/plain; fall back to a de-tagged text/html.
+    fn walk(m: &ParsedMail, plain: &mut Option<String>, html: &mut Option<String>) {
+        let ct = m.ctype.mimetype.to_lowercase();
+        if m.subparts.is_empty() {
+            if ct == "text/plain" && plain.is_none() {
+                *plain = m.get_body().ok();
+            } else if ct == "text/html" && html.is_none() {
+                *html = m.get_body().ok();
+            }
+        }
+        for p in &m.subparts {
+            walk(p, plain, html);
+        }
+    }
+    let (mut plain, mut html) = (None, None);
+    walk(mail, &mut plain, &mut html);
+    if let Some(p) = plain {
+        return p;
+    }
+    if let Some(h) = html {
+        let no_tags = regex_lite_strip(&h);
+        return no_tags;
+    }
+    String::new()
+}
+
+// A small tag stripper (no HTML crate on the Rust side): drop <script>/<style>
+// blocks, then every tag, then collapse whitespace.
+fn regex_lite_strip(html: &str) -> String {
+    let mut s = html.to_string();
+    for tag in ["script", "style"] {
+        loop {
+            let lower = s.to_lowercase();
+            let Some(start) = lower.find(&format!("<{tag}")) else { break };
+            let Some(end_rel) = lower[start..].find(&format!("</{tag}>")) else { break };
+            s.replace_range(start..start + end_rel + tag.len() + 3, " ");
+        }
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn op_recent(session: &mut Session, a: &Args) -> Result<serde_json::Value, String> {
+    session.examine("INBOX").map_err(|e| format!("Gmail:Select:{e}"))?;
+    let hours = a.since_hours.unwrap_or(24.0).clamp(1.0, 720.0);
+    // IMAP SINCE is day-granular; we over-fetch by a day and trim in code.
+    let mut q = format!("SINCE {}", imap_date(hours / 24.0 + 1.0));
+    if a.unread_only.unwrap_or(false) {
+        q.push_str(" UNSEEN");
+    }
+    if let Some(from) = a.from.as_deref().filter(|s| !s.trim().is_empty()) {
+        q.push_str(&format!(" FROM \"{}\"", from.replace('"', "")));
+    }
+    let uids = session.uid_search(&q).map_err(|e| format!("Gmail:Search:{e}"))?;
+    let mut list: Vec<u32> = uids.into_iter().collect();
+    list.sort_unstable_by(|x, y| y.cmp(x)); // newest UIDs first
+    let limit = a.limit.unwrap_or(15).clamp(1, 25);
+    let cutoff = chrono::Local::now() - chrono::Duration::seconds((hours * 3600.0) as i64);
+    let cutoff_s = cutoff.format("%Y-%m-%dT%H:%M").to_string();
+    // Fetch a little more than the limit so the hour trim still fills it —
+    // but only a little (every extra header is a slow byte on this network).
+    let take: Vec<u32> = list.into_iter().take(limit + 4).collect();
+    let rows: Vec<Row> = rows_for(session, &take)?
+        .into_iter()
+        .filter(|r| r.when >= cutoff_s)
+        .take(limit)
+        .collect();
+    Ok(json!({ "rows": rows }))
+}
+
+fn op_search(session: &mut Session, a: &Args) -> Result<serde_json::Value, String> {
+    session.examine("[Gmail]/All Mail").or_else(|_| session.examine("INBOX")).map_err(|e| format!("Gmail:Select:{e}"))?;
+    let query = a.query.clone().unwrap_or_default();
+    let clean = query.replace('"', "").replace('\\', "");
+    // Gmail's own search syntax over IMAP.
+    let uids = session
+        .uid_search(format!("X-GM-RAW \"{clean}\""))
+        .map_err(|e| format!("Gmail:Search:{e}"))?;
+    let mut list: Vec<u32> = uids.into_iter().collect();
+    list.sort_unstable_by(|x, y| y.cmp(x));
+    let limit = a.limit.unwrap_or(15).clamp(1, 25);
+    let take: Vec<u32> = list.into_iter().take(limit).collect();
+    let rows = rows_for(session, &take)?;
+    Ok(json!({ "rows": rows }))
+}
+
+fn op_save_attachment(session: &mut Session, a: &Args) -> Result<serde_json::Value, String> {
+    let uid = a.uid.ok_or_else(|| "Gmail:Args:uid".to_string())?;
+    let mut got: Option<Vec<u8>> = None;
+    for mbox in ["INBOX", "[Gmail]/All Mail"] {
+        if session.examine(mbox).is_err() {
+            continue;
+        }
+        let f = session
+            .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
+            .map_err(|e| format!("Gmail:Fetch:{e}"))?;
+        if let Some(m) = f.iter().next() {
+            if let Some(b) = m.body() {
+                got = Some(b.to_vec());
+                break;
+            }
+        }
+    }
+    let raw = got.ok_or_else(|| "Gmail:NoSuchMessage".to_string())?;
+    let mail = parse_mail(&raw).map_err(|e| format!("Gmail:Parse:{e}"))?;
+
+    // Walk the MIME tree, decoding each attachment (a part with a filename)
+    // to (name, bytes) as we go — no stored references, no lifetime tangle.
+    fn collect(m: &ParsedMail, out: &mut Vec<(String, Vec<u8>)>) {
+        if let Some(fname) = m.get_content_disposition().params.get("filename") {
+            if let Ok(bytes) = m.get_body_raw() {
+                out.push((fname.clone(), bytes));
+            }
+        }
+        for p in &m.subparts {
+            collect(p, out);
+        }
+    }
+    let mut atts: Vec<(String, Vec<u8>)> = Vec::new();
+    collect(&mail, &mut atts);
+    let count = atts.len();
+    if count == 0 {
+        return Err("Gmail:NoAttachment".to_string());
+    }
+    let chosen = if let Some(want) = a.name.as_deref().map(|s| s.to_lowercase()) {
+        atts.into_iter().find(|(n, _)| n.to_lowercase().contains(&want))
+    } else {
+        atts.into_iter().next()
+    }
+    .ok_or_else(|| "Gmail:NoAttachment".to_string())?;
+
+    if chosen.1.len() > ATTACH_CAP {
+        return Err(format!("Gmail:TooBig:{}", chosen.1.len()));
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&chosen.1);
+    Ok(json!({ "name": chosen.0, "bytes_b64": b64, "size": chosen.1.len(), "count": count }))
+}
+
+fn op_read(session: &mut Session, a: &Args) -> Result<serde_json::Value, String> {
+    let uid = a.uid.ok_or_else(|| "Gmail:Args:uid".to_string())?;
+    // Search-listed ids come from All Mail; recent from INBOX. Try both.
+    let mut got: Option<Vec<u8>> = None;
+    for mbox in ["INBOX", "[Gmail]/All Mail"] {
+        if session.examine(mbox).is_err() {
+            continue;
+        }
+        let f = session
+            .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
+            .map_err(|e| format!("Gmail:Fetch:{e}"))?;
+        if let Some(m) = f.iter().next() {
+            if let Some(b) = m.body() {
+                got = Some(b.to_vec());
+                break;
+            }
+        }
+    }
+    let raw = got.ok_or_else(|| "Gmail:NoSuchMessage".to_string())?;
+    let mail = parse_mail(&raw).map_err(|e| format!("Gmail:Parse:{e}"))?;
+    let h = &mail.headers;
+    let (from, address) = split_address(&h.get_first_value("From").unwrap_or_default());
+    let mut body = text_of(&mail);
+    if body.chars().count() > BODY_CAP {
+        body = body.chars().take(BODY_CAP).collect::<String>() + "\n[… trimmed]";
+    }
+    let attachments: Vec<String> = {
+        let mut names = Vec::new();
+        fn walk(m: &ParsedMail, names: &mut Vec<String>) {
+            if let Some(n) = m.get_content_disposition().params.get("filename") {
+                names.push(n.clone());
+            }
+            for p in &m.subparts {
+                walk(p, names);
+            }
+        }
+        walk(&mail, &mut names);
+        names
+    };
+    Ok(json!({
+        "id": uid,
+        "from": from,
+        "address": address,
+        "to": h.get_first_value("To").unwrap_or_default(),
+        "cc": h.get_first_value("Cc").unwrap_or_default(),
+        "date": h.get_first_value("Date").unwrap_or_default(),
+        "subject": h.get_first_value("Subject").unwrap_or_default(),
+        "message_id": h.get_first_value("Message-ID").unwrap_or_default(),
+        "attachments": attachments,
+        "body": body,
+    }))
+}
+
+fn op_draft(session: &mut Session, account: &str, a: &Args) -> Result<serde_json::Value, String> {
+    let body = a.body.clone().unwrap_or_default();
+    let (to, subject, in_reply_to) = if let Some(uid) = a.reply_to {
+        // Reply: address the original sender, thread it, quote nothing.
+        let mut meta: Option<(String, String, String)> = None;
+        for mbox in ["INBOX", "[Gmail]/All Mail"] {
+            if session.examine(mbox).is_err() {
+                continue;
+            }
+            let f = session
+                .uid_fetch(uid.to_string(), "(UID BODY.PEEK[HEADER])")
+                .map_err(|e| format!("Gmail:Fetch:{e}"))?;
+            if let Some(m) = f.iter().next() {
+                if let Some(hdr) = m.header() {
+                    let (_, addr) = split_address(&header_of(hdr, "From"));
+                    let subj = header_of(hdr, "Subject");
+                    let mid = header_of(hdr, "Message-ID");
+                    meta = Some((addr, subj, mid));
+                    break;
+                }
+            }
+        }
+        let (addr, subj, mid) = meta.ok_or_else(|| "Gmail:NoSuchMessage".to_string())?;
+        let re = if subj.to_lowercase().starts_with("re:") { subj } else { format!("Re: {subj}") };
+        (addr, re, mid)
+    } else {
+        (
+            a.to.clone().unwrap_or_default(),
+            a.subject.clone().unwrap_or_default(),
+            String::new(),
+        )
+    };
+    let date = chrono::Local::now().to_rfc2822();
+    let mut msg = String::new();
+    msg.push_str(&format!("From: {account}\r\n"));
+    msg.push_str(&format!("To: {to}\r\n"));
+    msg.push_str(&format!("Subject: {}\r\n", subject.replace(['\r', '\n'], " ")));
+    msg.push_str(&format!("Date: {date}\r\n"));
+    if !in_reply_to.is_empty() {
+        msg.push_str(&format!("In-Reply-To: {in_reply_to}\r\nReferences: {in_reply_to}\r\n"));
+    }
+    msg.push_str("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\nX-Mailer: Private Pilot (draft — never sent by the app)\r\n\r\n");
+    msg.push_str(&body.replace("\r\n", "\n").replace('\n', "\r\n"));
+    session
+        .append_with_flags("[Gmail]/Drafts", msg.as_bytes(), &[imap::types::Flag::Draft])
+        .map_err(|e| format!("Gmail:Append:{e}"))?;
+    Ok(json!({ "to": to, "subject": subject }))
+}
+
+/// One Gmail operation over IMAP. `account` is the address (settings);
+/// the app password is unsealed here and never returned.
+#[tauri::command(async)]
+pub fn gmail_imap(app: tauri::AppHandle, account: String, op: String, args: String) -> Result<String, String> {
+    let password = secrets::get(&app, SECRET_NAME)?.ok_or_else(|| "Gmail:NoPassword".to_string())?;
+    if account.trim().is_empty() {
+        return Err("Gmail:NoAccount".to_string());
+    }
+    let a: Args = serde_json::from_str(&args).unwrap_or_default();
+    let acct = account.trim().to_string();
+    let mut session = take_session(&acct, &password)?;
+    drop(password);
+    let result = match op.as_str() {
+        "status" => Ok(json!({ "ok": true, "account": acct })),
+        "recent" => op_recent(&mut session, &a),
+        "search" => op_search(&mut session, &a),
+        "read" => op_read(&mut session, &a),
+        "save_attachment" => op_save_attachment(&mut session, &a),
+        "draft" => op_draft(&mut session, &acct, &a),
+        other => Err(format!("Gmail:UnknownOp:{other}")),
+    };
+    // A broken op may have poisoned the connection — only pool it back when
+    // the op succeeded; otherwise log out so the next call reconnects clean.
+    match &result {
+        Ok(_) => put_back(&acct, session),
+        Err(_) => {
+            let _ = session.logout();
+        }
+    }
+    result.map(|v| v.to_string())
+}
+
+/// Close and forget any pooled Gmail session — called when a run finishes and
+/// when the account is disconnected, so nothing lingers authenticated.
+#[tauri::command]
+pub fn gmail_disconnect_pool() -> Result<(), String> {
+    if let Ok(mut pool) = POOL.lock() {
+        if let Some(p) = pool.take() {
+            let mut s = p.session;
+            let _ = s.logout();
+        }
+    }
+    Ok(())
+}

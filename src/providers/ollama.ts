@@ -17,9 +17,44 @@ const OLLAMA = "http://127.0.0.1:11434";
 export const OLLAMA_DOWN_SENTENCE =
   "The local AI isn't running — start Ollama, then try again.";
 
-// Local default and fallbacks, verified in Ollama's library (Aug 2026).
-export const LOCAL_DEFAULT = "qwen3.5:9b";
-export const LOCAL_FALLBACKS = ["qwen3.5:4b", "qwen2.5:7b"];
+// The curated brains, ranked from a live bench of the app's own compile
+// pipeline + tool loop + vision probe on this class of laptop (Aug 2026).
+// Fast is the default; Careful trades speed for the best screen/image
+// reading (the only model that read two labelled images without fusing them).
+export interface RecommendedModel {
+  tag: string;
+  role: "Fast" | "Careful" | "Balanced";
+  name: string;
+  blurb: string;
+  downloadGB: number;
+}
+export const RECOMMENDED_MODELS: RecommendedModel[] = [
+  {
+    tag: "qwen3.5:4b",
+    role: "Fast",
+    name: "Qwen 4B",
+    blurb: "Quick and sharp — best all-round for building automations. The default.",
+    downloadGB: 3.4,
+  },
+  {
+    tag: "gemma4:12b",
+    role: "Careful",
+    name: "Gemma 12B",
+    blurb: "Slower, but the best at reading screens and images — pick it for Watch me and screen-heavy jobs.",
+    downloadGB: 7.6,
+  },
+  {
+    tag: "qwen3.5:9b",
+    role: "Balanced",
+    name: "Qwen 9B",
+    blurb: "The middle ground — a bit slower than Fast, no better at drafting.",
+    downloadGB: 6.6,
+  },
+];
+
+// Local default and fallbacks. Order = what an unset preference tries first.
+export const LOCAL_DEFAULT = "qwen3.5:4b";
+export const LOCAL_FALLBACKS = ["qwen3.5:9b", "gemma4:12b", "qwen2.5:7b"];
 
 export function localModelCandidates(preferred?: string | null): string[] {
   return [...new Set([preferred, LOCAL_DEFAULT, ...LOCAL_FALLBACKS].filter(
@@ -30,8 +65,10 @@ export function localModelCandidates(preferred?: string | null): string[] {
 const FRIENDLY: Record<string, string> = {
   "qwen3.5:9b": "Qwen 9B",
   "qwen3.5:4b": "Qwen 4B",
+  "qwen3.5:2b": "Qwen 2B",
   "qwen2.5:7b": "Qwen 7B",
   "qwen3-vl:4b": "Qwen Vision 4B",
+  "gemma4:12b": "Gemma 12B",
 };
 
 export function friendlyName(tag: string): string {
@@ -66,10 +103,12 @@ async function ollamaFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  // A single local turn should never hold the UI for five minutes. Common
-  // public-data jobs bypass the model entirely; unusual model-backed turns get
-  // two minutes before surfacing a useful recovery choice.
-  const timeoutMs = path === "/api/chat" ? 120_000 : 20_000;
+  // A single chat turn shouldn't hold the UI for five minutes (public-data
+  // jobs bypass the model; unusual model-backed turns get two minutes).
+  // Embedding a document batch on CPU genuinely takes minutes, so it keeps the
+  // long ceiling.
+  const timeoutMs =
+    path === "/api/embed" ? 300_000 : path === "/api/chat" ? 120_000 : 20_000;
   const signal = AbortSignal.timeout(timeoutMs);
   try {
     // A wedged request must become a designed sentence, never a forever-hang
@@ -132,6 +171,32 @@ export class OllamaProvider implements ModelProvider {
       label: friendlyName(m.name),
       sizeBytes: m.size ?? null,
     }));
+  }
+
+  // Embed a batch of strings → one 768-vector each. num_ctx 8192 stops long
+  // chunks silently truncating at Ollama's 2048 default. The caller adds the
+  // nomic task prefixes (search_document:/search_query:) — Ollama does not.
+  async embed(model: string, inputs: string[]): Promise<number[][]> {
+    const res = await ollamaFetch("/api/embed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        input: inputs,
+        truncate: true,
+        options: { num_ctx: 8192 },
+      }),
+    });
+    if (!res.ok)
+      throw new ProviderError(OLLAMA_DOWN_SENTENCE, `POST /api/embed ${res.status}`);
+    const body = (await res.json()) as { embeddings?: number[][] };
+    if (!body.embeddings || body.embeddings.length !== inputs.length) {
+      throw new ProviderError(
+        "The embedding model didn't answer — is nomic-embed-text pulled?",
+        `embed returned ${body.embeddings?.length ?? 0} of ${inputs.length}`
+      );
+    }
+    return body.embeddings;
   }
 
   async chat(req: ChatRequest): Promise<ChatResponse> {

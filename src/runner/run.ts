@@ -18,6 +18,11 @@ import { DirectEndpointError, runDirectEndpoint } from "./direct";
 import { scanDiff, applyDiff, putBack } from "./diff";
 import { parseOutputs, thoroughPass, verifyNumbers } from "./verify";
 import { holdModelInMemory, OLLAMA_DOWN_SENTENCE } from "../providers/ollama";
+import { connectorById } from "../connectors/registry";
+
+function appLabel(id: string): string {
+  return connectorById(id)?.label ?? id;
+}
 
 export interface RunOptions {
   cause: string;
@@ -60,6 +65,9 @@ export async function runAutomation(
       writes: auto.files?.writes ?? [],
     },
     sources: auto.sources ?? [],
+    apps: auto.apps ?? [],
+    tools: auto.tools ?? [],
+    knowledge: auto.knowledge ?? [],
     steps: auto.steps ?? [],
     inputs: auto.inputs ?? [],
     outputs: auto.outputs ?? [],
@@ -90,6 +98,10 @@ export async function runAutomation(
     didNotDo: ["Sandbox only — your real folder untouched"],
     diff: null,
     answer: null,
+    indexInto:
+      auto.delivers === "files" && (auto.knowledge ?? []).length > 0
+        ? auto.knowledge![0]
+        : null,
   };
   await appendRun(run);
 
@@ -100,6 +112,11 @@ export async function runAutomation(
     return result;
   } finally {
     releaseHold();
+    // Don't leave an authenticated Gmail socket open past the run.
+    if ((auto.apps ?? []).includes("gmail")) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      void invoke("gmail_disconnect_pool").catch(() => {});
+    }
   }
 }
 
@@ -196,6 +213,18 @@ async function runInner(
     run.didNotDo = ["Touched no files — worked online, answered in the app"];
     line(toolsLog, "No files involved — running online.");
   }
+  if ((auto.apps ?? []).length > 0) {
+    const names = (auto.apps ?? []).map(appLabel).join(", ");
+    line(toolsLog, `Apps this run may look into: ${names}. Reading only — a draft is the most it writes; nothing sends itself.`);
+    if (getSettings().featherless.enabled) {
+      // The cloud toggle changes where app text goes — say it up front.
+      event(
+        "on_purpose",
+        "Cloud compute on",
+        `Reading ${names} with Borrow cloud compute on — what those apps show goes to the borrowed computer too.`
+      );
+    }
+  }
 
   // ---- stage 3 · tool loop ----
   let loop;
@@ -212,6 +241,10 @@ async function runInner(
           refusals: [],
           logLines: direct.logLines,
           stalled: false,
+          // A direct-endpoint job never touches apps — empty connector fields.
+          heldBack: null,
+          handoffs: [],
+          appsRead: 0,
         };
     } else {
       model = cloudActive()
@@ -265,6 +298,28 @@ async function runInner(
     toolsLog.sentence = "Stopped after 30 minutes without finishing.";
     event("broke", "Stalled", toolsLog.sentence);
     return finish("broke", toolsLog.sentence);
+  }
+  if (loop.handoffs.length > 0) {
+    run.handoffs = loop.handoffs;
+    run.didNotDo.push("Sent nothing — the draft waits in your Drafts folder.");
+  }
+  if (loop.heldBack) {
+    // An app said "needs you" or broke mid-run: nothing half-read gets an
+    // answer. Held back with the app's own sentence; the pin says what to do.
+    toolsLog.status = "held";
+    toolsLog.finishedAt = Date.now();
+    toolsLog.sentence = loop.heldBack;
+    // Amber = the person must DO something. Match intentful phrases, not the
+    // bare word "connect" (which lives inside "Connection reset by peer" — a
+    // pure network crash that is red/broke, nothing for the person to fix).
+    const family =
+      /\bSettings\b|\bAllow\b|sign[- ]?in|permission|app password|not connected|\bpaste\b|connect your|reconnect|turn (it |this )?on/i.test(
+        loop.heldBack
+      )
+        ? "needs_you"
+        : "broke";
+    event(family, "An app stopped the run", loop.heldBack);
+    return finish(family === "needs_you" ? "needs_you" : "held", loop.heldBack);
   }
   if (!loop.answer) {
     toolsLog.status = "broke";
@@ -354,16 +409,32 @@ async function runInner(
   }
   verifyLog.finishedAt = Date.now();
 
-  // A run that reached none of its sources delivered nothing — a purposeful
-  // stop, never a green checkmark that earns Save.
+  // A grounded answer run that reached NONE of its grounding — sources, apps,
+  // files, or a knowledge base — delivered nothing but its own guesswork. Hold
+  // it; a green checkmark over a fabricated answer is the one thing this app
+  // must never do. (Files and knowledge were previously omitted, so a
+  // "biggest expense in my receipts" answer with zero reads sailed to green.)
+  const isGrounded =
+    auto.sources.length > 0 ||
+    (auto.apps ?? []).length > 0 ||
+    (auto.files?.reads?.length ?? 0) > 0 ||
+    (auto.knowledge ?? []).length > 0;
   if (
     auto.delivers === "answer" &&
-    auto.sources.length > 0 &&
-    loop.corpus.trim().length === 0
+    isGrounded &&
+    loop.corpus.trim().length === 0 &&
+    loop.appsRead === 0
   ) {
-    const sentence =
-      "Held back — it couldn't read anything from its sources, so there's nothing real to answer with.";
-    event("on_purpose", "Nothing fetched", sentence);
+    const what =
+      (auto.knowledge ?? []).length > 0
+        ? "your documents"
+        : (auto.files?.reads?.length ?? 0) > 0
+          ? "its files"
+          : (auto.apps ?? []).length > 0 && auto.sources.length === 0
+            ? "its apps"
+            : "its sources";
+    const sentence = `Held back — it couldn't read anything from ${what}, so there's nothing real to answer with.`;
+    event("on_purpose", "Nothing read", sentence);
     return finish("held", sentence);
   }
 
@@ -416,7 +487,52 @@ export async function keepRun(runId: string): Promise<string> {
     auto.lastRun = { at: Date.now(), status: "ok", summary: "Kept — applied." };
     await saveAutomation(auto);
   }
+  // Keep-time indexing: a document run that files into a knowledge base only
+  // indexes what was actually Kept — a discarded OCR run indexes nothing. The
+  // target rides on the run record, so an UNSAVED automation indexes too.
+  if (run.indexInto) {
+    try {
+      const extra = await indexKeptDocuments(run.indexInto, sandbox, run.diff);
+      if (extra) sentence += ` ${extra}`;
+    } catch {
+      // indexing is a courtesy after Keep — never fails the Keep itself
+    }
+  }
   return sentence;
+}
+
+// Read the OCR text outputs that were just Kept and add them to the KB.
+async function indexKeptDocuments(
+  kbName: string,
+  sandbox: Sandbox,
+  diff: RunRecord["diff"]
+): Promise<string | null> {
+  if (!diff) return null;
+  const { readTextFile, exists } = await import("@tauri-apps/plugin-fs");
+  const { toRealPath } = await import("./sandbox");
+  const { indexDocuments } = await import("../rag/index");
+  const docs: { name: string; text: string; sourcePath: string }[] = [];
+  for (const e of diff.entries) {
+    if (!e.kept || !/\.txt$/i.test(e.relPath)) continue;
+    // Skip OCR internal artifacts: the page-list (raw PNG paths) and any
+    // .ocr.json sidecar are machinery, not documents — indexing them poisons
+    // the KB with path junk that the keyword retriever then surfaces.
+    if (/\.pagelist\.txt$/i.test(e.relPath) || /\.ocr\.json$/i.test(e.relPath)) continue;
+    // Map the kept sandbox .txt back to its real path; read the text there.
+    const display = e.relPath;
+    const real = toRealPath(sandbox, display) ?? "";
+    if (!real || !(await exists(real))) continue;
+    const text = await readTextFile(real);
+    if (!text.trim()) continue;
+    const name = display.split(/[\\/]/).pop()?.replace(/\.txt$/i, "") ?? "document";
+    const pdf = real.replace(/\.txt$/i, ".searchable.pdf");
+    docs.push({ name, text, sourcePath: (await exists(pdf)) ? pdf : real });
+  }
+  if (docs.length === 0) return null;
+  const res = await indexDocuments(kbName, docs);
+  return res.added > 0
+    ? `Indexed ${res.added} document${res.added === 1 ? "" : "s"} (${res.chunks} passage${res.chunks === 1 ? "" : "s"}) into ${kbName}.`
+    : null;
 }
 
 export async function putBackRun(runId: string): Promise<string> {

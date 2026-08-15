@@ -14,6 +14,7 @@ import { relTime, scheduleSentence } from "./fmt";
 import { runAutomation } from "../runner/run";
 import { openAutomationStudio, seedComposer } from "./chatStore";
 import { getSettings } from "../storage/settings";
+import { connectorById } from "../connectors/registry";
 import { approveRevision, isRevisionApproved, revokeRevision } from "../storage/permissions";
 import { normalizeAutomation, permissionSummary } from "../storage/revisions";
 
@@ -50,8 +51,10 @@ export function AutomationSheet({
   const approved = isRevisionApproved(normalized);
   const fullAccess = getSettings().permissions?.fullAccess ?? false;
 
-  const memberChains = chains.records.filter((c) =>
-    c.links.some((l) => l.from === auto.id || l.to === auto.id)
+  const memberChains = chains.records.filter(
+    (c) =>
+      c.links.some((l) => l.from === auto.id || l.to === auto.id) ||
+      c.steps?.some((s) => s.automationId === auto.id)
   );
 
   const rows: Row[] = [];
@@ -114,6 +117,16 @@ export function AutomationSheet({
       changeSeed: `Change which websites it may fetch — right now: ${auto.sources.join(", ")}.`,
     });
   }
+  if ((auto.apps ?? []).length > 0) {
+    const labels = (auto.apps ?? []).map((id) => connectorById(id)?.label ?? id);
+    rows.push({
+      key: "apps",
+      label: "Looks into",
+      value: labels.join(" · "),
+      sub: "the only apps on this computer it may read — a fence; nothing sends itself",
+      changeSeed: `Change which apps it may look into — right now: ${labels.join(", ")}.`,
+    });
+  }
 
   rows.push({
     key: "get",
@@ -127,12 +140,16 @@ export function AutomationSheet({
   });
 
   for (const chain of memberChains) {
-    const order = chainOrder(chain.links);
+    const order = chain.steps?.length
+      ? chain.steps.map((s) => s.automationId)
+      : chainOrder(chain.links);
     const idx = order.indexOf(auto.id);
     rows.push({
       key: `chain-${chain.id}`,
       label: "Part of",
-      value: `${chain.name} — step ${idx + 1} of ${order.length} ›`,
+      value: chain.steps?.length
+        ? `${chain.name} — branching, ${chain.steps.length} steps ›`
+        : `${chain.name} — step ${idx + 1} of ${order.length} ›`,
       sub: chain.components
         ? `This sequence pins revision ${chain.components.find((component) => component.automationId === auto.id)?.revisionNumber ?? "?"}.`
         : "Legacy sequence — it follows the current automation version.",

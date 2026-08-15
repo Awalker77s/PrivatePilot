@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TabId } from "../App";
 import { MicIcon, ArrowRightIcon } from "../icons";
 import { activeModelLabel } from "../../providers";
+import { BrainPicker } from "../BrainPicker";
 import { loadSettings } from "../../storage/settings";
 import {
   ChatItem,
@@ -340,7 +341,14 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
               </>
             ) : (
               <>
-                <span className="chip chip-gray">{modelLabel}</span>
+                <BrainPicker
+                  label={modelLabel}
+                  onChanged={() =>
+                    void activeModelLabel()
+                      .then(setModelLabel)
+                      .catch(() => setModelLabel("Ollama off"))
+                  }
+                />
                 <button
                   className={`btn btn-sm btn-ghost${dict.state === "transcribing" ? " mic-busy" : ""}`}
                   title="Speak instead of typing — tap, or hold to talk"
@@ -430,6 +438,15 @@ function ChatItemView({ item }: { item: ChatItem }) {
       return (
         <div className={`note-card note-${item.tone}`} data-testid="note">
           {item.text}
+        </div>
+      );
+    case "explain":
+      return (
+        <div className="note-card note-gray" data-testid="explain">
+          <div className="caption" style={{ marginBottom: 4 }}>
+            About “{item.autoName}”
+          </div>
+          <FormattedAnswer text={item.text} />
         </div>
       );
   }
@@ -724,7 +741,7 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
       <div className="caption">
         {result.automations.length === 1
           ? "Built it — one automation:"
-          : `Built it — ${result.automations.length === 2 ? "two" : result.automations.length} automations, ${result.chain ? "one hand-off" : "no hand-off"}. Same sheet you'll see on their tiles:`}
+          : `Built it — ${result.automations.length === 2 ? "two" : result.automations.length} automations, ${result.chain?.steps?.length ? "routed on results" : result.chain ? "one hand-off" : "no hand-off"}. Same sheet you'll see on their tiles:`}
       </div>
       {result.automations.map((a, i) => (
         <div key={a.id} className="built-auto">
@@ -745,6 +762,44 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
                 </div>
               ) : null
             )}
+          {result.chain?.steps?.length
+            ? (() => {
+                const steps = result.chain!.steps!;
+                const mine = steps.find((s) => s.automationId === a.id);
+                if (!mine) return null;
+                return steps
+                  .filter((s) => s.after.includes(mine.id))
+                  .map((s) => (
+                    <div key={s.id} className="handoff">
+                      <ArrowRightIcon size={12} /> Then run{" "}
+                      <b>
+                        {result.automations.find((x) => x.id === s.automationId)
+                          ?.name ?? s.automationId}
+                      </b>
+                      {s.when === "broke"
+                        ? " if this one breaks"
+                        : s.when === "failed"
+                          ? " if this one doesn't work"
+                          : s.when === "held"
+                            ? " if this one is held back"
+                            : s.when === "always"
+                              ? " either way"
+                              : ""}
+                      {s.ifAnswerContains
+                        ? ` — when the result mentions “${s.ifAnswerContains}”`
+                        : ""}
+                      {s.ifAnswerLacks
+                        ? ` — when the result doesn't mention “${s.ifAnswerLacks}”`
+                        : ""}
+                      {s.after.length > 1
+                        ? s.needs === "any"
+                          ? " (after whichever comes through)"
+                          : " (after all of its steps)"
+                        : ""}
+                    </div>
+                  ));
+              })()
+            : null}
           {i < result.automations.length - 1 && <div className="built-sep" />}
         </div>
       ))}
@@ -826,6 +881,14 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
                       compact
                       text={`${auto ? `${auto.name} — ` : ""}${run.summary ?? "Held back."}`}
                     />
+                  </div>
+                ) : run.status === "needs_you" && !run.diff ? (
+                  // An app needs the person (allow / connect) — amber, not
+                  // a green answer.
+                  <div className="run-answer" style={{ color: "var(--amber)" }}>
+                    <span className="dot dot-amber" />
+                    {auto ? `${auto.name} — ` : ""}
+                    {run.summary}
                   </div>
                 ) : (
                   <div className="run-answer">

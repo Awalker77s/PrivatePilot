@@ -30,6 +30,9 @@ function shortHash(value: unknown): string {
 export function workflowContentHash(workflow: ChainRecord): string {
   return shortHash({
     links: workflow.links,
+    // A changed branch (condition, dependency, member) is a different
+    // workflow — it must never inherit an old approval.
+    steps: workflow.steps ?? [],
     components: workflow.components ?? [],
     permissions: workflow.permissions,
     timeoutMinutes: workflow.timeoutMinutes,
@@ -93,10 +96,20 @@ export function publishWorkflowRevision(
 }
 
 export function permissionManifestFor(
-  record: Pick<AutomationRecord, "files" | "sources">
+  record: Pick<
+    AutomationRecord,
+    "files" | "sources" | "apps" | "tools" | "knowledge"
+  >
 ): PermissionManifest {
   const reads = [...new Set(record.files.reads)].sort();
   const writes = [...new Set(record.files.writes)].sort();
+  // Connector apps, heavy tools, and knowledge bases ARE external access — an
+  // approval surface that reports "No external access" for a Gmail-reading
+  // automation asks the person to approve exactly the access it hid.
+  const capabilities = [
+    ...(record.tools ?? []).map((t) => `tool:${t}`),
+    ...(record.knowledge ?? []).map((k) => `knowledge:${k}`),
+  ].sort();
   return {
     filesystem: {
       mode: reads.length || writes.length ? "scoped" : "none",
@@ -105,8 +118,10 @@ export function permissionManifestFor(
     },
     network: { hosts: [...new Set(record.sources)].sort() },
     commands: [],
-    applications: [],
-    capabilities: [],
+    applications: [...new Set(record.apps ?? [])]
+      .sort()
+      .map((applicationId) => ({ applicationId, actions: [] })),
+    capabilities,
   };
 }
 
@@ -119,6 +134,11 @@ export function automationContentHash(record: AutomationRecord): string {
     files: record.files,
     formats: record.formats,
     sources: record.sources,
+    // What the automation may TOUCH — widening any of these is a new
+    // capability that must re-earn approval, so they belong in the hash.
+    apps: record.apps ?? [],
+    tools: record.tools ?? [],
+    knowledge: record.knowledge ?? [],
     delivers: record.delivers,
     schedule: record.schedule,
     model: record.model,
@@ -217,6 +237,12 @@ export function permissionManifestSummary(manifest: PermissionManifest): string 
     bits.push(`${manifest.commands.length} command${manifest.commands.length === 1 ? "" : "s"}`);
   if (manifest.applications.length)
     bits.push(`${manifest.applications.length} app${manifest.applications.length === 1 ? "" : "s"}`);
+  // Heavy tools and knowledge bases (capability: entries) are external access
+  // too — surface them so nothing sensitive hides behind "No external access".
+  const tools = manifest.capabilities.filter((c) => c.startsWith("tool:")).length;
+  const kbs = manifest.capabilities.filter((c) => c.startsWith("knowledge:")).length;
+  if (tools) bits.push(`${tools} tool${tools === 1 ? "" : "s"}`);
+  if (kbs) bits.push(`${kbs} knowledge base${kbs === 1 ? "" : "s"}`);
   return bits.join(" · ") || "No external access";
 }
 

@@ -85,6 +85,16 @@ export interface AutomationRecord {
   files: { reads: string[]; writes: string[] };
   formats: Record<string, string>; // resolved at compile from the catalog, never guessed at runtime
   sources: string[]; // the ONLY sites it may fetch — a fence, not a suggestion
+  // The ONLY apps it may look into (connector ids like "outlook", "spotify",
+  // "computer") — the same kind of fence as sources. Absent on old records.
+  apps?: string[];
+  // The ONLY heavy tools it may run (ids like "bulk_rename", "ocr_pdf") — a
+  // closed fence like apps. Heavy tools act on files in the sandbox; the
+  // model never composes a command line. Absent on old records.
+  tools?: string[];
+  // Knowledge bases this automation reads from (to answer questions) or writes
+  // into (to file cleaned documents). Named collections the person built.
+  knowledge?: string[];
   delivers: "answer" | "files";
   schedule: Schedule;
   model: string;
@@ -123,10 +133,30 @@ export interface ChainLink {
   onlyWhen: ChainCondition | null;
 }
 
+// A branching chain step (GitHub-Actions shape: flat list, each step names
+// what it runs after and the condition that lets it fire). "if the check
+// finds something, run A and B; otherwise run C; after either, run D."
+export interface ChainStep {
+  id: string; // "s1" — local to this chain
+  automationId: string;
+  after: string[]; // step ids this one waits for; [] = a root step
+  needs: "all" | "any"; // how several deps combine ("any" joins exclusive branches)
+  // The dep outcome that lets this fire. "failed" = held OR broke — the
+  // everyday "if it didn't work" (a dead source stops as `held`, not `broke`,
+  // so plain "broke" would miss the case people actually mean).
+  when: "ran" | "held" | "broke" | "failed" | "always";
+  // Result predicate, read from the first dep's answer (case-insensitive).
+  ifAnswerContains: string | null;
+  ifAnswerLacks: string | null;
+  map: Record<string, string>; // first dep's outputs → this step's inputs
+}
+
 export interface ChainRecord {
   id: string; // "chain-m1"
   name: string;
   links: ChainLink[];
+  // Branching chains use steps; when present, steps win and links is empty.
+  steps?: ChainStep[];
   timeoutMinutes: number;
   // A workflow pins the exact member revisions it was tested with. Legacy
   // chains are upgraded from their links at load time.
@@ -186,6 +216,22 @@ export interface RunRecord {
   didNotDo: string[]; // "What I did not do" — refused hosts, skipped hops, sandbox-only
   diff: RunDiff | null;
   answer: string | null; // delivered answer text (delivers: "answer")
+  // Things the run left waiting for the person's own hand — a draft saved
+  // in Outlook they press Send on. Rendered as buttons; never auto-acted.
+  handoffs?: RunHandoff[];
+  // The knowledge base to index Kept document outputs into — set at run time
+  // from the record's `knowledge` fence, so Keep can index without needing the
+  // (possibly unsaved) automation.
+  indexInto?: string | null;
+}
+
+export interface RunHandoff {
+  kind: "outlook_draft" | "gmail_draft";
+  label: string; // "Open the draft in Outlook"
+  caption: string; // "saved in your Drafts folder — you press Send there"
+  ref: string; // opaque id the connector can open (EntryID) or a URL
+  to: string;
+  subject: string;
 }
 
 export interface DiffEntry {

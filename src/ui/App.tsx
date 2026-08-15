@@ -5,6 +5,7 @@ import { useStoreVersion } from "../storage/useStore";
 import { loadSettings } from "../storage/settings";
 import { initDispatcher } from "../dispatcher";
 import { initWatchers } from "../dispatcher/watchers";
+import { loadChat } from "./chatStore";
 import { ChatTab } from "./tabs/ChatTab";
 import { AutomationsTab } from "./tabs/AutomationsTab";
 import { ActivityTab } from "./tabs/ActivityTab";
@@ -47,6 +48,8 @@ export default function App() {
     loadAll().then(() => {
       initDispatcher();
       initWatchers();
+      // After the stores, so restored cards' run references resolve.
+      void loadChat();
     });
     loadSettings();
   }, []);

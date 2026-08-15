@@ -137,6 +137,164 @@ day. This becomes the writeup.
   endpoint from the research catalog (10k/hr where CoinGecko is ~10/min).
   Every failure along the way surfaced as its designed sentence — the
   honesty system debugged its own product.
+- **Watch me (branch watch-me), research-first and narration-first.** A
+  five-agent research pass settled every layer before code: getDisplayMedia/
+  getUserMedia work in WebView2 (the in-window picker IS the consent moment;
+  window must be ≥800×600 or the picker crops); whisper.cpp v1.9.2 prebuilt
+  whisper-cli + ggml-base.en-q5_1 (59.7 MB — the spec's "74MB base.en" was
+  actually 148 MB full) runs as a resource-dir binary behind one Rust
+  command; audio goes MediaRecorder webm/opus → decodeAudioData →
+  OfflineAudioContext 16k mono → hand-rolled WAV, deleted in finally.
+  Two vision traps dodged by design: Ollama silently fuses consecutive
+  same-size images into "video frames" (every keyframe gets an interleaved
+  text label), and some VL stacks return empty on multi-image (a one-time
+  two-square probe gates enrichment). Keyframes: dHash dedupe ≥8 hamming,
+  cap 10 with smallest-transition eviction, 1280px JPEG.
+  Watch-me is an input adapter, not a second pipeline: transcript (the
+  authority) + condensed screen evidence feed the SAME stage-1 compile;
+  demo values become fill-ins with the demoed value as example; provenance
+  (origin: watched · frames · words) is app-written after validation, never
+  sampled. Verified end-to-end with a TTS fixture: 3 frames → consent strip
+  → dropped one → real whisper transcript → real vision read → visible burn
+  ("Recording deleted — 2 frames and the narration are gone") → "Solana
+  Morning Check" compiled with the exact CoinGecko URL, fenced, daily@8 —
+  and its watched run fetched a live $75.47 answer. The no-narration rung
+  honestly degrades to "type what you did instead" and still compiles.
+- **Chat edits now re-validate.** The research pass found the hole: a merge
+  patch applied without grounding. Edits now re-run the compiler's schema +
+  referential lints (step hostnames ⊆ sources, {tokens} ⊆ inputs, unused
+  fill-ins flagged) — a consistent fence change sails through with the
+  before/after card as consent; an inconsistent one is refused with the
+  exact sentence naming the fix.
+- **Voice round two (owner feedback): mic ≠ Watch me, and "nanospark" =
+  NVIDIA Parakeet.** A second research pass (Grok/ChatGPT/Wispr/superwhisper
+  teardowns + the Open ASR leaderboard) set the grammar: the mic is an
+  icon-only DICTATION control in the composer's right rail — tap and you're
+  live instantly (optimistic start), the rail becomes waveform · elapsed ·
+  ✕ · ✓, hold >300ms is push-to-talk, silence never auto-stops (Windows
+  voice typing's most-hated move — we hint instead), and the transcript
+  lands IN THE BOX, editable, never auto-sent. Watch me is the labeled
+  SESSION control that toggles to Stop while live — Grok's one-tap-you're-
+  already-recording feel. STT upgraded to Parakeet TDT 0.6b v3 (the
+  leaderboard's speed/accuracy sweet spot, CC-BY-4.0) on the SAME
+  whisper.cpp runtime we already ship (parakeet-cli was in the zip all
+  along): word-perfect on the fixture in 2.8-3.5s where base.en took ~8s
+  with one error. Auto-used when downloaded; base.en stays the 60 MB
+  instant default; a failed session keeps its narration for "Listen again"
+  — never lose a recording to a processing error (the #1 documented flaw
+  in competing dictation flows).
+- **ASR verdict re-verified (owner asked "are you sure it's parakeet?").**
+  A 4-agent verification pass pulled the Open ASR Leaderboard's own backing
+  CSV (updated 2026-07-31): no model named "nanospark" exists anywhere (HF
+  full-text: zero results) — it's almost certainly a blend of NVIDIA's
+  "Nemotron Nano" LLMs × "DGX Spark" hardware × Spark-TTS (a text-to-speech,
+  wrong direction). NVIDIA's actual 2026 ASR release (Nemotron Speech
+  Streaming 0.6b) is a voice-agent streaming model at 7.2-7.8% WER — worse
+  for offline narration, NeMo/GPU only. Our stack is confirmed: whisper.cpp
+  v1.9.0 added official Parakeet TDT support (PR #3735, measured conversion
+  parity: 1.96% LibriSpeech), and our q8_0 artifact matches the official
+  ggml-org/parakeet-GGUF repo — the only Parakeet ggml in existence.
+  Everything ranked above Parakeet today is a proprietary API or a 1-3B
+  LLM-decoder with no Windows-CPU runtime. Local hard-fixture A/B: base.en
+  turned "append the rows" into "append the rose"; Parakeet got every
+  meaning-bearing token right. WATCHLIST for a future swap: (1) a
+  parakeet-v2 ggml appears (+0.3pt English, drop-in); (2) llama.cpp fixes
+  the >2min mtmd audio bug and Qwen3-ASR-1.7B (5.76% WER, 2.17GB, official
+  GGUF) gets a real CPU benchmark — then offer it as an optional accuracy
+  mode; (3) Moonshine v2 Medium (ONNX, 258ms) if we ever add live captions;
+  (4) an NVIDIA GPU appears — canary-qwen-2.5b becomes king.
+- **First real user recording found the intent-vs-imitation gap.** The owner
+  demonstrated "search Bing for Tesla stock" — capture, transcription, and
+  vision all worked, but the compiler copied the HUMAN's method (a Bing
+  search) instead of the goal, and programs can't read search results pages;
+  the runner then tried a Yahoo web page (JS-walled) and even fetched the
+  literal phrase "google com finance quote tsla" (punycoded into gibberish,
+  correctly refused by the fence). Three-layer fix: (1) drafting rule — a
+  demonstration shows WHAT, not HOW; goals matching a known-good endpoint
+  must use the endpoint even when demoed via a search engine, and search
+  engines are banned from sources/steps; (2) fetch_page guards — phrases
+  aren't URLs, and search-engine hosts get a redirect-to-the-data-source
+  sentence the model can act on mid-run; (3) honesty — a run that reached
+  none of its sources finishes "Held back — nothing real to answer with"
+  and does NOT earn Save. Verified with an exact repro: the same Bing demo
+  context now compiles to query1.finance.yahoo.com and a live run answered
+  $342.27 — and the demo's own stale on-screen price did not leak into the
+  answer.
+- **Render-and-read (owner ask: "make it see the answer on the screen").**
+  A 4-agent research pass + a live probe settled the architecture, and the
+  research caught a trap that would have sunk a naive build: WebView2's
+  CapturePreview NEVER completes on hidden webviews (WebView2Feedback #579)
+  — so the render window is visible-but-parked at -32000px with Chromium's
+  occlusion throttling disabled at startup. The new read_page tool opens the
+  page in a real offscreen InPrivate browser window (fresh cookie jar every
+  visit — "it never carries your logins" is true by construction), cancels
+  every off-fence top-level navigation including redirects (a hole raw
+  fetch never closed), waits for the page to settle with HOST-driven polling
+  (page timers throttle when occluded), then reads: rendered text first
+  (recursive walker through shadow DOM + same-origin iframes), pixels +
+  the local vision model only when text can't carry it — two reads at two
+  scales, numbers must agree, "I don't deliver a coin flip." ExecuteScript
+  runs host-side with zero IPC exposure to the fenced page — the
+  remote-domain IPC capability is never granted. Every rendered read logs
+  the helper truth ("pages pull in helpers from other sites — Private Pilot
+  only ever steered inside this automation's sources"). Verified live: the
+  Bing answer box that started this whole thread reads in 2.0s (342.27 USD
+  in rendered text, agreeing with the Yahoo API to the cent), and a full
+  model-driven run called read_page and answered $342.27 in 7s, verified
+  against the rendered corpus. Search-engine fetches now reroute ("only
+  answers in a real browser — use read_page") and the compiler still
+  prefers APIs when one covers the goal; watchers stay on API sources
+  (rendering is too slow to poll).
+- **Full functional verification (8-agent fleet, Aug 15).** Three parallel
+  agents on isolated layers + four sequential agents driving the real app
+  over CDP + a strict adjudicator (designed honesty sentences = pass,
+  undesigned errors = fail). Verdict: functional, 35+ checks green — speech
+  stack (both engines × both fixtures; parakeet says "rows" where whisper
+  says "rose"), all 11 endpoint intents live with zero 429s, read_page 7/7
+  (Bing answer box in 2.0-2.7s, every guard sentence verbatim, no window
+  leaks, busy-serialization refuses instantly rather than queueing),
+  compile→run→verify→results-shelf clean ($0.07 dogecoin in 13.3s with the
+  traces-to-the-source line), no-fetch probe correctly Held, watch-me E2E +
+  dictation states + edit lints 3/3 + watcher tick + storage self-test all
+  green. Three findings fixed same-day: (1) runAutomation normalized against
+  malformed records (was a TypeError on a hand-built record missing files);
+  (2) the repo's one uncommented silent catch got its comment; (3) the
+  login-wall detector now catches auth-host redirects (accounts.google.com
+  had returned sign-in form text instead of the guidance sentence). One
+  open observation, unexplained and low: a tester saw a watch-me review
+  card discard itself after ~1-2 idle minutes — no auto-discard timer
+  exists in the code; watch for recurrence.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.
+- **Chat memory (Aug 15).** Three reported failures, one root cause: the chat
+  was stateless. Fixed with a deterministic, app-owned memory design (three
+  research agents surveyed memory architectures for small local models,
+  follow-up handling in v0/Canvas/Claude-artifacts/Zapier Copilot, and
+  persistence in LM Studio/Jan/Open WebUI; synthesis grounded in this repo).
+  The model never manages memory and never sees a pronoun. (1) A
+  coordination splitter ("...and another automation to...") compiles each
+  independent job separately - the drafter only ever sees one job per call;
+  the validator now also rejects chain links that carry nothing (empty map,
+  no onlyWhen), and the forced-chain refinement that made independent
+  multi-automation drafts unrepresentable is gone. (2) Unsaved drafts on
+  built cards are first-class edit targets, searched before saved records -
+  "schedule the Top Tech News automation for 8am" patches the draft in
+  place instead of re-building. (3) Deixis resolves app-side: "schedule
+  this automation for 9am" / "change the time" resolve against a focus
+  stack (last edit card, else last built card) and the text is rewritten
+  CQR-style to name the real automation before the edit model runs. Draft
+  edits mutate the built card and drop an already-kept edit card (the
+  Zapier mutate-in-place pattern); Put it back swaps the before-record in;
+  execution-affecting patches demote a "ran" card to "fresh" so Save stays
+  earned. (4) A template-rendered digest (never model-written - a 9B
+  summarizing its own thread compounds its own errors) rides into every
+  compile as DraftContext.history, hard-capped at 4.5k chars. (5) The
+  thread persists to chat.json (atomic write, cap 200 items, progress +
+  watch-me items stripped so the burn contract holds - no data: URLs on
+  disk, verified), rehydrates after loadAll so run references resolve.
+  Verified live over CDP: the exact failing sentence yields two chain-null
+  cards; the deixis edit lands on the last card (manual -> daily 9am); the
+  named-draft edit lands without a re-compile; the thread survives reload
+  with edits intact; Put it back works on a rehydrated card; "change the
+  time to 10am" finds its focus after restart.

@@ -65,7 +65,7 @@ export async function compile(
     automationId: "draft",
     chainId: null,
     stepIndex: null,
-    cause: "you described a task",
+    cause: context.demo ? "you showed me" : "you described a task",
     startedAt,
     finishedAt: null,
     status: "running",
@@ -284,7 +284,9 @@ export async function compile(
   }
 
   // ---- assemble records (compiled truth — every surface reads these) ----
-  const assembled = draft.automations.map((a) => assembleRecord(a, model));
+  const assembled = draft.automations.map((a) =>
+    assembleRecord(a, model, context)
+  );
   let chain: ChainRecord | null = null;
   if (draft.chain && draft.chain.links.length > 0) {
     const nameToId = new Map(assembled.map((r) => [r.name, r.id]));
@@ -324,7 +326,11 @@ export async function compile(
   };
 }
 
-function assembleRecord(a: WireAutomation, model: string): AutomationRecord {
+function assembleRecord(
+  a: WireAutomation,
+  model: string,
+  context: DraftContext
+): AutomationRecord {
   const formats: Record<string, string> = {};
   for (const p of [...a.files.reads, ...a.files.writes]) {
     formats[p] = formatForPath(p);
@@ -345,6 +351,14 @@ function assembleRecord(a: WireAutomation, model: string): AutomationRecord {
     model,
     effort: a.effort,
     compiledBy: model,
+    origin: context.demo
+      ? {
+          kind: "watched",
+          at: Date.now(),
+          frames: context.demo.frames,
+          narrationWords: context.demo.transcript.split(/\s+/).length,
+        }
+      : { kind: "told", at: Date.now() },
     lastRun: null,
   };
 }

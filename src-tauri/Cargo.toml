@@ -21,3 +21,13 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-http = "2"
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+# Pinned to what wry already links — 0.39 pulls windows 0.62 and won't unify.
+webview2-com = "0.38"
+windows = { version = "0.61", features = [
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_System_Com_StructuredStorage",
+] }

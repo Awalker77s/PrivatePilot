@@ -2741,6 +2741,7 @@ name = "private-pilot"
 version = "0.1.0"
 dependencies = [
  "reqwest 0.12.28",
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "tauri",
@@ -2749,6 +2750,8 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-http",
  "tauri-plugin-opener",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

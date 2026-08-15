@@ -6,6 +6,10 @@ import * as providers from "./providers";
 import * as ollama from "./providers/ollama";
 import * as stores from "./storage/stores";
 import * as atomic from "./storage/atomic";
+import * as settings from "./storage/settings";
+import * as catalog from "./pipeline/catalog";
+import * as session from "./pipeline/session";
+import * as chatStore from "./ui/chatStore";
 
 declare global {
   interface Window {
@@ -20,5 +24,9 @@ export function installDevHook() {
     ollama,
     stores,
     atomic,
+    settings,
+    catalog,
+    session,
+    chatStore,
   };
 }

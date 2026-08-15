@@ -117,6 +117,7 @@ export class OllamaProvider implements ModelProvider {
         stream: false,
         ...(req.format ? { format: req.format } : {}),
         ...(req.tools ? { tools: req.tools } : {}),
+        ...(req.think === undefined ? {} : { think: req.think }),
         options: { ...options, ...(max_tokens ? { num_predict: max_tokens } : {}) },
         keep_alive: currentKeepAlive(),
       }),

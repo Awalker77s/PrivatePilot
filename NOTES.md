@@ -37,6 +37,30 @@ day. This becomes the writeup.
   through WebView2's `--remote-debugging-port` instead — real IPC, real fs,
   real Ollama, and the UI itself clicked by script. Every step's "done when"
   is checked in the actually-running app this way.
+- **Step 4 fought back four ways, all instructive:**
+  1. *The think channel ate the draft.* qwen3.5 is a thinking model — with
+     `format:` set, the entire first response went into thinking and content
+     came back empty. `think: false` on every drafting call fixed it. (The
+     validator loop caught it meanwhile — "Draft 1 — not valid JSON (empty
+     response)" — exactly the honesty it was built for.)
+  2. *The prompt was silently truncating the draft.* The catalog lived twice
+     in the call (schema enums + a prompt file list) and blew the 16k drafting
+     context, cutting the JSON mid-array; the "fix only the fields listed"
+     pass then faithfully preserved the wrong single-automation shape. Cut the
+     duplicate list, capped the catalog at 150 files. 199s → 14–29s per draft.
+  3. *Downloads starved Documents.* A flat global cap filled entirely from
+     the first folder, so invoices-2026.xlsx wasn't in the enum and the
+     matcher couldn't offer it. Round-robin allocation across folders.
+  4. *The 9B wouldn't split "then email me" into a second automation* until
+     the few-shot example mirrored the exact structure (read+write = one job,
+     recap = second, chain mapping named outputs). Rules alone didn't land;
+     one structurally-identical example did. Validator refinements now also
+     require 2+ automations to be chain-connected.
+- **Aliases and picked folders live in settings.json** (config, not data) —
+  the three-JSON-file rule covers the data model; ask-once-remember-forever
+  memory and the Featherless key need somewhere local to live.
+- **Version history lives inside automations.json** as a `versions` map next
+  to `records` — still exactly three data files, records verbatim A5.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

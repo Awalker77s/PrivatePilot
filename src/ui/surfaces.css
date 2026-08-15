@@ -107,6 +107,145 @@
   gap: 8px;
 }
 
+/* ---------- chat items ---------- */
+.msg-row {
+  display: flex;
+}
+
+.msg-row.user {
+  justify-content: flex-end;
+}
+
+.msg-user {
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 13px;
+  max-width: 72%;
+  font-size: 14px;
+}
+
+.pipeline-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  max-width: 460px;
+  font-size: 13px;
+}
+
+.spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--green);
+  animation: spin 0.9s linear infinite;
+  flex: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.stage-text {
+  color: var(--muted);
+}
+
+.q-card {
+  padding: 12px 14px;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.q-asking {
+  font-size: 13.5px;
+  font-weight: 620;
+}
+
+.q-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.built-card {
+  padding: 13px 15px;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.built-card.discarded {
+  opacity: 0.5;
+}
+
+.built-name {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.built-sentence {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.built-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 0;
+}
+
+.handoff {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--blue);
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+.argument {
+  font-size: 11px;
+  color: var(--caption);
+  border-left: 2px solid var(--border);
+  padding-left: 9px;
+}
+
+.built-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.note-card {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 10px 14px;
+  font-size: 13px;
+  max-width: 520px;
+  border-left-width: 3px;
+}
+
+.note-gray {
+  border-left-color: var(--caption);
+  color: var(--muted);
+}
+
+.note-amber {
+  border-left-color: var(--amber);
+}
+
+.note-red {
+  border-left-color: var(--red);
+}
+
 /* ---------- activity ---------- */
 .activity {
   display: flex;

@@ -43,6 +43,7 @@ export interface ChatRequest {
   format?: Record<string, unknown>; // JSON schema — stages 1–2
   tools?: ToolDef[]; // stage 3 — NEVER together with format
   options: ChatOptions;
+  think?: boolean; // thinking models: off for grammar-locked drafting
 }
 
 export interface ChatResponse {

@@ -1931,3 +1931,34 @@
 .answer-bubble .formatted-answer a:focus {
   text-decoration-color: currentColor;
 }
+
+/* ---------- link chip: a URL as a small box, never a wall of characters ---- */
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 2px;
+  margin: 0 1px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--nested);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 560;
+  text-decoration: none !important;
+  vertical-align: baseline;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-chip:hover {
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--border));
+  text-decoration: none;
+}
+
+.link-chip-arrow {
+  font-size: 10px;
+  opacity: 0.7;
+}

@@ -21,6 +21,7 @@ import {
   splitCoordination,
 } from "./memory";
 import { explainAutomation } from "../pipeline/explain";
+import { FOLLOWUP_HINT_RE, classifyFollowUp } from "../pipeline/followup";
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
@@ -740,6 +741,33 @@ export async function sendText(text: string) {
     if (focus.length > 1) {
       askWhichOne(focus, text);
       return;
+    }
+  }
+
+  // A HINTED follow-up ("can you also…", "add…", "now show…") right after a
+  // built card is usually ABOUT that card — but no regex can be sure. Before
+  // it can compile as a brand-new automation (or get grabbed by a keyword
+  // template), one tiny local call thinks about what was actually prompted.
+  if (!NEW_TASK_RE.test(text) && FOLLOWUP_HINT_RE.test(text.trim())) {
+    const focus = focusTargets(thread, saved);
+    if (focus.length === 1) {
+      const model = await activeLocalModel().catch(() => null);
+      if (model) {
+        const intent = await classifyFollowUp(
+          text,
+          { name: focus[0].record.name, sentence: focus[0].record.sentence },
+          model
+        );
+        if (intent === "edit") {
+          await runEdit(focus[0], rewriteDeixis(text, focus[0].record.name));
+          return;
+        }
+        if (intent === "question") {
+          await runExplain(focus[0].record, text, history);
+          return;
+        }
+        // "new" (or junk) falls through to the compile below.
+      }
     }
   }
 

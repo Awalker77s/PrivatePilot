@@ -69,7 +69,7 @@ export async function fetchPage(
     !verifiedGoogleNewsFeed &&
     SEARCH_ENGINES.some((s) => host === s || host.endsWith(`.${s}`))
   ) {
-    const sentence = `${host} only answers in a real browser — use read_page for this URL instead (or fetch a data API directly; stock prices: https://query1.finance.yahoo.com/v8/finance/chart/TSLA?range=1d&interval=1d).`;
+    const sentence = `${host} only answers in a real browser — use read_page for this URL instead (or fetch a data API directly; stock prices: https://api.nasdaq.com/api/quote/TSLA/info?assetclass=stocks).`;
     return {
       ok: false,
       text: sentence,

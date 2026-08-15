@@ -17,9 +17,10 @@ const OLLAMA = "http://127.0.0.1:11434";
 export const OLLAMA_DOWN_SENTENCE =
   "The local AI isn't running — start Ollama, then try again.";
 
-// Local default and fallbacks, verified in Ollama's library (Aug 2026).
-export const LOCAL_DEFAULT = "qwen3.5:9b";
-export const LOCAL_FALLBACKS = ["qwen3.5:4b", "qwen2.5:7b"];
+// Automatic mode favors the model that stays responsive on CPU-only Windows
+// machines. Qwen 9B remains an explicit quality choice in Settings.
+export const LOCAL_DEFAULT = "qwen3.5:4b";
+export const LOCAL_FALLBACKS = ["qwen3.5:9b", "qwen2.5:7b"];
 
 export function localModelCandidates(preferred?: string | null): string[] {
   return [...new Set([preferred, LOCAL_DEFAULT, ...LOCAL_FALLBACKS].filter(

@@ -2,7 +2,7 @@
 // (RFC 7396: null deletes a key; arrays are replaced whole, never
 // element-edited) against the current record version. Unnamed fields
 // untouchable. The card renders before→after with Keep / Put it back.
-import { chat, NUM_CTX_DRAFT } from "../providers";
+import { activeLocalModel, chat, NUM_CTX_DRAFT } from "../providers";
 import type { AutomationRecord } from "../storage/types";
 import { scheduleSentence } from "../ui/fmt";
 import { buildCatalog } from "./catalog";
@@ -72,18 +72,149 @@ function fieldLabel(key: string, record: AutomationRecord): string {
   }
 }
 
+// Common one-field edits do not need a model turn. Besides feeling instant,
+// these deterministic patches cannot accidentally rewrite unrelated fields.
+function deterministicEditPatch(
+  auto: AutomationRecord,
+  request: string
+): Record<string, unknown> | null {
+  const text = request.trim();
+
+  const rename = text.match(
+    /^\s*(?:rename|call)\s+(?:(?:it|this|the automation)\s+)?(?:to|as)\s+["']?(.+?)["']?[.!]?\s*$/i
+  );
+  if (rename?.[1]) return { name: rename[1].trim() };
+
+  if (/\b(and|also|plus)\b/i.test(text)) return null;
+
+  const watch = text.match(/\bevery\s+(\d{1,4})\s+minutes?\b/i);
+  if (watch) {
+    return {
+      schedule: {
+        trigger: "watch",
+        everyMinutes: Math.max(5, Math.min(1440, Number(watch[1]))),
+      },
+    };
+  }
+
+  if (/\b(on demand|manually|manual)\b/i.test(text)) {
+    return { schedule: { trigger: "manual" } };
+  }
+
+  const time = text.match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
+  if (
+    time &&
+    !/\b(sentence|description|steps?|name|title)\b/i.test(text) &&
+    /\b(schedule|reschedule|run|set|move|switch|make|change|adjust|update|at|daily|every day|morning)\b/i.test(text)
+  ) {
+    let hour = Number(time[1]);
+    if (time[2].toLowerCase() === "pm" && hour < 12) hour += 12;
+    if (time[2].toLowerCase() === "am" && hour === 12) hour = 0;
+    return {
+      schedule: { trigger: "daily", hour: Math.max(0, Math.min(23, hour)) },
+    };
+  }
+
+  if (/\b(every day|daily|each morning|every morning)\b/i.test(text)) {
+    return {
+      schedule: {
+        trigger: "daily",
+        hour: auto.schedule.trigger === "daily" ? auto.schedule.hour : 8,
+      },
+    };
+  }
+
+  const effort = text.match(/\b(?:make|set|switch)(?:\s+it)?\s+(quick|thorough)\b/i);
+  if (effort) return { effort: effort[1].toLowerCase() };
+  return null;
+}
+
+async function finishEdit(
+  auto: AutomationRecord,
+  inputPatch: Record<string, unknown>,
+  needsCatalog = true
+): Promise<EditResult> {
+  const patch = { ...inputPatch };
+  for (const k of Object.keys(patch)) {
+    if (!PATCHABLE.has(k)) delete patch[k];
+  }
+  if (Object.keys(patch).length === 0) {
+    return {
+      ok: false,
+      patch: null,
+      before: auto,
+      after: null,
+      changed: [],
+      failSentence:
+        "That didn't change anything I'm allowed to touch — name, schedule, steps, files, sources, or effort.",
+    };
+  }
+
+  const after = applyMergePatch(
+    auto as unknown as Record<string, unknown>,
+    patch
+  ) as unknown as AutomationRecord;
+
+  try {
+    if (!needsCatalog) {
+      const changed = Object.keys(patch).map((key) => ({
+        key,
+        from: fieldLabel(key, auto),
+        to: fieldLabel(key, after),
+      }));
+      return { ok: true, patch, before: auto, after, changed, failSentence: null };
+    }
+    const catalog = await buildCatalog();
+    const verdict = validateEditedAutomation(after, catalog);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        patch: null,
+        before: auto,
+        after: null,
+        changed: [],
+        failSentence: `That edit doesn't hold together: ${verdict.issues[0]}${verdict.issues.length > 1 ? ` (and ${verdict.issues.length - 1} more)` : ""}`,
+      };
+    }
+  } catch {
+    // catalog unavailable — shape-only edits still apply
+  }
+
+  const changed = Object.keys(patch).map((key) => ({
+    key,
+    from: fieldLabel(key, auto),
+    to: fieldLabel(key, after),
+  }));
+  return { ok: true, patch, before: auto, after, changed, failSentence: null };
+}
+
 export async function editAutomation(
   auto: AutomationRecord,
   request: string,
-  model: string
+  model?: string
 ): Promise<EditResult> {
   const editable: Record<string, unknown> = {};
   for (const k of PATCHABLE) {
     editable[k] = (auto as unknown as Record<string, unknown>)[k];
   }
 
+  const deterministic = deterministicEditPatch(auto, request);
+  if (deterministic) return finishEdit(auto, deterministic, false);
+
+  const selectedModel = model ?? (await activeLocalModel());
+  if (!selectedModel) {
+    return {
+      ok: false,
+      patch: null,
+      before: auto,
+      after: null,
+      changed: [],
+      failSentence: "The local AI isn't running — start Ollama, then try again.",
+    };
+  }
+
   const res = await chat({
-    model,
+    model: selectedModel,
     messages: [
       {
         role: "system",
@@ -118,53 +249,7 @@ export async function editAutomation(
     };
   }
 
-  // Unnamed fields untouchable.
-  for (const k of Object.keys(patch)) {
-    if (!PATCHABLE.has(k)) delete patch[k];
-  }
-  if (Object.keys(patch).length === 0) {
-    return {
-      ok: false,
-      patch: null,
-      before: auto,
-      after: null,
-      changed: [],
-      failSentence:
-        "That didn't change anything I'm allowed to touch — name, schedule, steps, files, sources, or effort.",
-    };
-  }
-
-  const after = applyMergePatch(
-    auto as unknown as Record<string, unknown>,
-    patch
-  ) as unknown as AutomationRecord;
-
-  // The compiler's grounding applies to edits too: an edit can't smuggle in
-  // an unfenced host, an uncataloged path, or a dangling {fill_in}.
-  try {
-    const catalog = await buildCatalog();
-    const verdict = validateEditedAutomation(after, catalog);
-    if (!verdict.ok) {
-      return {
-        ok: false,
-        patch: null,
-        before: auto,
-        after: null,
-        changed: [],
-        failSentence: `That edit doesn't hold together: ${verdict.issues[0]}${verdict.issues.length > 1 ? ` (and ${verdict.issues.length - 1} more)` : ""}`,
-      };
-    }
-  } catch {
-    // catalog unavailable — shape-only edits still apply
-  }
-
-  const changed = Object.keys(patch).map((key) => ({
-    key,
-    from: fieldLabel(key, auto),
-    to: fieldLabel(key, after),
-  }));
-
-  return { ok: true, patch, before: auto, after, changed, failSentence: null };
+  return finishEdit(auto, patch);
 }
 
 // A one-line what-changed summary between two versions — powers version

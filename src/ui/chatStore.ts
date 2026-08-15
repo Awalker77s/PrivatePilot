@@ -424,9 +424,7 @@ async function runEdit(target: EditTarget, request: string) {
     startedAt: Date.now(),
   });
   try {
-    const model = await activeLocalModel();
-    if (!model) throw new Error("No local model.");
-    const result = await editAutomation(auto, request, model);
+    const result = await editAutomation(auto, request);
     replace(progress.id, null);
     if (!result.ok || !result.after) {
       push({
@@ -623,11 +621,19 @@ export async function sendText(text: string) {
   // "schedule the tech news one for 9am" patches the unsaved draft instead
   // of re-building it.
   const named = findTargetsByName(text, thread, saved);
-  if (named.length === 1 && !NEW_TASK_RE.test(text)) {
+  if (
+    named.length === 1 &&
+    !NEW_TASK_RE.test(text) &&
+    DELTA_VERB_RE.test(text)
+  ) {
     await runEdit(named[0], text);
     return;
   }
-  if (named.length > 1 && !NEW_TASK_RE.test(text)) {
+  if (
+    named.length > 1 &&
+    !NEW_TASK_RE.test(text) &&
+    DELTA_VERB_RE.test(text)
+  ) {
     askWhichOne(named, text);
     return;
   }

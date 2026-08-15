@@ -150,7 +150,7 @@ export function SettingsSheet({ close }: { close: () => void }) {
                 }}
                 data-testid="local-model"
               >
-                <option value="">Automatic — prefer Qwen 9B</option>
+                <option value="">Automatic — prefer Qwen 4B</option>
                 {localChoices.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.label}
@@ -158,8 +158,8 @@ export function SettingsSheet({ close }: { close: () => void }) {
                 ))}
               </select>
               <div className="caption">
-                Qwen 4B is faster on CPU-only computers; Qwen 9B usually makes
-                stronger drafts.
+                Automatic uses Qwen 4B to keep local tasks responsive. Choose
+                Qwen 9B when draft quality matters more than speed.
               </div>
             </>
           )}

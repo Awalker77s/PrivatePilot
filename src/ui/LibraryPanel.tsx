@@ -40,7 +40,7 @@ import { getSettings } from "../storage/settings";
 export const AUTOMATION_DRAG_TYPE = "application/x-private-pilot-automation";
 
 export function LibraryPanel() {
-  useStoreVersion();
+  const storeVersion = useStoreVersion();
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(false);
   const [kind, setKind] = useState<"all" | "automations" | "sequences">("all");
@@ -76,7 +76,7 @@ export function LibraryPanel() {
           ...record.sources,
         ].some((value) => value.toLowerCase().includes(needle));
       });
-  }, [automations.records, query]);
+  }, [automations.records, query, storeVersion]);
   const filteredChains = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return chains.records.filter((chain) => {
@@ -90,7 +90,7 @@ export function LibraryPanel() {
         value.toLowerCase().includes(needle)
       );
     });
-  }, [automations.records, chains.records, query]);
+  }, [automations.records, chains.records, query, storeVersion]);
 
   function addToSequence(id: string) {
     setSequence((current) =>

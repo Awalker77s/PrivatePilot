@@ -7,7 +7,7 @@ import type { z } from "zod";
 import type { ToolDef } from "../providers/types";
 import type { RunHandoff } from "../storage/types";
 
-export type ConnectorId = "outlook" | "spotify" | "computer";
+export type ConnectorId = "outlook" | "gmail" | "spotify" | "computer";
 
 export type ToolFamily = "ok" | "on_purpose" | "needs_you" | "broke";
 

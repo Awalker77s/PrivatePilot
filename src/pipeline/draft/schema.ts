@@ -178,6 +178,13 @@ export function buildWireSchema(catalog: Catalog) {
               message: `Outlook is read through its app tools, not ${s} — remove it from sources.`,
             });
           }
+          if (a.apps.includes("gmail") && /gmail|googleapis|google\.com/i.test(s)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "sources"],
+              message: `Gmail is read through its app tools, not ${s} — remove it from sources.`,
+            });
+          }
           if (a.apps.includes("spotify") && /spotify/i.test(s)) {
             ctx.addIssue({
               code: "custom",

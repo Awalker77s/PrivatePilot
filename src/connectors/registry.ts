@@ -5,10 +5,11 @@
 import type { ToolDef } from "../providers/types";
 import type { Connector, ConnectorId, ConnectorStatus, ToolSpec } from "./types";
 import { computerConnector } from "./computer";
+import { gmailConnector } from "./gmail";
 import { outlookConnector } from "./outlook";
 import { spotifyConnector } from "./spotify";
 
-export const CONNECTORS: Connector[] = [outlookConnector, spotifyConnector, computerConnector];
+export const CONNECTORS: Connector[] = [outlookConnector, gmailConnector, spotifyConnector, computerConnector];
 export const CONNECTOR_IDS = CONNECTORS.map((c) => c.id) as [ConnectorId, ...ConnectorId[]];
 
 export function connectorById(id: string): Connector | undefined {

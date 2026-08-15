@@ -1,13 +1,17 @@
 // Settings › Connected apps. Every row is a local sense with one Allow —
-// no sign-in, nothing leaves the computer. Reading is the default; the only
-// writes are drafts the person sends themselves and a pause/skip they can
-// undo. Nothing sends itself.
+// no sign-in, nothing leaves the computer — except Gmail, where the person
+// pastes an app password once (sealed with DPAPI; only Rust ever reads it
+// back, to log in). Reading is the default; the only writes are drafts the
+// person sends themselves and a pause/skip they can undo. Nothing sends
+// itself.
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { CONNECTORS, connectorStatuses, ConnectorSnapshot } from "../connectors/registry";
 import type { ConnectorId } from "../connectors/types";
+import { GMAIL_SECRET, gmailCheck } from "../connectors/gmail";
 import { getSettings, updateSettings } from "../storage/settings";
 
-const ALLOW_KEY: Record<ConnectorId, "computerAllowed" | "outlookClassicAllowed" | "spotifyAllowed"> = {
+const ALLOW_KEY: Partial<Record<ConnectorId, "computerAllowed" | "outlookClassicAllowed" | "spotifyAllowed">> = {
   computer: "computerAllowed",
   outlook: "outlookClassicAllowed",
   spotify: "spotifyAllowed",
@@ -16,6 +20,8 @@ const ALLOW_KEY: Record<ConnectorId, "computerAllowed" | "outlookClassicAllowed"
 const CONSENT: Record<ConnectorId, string> = {
   outlook:
     "Reads your inbox and calendar from the classic Outlook app on this computer. Saves drafts into your Drafts folder — never sends. If Outlook shows its own permission dialog, click Allow there.",
+  gmail:
+    "Reads your Gmail over IMAP using an app password (Google Account → Security → 2-Step Verification → App passwords → generate one and paste it here). Personal Gmail only — Google no longer allows app passwords on Workspace accounts. Saves drafts into Gmail's Drafts; never sends; never marks mail as read.",
   spotify:
     "Reads what Spotify on this computer is playing, and can pause or skip. No Spotify account is involved.",
   computer:
@@ -38,8 +44,10 @@ export function ConnectedAppsCard() {
   }, [tick]);
 
   async function setAllowed(id: ConnectorId, on: boolean) {
+    const key = ALLOW_KEY[id];
+    if (!key) return;
     await updateSettings((s) => {
-      s.apps = { ...(s.apps ?? {}), [ALLOW_KEY[id]]: on };
+      s.apps = { ...(s.apps ?? {}), [key]: on };
     });
     setTick((t) => t + 1);
   }
@@ -48,29 +56,27 @@ export function ConnectedAppsCard() {
     <div className="settings-card" data-testid="connected-apps">
       <div className="settings-card-title">Connected apps</div>
       <div className="caption">
-        Let automations look into apps on this computer. Reading is the
-        default; the only writes are drafts you send yourself and a pause or
-        skip you can undo. Nothing sends itself. Nothing leaves this computer.
+        Let automations look into apps you use. Reading is the default; the
+        only writes are drafts you send yourself and a pause or skip you can
+        undo. Nothing sends itself.
         {cloudOn
           ? " With Borrow cloud compute on, what these apps show goes to the borrowed computer too."
           : ""}
       </div>
       {CONNECTORS.map((c) => {
         const s = snap?.find((x) => x.id === c.id)?.status;
-        const allowed = getSettings().apps?.[ALLOW_KEY[c.id]] === true;
+        if (c.id === "gmail") {
+          return <GmailRow key={c.id} status={s} onChange={() => setTick((t) => t + 1)} />;
+        }
+        const key = ALLOW_KEY[c.id];
+        const allowed = key ? getSettings().apps?.[key] === true : false;
         const unavailable = s?.state === "unavailable";
         return (
           <div
             key={c.id}
             className="settings-row"
             data-testid={`app-row-${c.id}`}
-            style={{
-              display: "flex",
-              gap: 12,
-              alignItems: "flex-start",
-              padding: "10px 0",
-              borderTop: "1px solid var(--line)",
-            }}
+            style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0", borderTop: "1px solid var(--line)" }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600 }}>{c.label}</div>
@@ -78,13 +84,7 @@ export function ConnectedAppsCard() {
               <div
                 className="status-line"
                 data-testid={`app-status-${c.id}`}
-                style={{
-                  color: allowed
-                    ? "var(--green)"
-                    : unavailable
-                      ? "var(--muted)"
-                      : "var(--text)",
-                }}
+                style={{ color: allowed ? "var(--green)" : unavailable ? "var(--muted)" : "var(--text)" }}
               >
                 {!snap ? "Checking…" : (s?.detail ?? "")}
               </div>
@@ -110,6 +110,146 @@ export function ConnectedAppsCard() {
         Coming next: a Microsoft-account connection so Outlook works from any
         device (including the new Outlook), and more apps.
       </div>
+    </div>
+  );
+}
+
+// Gmail: address + app password → one live IMAP login proves it, then the
+// password is sealed and the field is emptied. Disconnect deletes it.
+function GmailRow({
+  status,
+  onChange,
+}: {
+  status: ConnectorSnapshot["status"] | undefined;
+  onChange: () => void;
+}) {
+  const connected = getSettings().apps?.gmail ?? null;
+  const [address, setAddress] = useState(connected?.address ?? "");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [line, setLine] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  async function connect() {
+    const addr = address.trim();
+    const pw = password.replace(/\s+/g, ""); // Google shows app passwords in 4-char groups
+    if (!addr || !pw) {
+      setLine("Type the Gmail address and paste the 16-character app password.");
+      return;
+    }
+    setBusy(true);
+    setLine("Signing in to imap.gmail.com…");
+    try {
+      await updateSettings((s) => {
+        s.apps = { ...(s.apps ?? {}), gmail: { address: addr, connectedAt: Date.now() } };
+      });
+      await invoke("secret_set", { name: GMAIL_SECRET, value: pw });
+      setPassword("");
+      const r = await gmailCheck();
+      if (r.ok) {
+        setLine(`Connected as ${r.account}. Reads over IMAP; drafts only; nothing marks mail read.`);
+        setOpen(false);
+      } else {
+        // A failed login must not leave a half-connection behind.
+        await invoke("secret_clear", { name: GMAIL_SECRET });
+        await updateSettings((s) => {
+          s.apps = { ...(s.apps ?? {}), gmail: null };
+        });
+        setLine(r.sentence);
+      }
+    } catch (e) {
+      setLine(`Broke: ${String(e).slice(0, 120)}`);
+    } finally {
+      setBusy(false);
+      onChange();
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    try {
+      await invoke("secret_clear", { name: GMAIL_SECRET });
+      await updateSettings((s) => {
+        s.apps = { ...(s.apps ?? {}), gmail: null };
+      });
+      setLine("Disconnected — the app password is deleted from this computer. Google still lists it under App passwords until you remove it there.");
+      setPassword("");
+    } finally {
+      setBusy(false);
+      onChange();
+    }
+  }
+
+  return (
+    <div
+      className="settings-row"
+      data-testid="app-row-gmail"
+      style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0", borderTop: "1px solid var(--line)" }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }}>Gmail</div>
+        <div className="caption">
+          Reads your Gmail inbox over IMAP with an app password you paste once —
+          no Google sign-in screens, no developer setup. Saves drafts into
+          Gmail's Drafts; never sends; never marks mail as read.
+        </div>
+        <div
+          className="status-line"
+          data-testid="app-status-gmail"
+          style={{ color: status?.state === "ready" ? "var(--green)" : "var(--text)" }}
+        >
+          {status?.detail ?? "Checking…"}
+        </div>
+        {line && (
+          <div className="caption" data-testid="gmail-line" style={{ marginTop: 4 }}>
+            {line}
+          </div>
+        )}
+        {(open || !connected) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+            <div className="caption">{CONSENT.gmail}</div>
+            <input
+              className="run-search"
+              placeholder="you@gmail.com"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              data-testid="gmail-address"
+              autoComplete="off"
+              style={{ maxWidth: 320 }}
+            />
+            <input
+              className="run-search"
+              type="password"
+              placeholder="16-character app password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              data-testid="gmail-password"
+              autoComplete="off"
+              style={{ maxWidth: 320 }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary btn-sm" onClick={() => void connect()} disabled={busy} data-testid="gmail-connect">
+                {busy ? "Signing in…" : "Connect"}
+              </button>
+              {connected && (
+                <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)} disabled={busy}>
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      {connected && !open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setOpen(true)} disabled={busy}>
+            Change
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => void disconnect()} disabled={busy} data-testid="gmail-disconnect">
+            Disconnect
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -23,6 +23,7 @@ import * as connectors from "./connectors/registry";
 import * as spotifyMod from "./connectors/spotify";
 import * as computerMod from "./connectors/computer";
 import * as outlookMod from "./connectors/outlook";
+import * as gmailMod from "./connectors/gmail";
 
 declare global {
   interface Window {
@@ -72,5 +73,6 @@ export function installDevHook() {
     spotifyMod,
     computerMod,
     outlookMod,
+    gmailMod,
   };
 }

@@ -27,6 +27,9 @@ export interface AppSettings {
     computerAllowed?: boolean; // read what open app windows show
     outlookClassicAllowed?: boolean; // read classic Outlook on this PC
     spotifyAllowed?: boolean; // what's playing / pause / skip on this PC
+    // Gmail over IMAP: the address lives here; the app password is DPAPI-
+    // sealed in secrets.json and never in settings.
+    gmail?: { address: string; connectedAt: number } | null;
   };
 }
 

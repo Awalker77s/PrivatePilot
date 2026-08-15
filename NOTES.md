@@ -364,3 +364,36 @@ day. This becomes the writeup.
   never sees them) and the PrintWindow+vision fallback for skeletal
   windows (Chromium surfaces often hand PrintWindow a black frame, so it
   needs Graphics.Capture - a real half-day, not a stretch item).
+- **Gmail connector (Aug 15).** Alexander asked whether it can read Gmail,
+  summarize, and draft. Three routes were weighed: Gmail API OAuth (needs a
+  Google Cloud project; Gmail's restricted scopes keep an unverified app in
+  Testing mode - 100 users, tokens expire every 7 days), classic Outlook
+  with a Gmail account added (works today via the Outlook connector), and
+  IMAP with a Google app password (still issued for personal accounts with
+  2-Step Verification; Workspace dropped them May 2025). Built the third:
+  no developer registration, the person pastes the app password once. Rust
+  `secrets.rs` seals it with DPAPI (per-user, no visible credential, no
+  size cap) into secrets.json; TS can set/clear/has, only Rust ever unseals
+  - to log in - and the value never crosses IPC. Rust `gmail.rs` speaks
+  IMAP over TLS (imap 2.4 + native-tls/SChannel + mailparse): recent
+  (SINCE/UNSEEN/FROM, day-granular IMAP dates trimmed to the hour in code),
+  search via Gmail's own syntax (X-GM-RAW), read (BODY.PEEK - never marks
+  read; text/plain preferred, HTML de-tagged; 6k cap), draft (APPEND to
+  [Gmail]/Drafts with \Draft, In-Reply-To/References for replies; never a
+  SEND). Four typed tools mirror Outlook's with g1..gN handles and the same
+  draft-recipient rule (seen this run, yourself, or a fill-in). Settings row:
+  address + password -> one live IMAP login proves it, the field empties,
+  a failed login leaves no half-connection; Disconnect deletes the secret
+  and says Google still lists the password until removed there. Verified
+  live: not-connected sentence; DPAPI seal (blob on disk, zero plaintext);
+  Rust unsealed a fake credential and did a real TLS+IMAP login to
+  imap.gmail.com - Google refused in 317 ms and the app produced the
+  designed "Google didn't accept the app password" sentence; the drafter
+  compiled "read my gmail from the last two days ... then save a draft
+  reply to the most urgent one" to ONE automation gmail_recent ->
+  gmail_read -> gmail_draft reply_to -> answer (after two prompt fixes: a
+  draft is a step, never a second automation; never mix outlook/gmail);
+  running it unconnected stopped needs_you with the sentence and Save not
+  earned. The real read/summarize/draft against a live mailbox needs
+  Alexander's own app password pasted in Settings - the one step only he
+  can do; the code path up to Google's LOGIN reply is proven.

@@ -98,9 +98,12 @@ provable "nothing left this computer."**
   accessibility tree — the same text a screen reader gets. Each app is one
   **Allow** in Settings → Connected apps. Records carry an `apps` fence
   next to `sources`; a run only sees the typed tools of the apps it lists.
-  Reading is the default — the only writes are a **draft** saved into your
-  Outlook Drafts folder (you press Send there; the app never can) and a
-  pause/skip you can undo. If an app isn't allowed or open, the run stops
+  **Gmail** works too — paste an app password once (no Google sign-in
+  screens, no developer setup); it reads over IMAP without marking anything
+  read and saves drafts into Gmail's Drafts. Reading is the default — the
+  only writes are a **draft** saved into your Outlook or Gmail Drafts folder
+  (you press Send there; the app never can) and a pause/skip you can undo.
+  If an app isn't allowed or open, the run stops
   held-back with the sentence that says what to do — never an answer from
   half-read data.
 - **Never silent**: every failure state is a designed sentence in one of

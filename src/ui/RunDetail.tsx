@@ -34,6 +34,11 @@ export function SendDraftButton({
             <button
               className="btn btn-primary btn-sm"
               onClick={async () => {
+                if (h.kind === "gmail_draft") {
+                  const { openUrl } = await import("@tauri-apps/plugin-opener");
+                  await openUrl(h.ref);
+                  return;
+                }
                 const { openDraft } = await import("../connectors/outlook");
                 try {
                   await openDraft(h.ref);

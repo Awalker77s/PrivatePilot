@@ -132,10 +132,10 @@ export interface RunRecord {
 }
 
 export interface RunHandoff {
-  kind: "outlook_draft";
+  kind: "outlook_draft" | "gmail_draft";
   label: string; // "Open the draft in Outlook"
   caption: string; // "saved in your Drafts folder — you press Send there"
-  ref: string; // opaque id the connector can open (EntryID)
+  ref: string; // opaque id the connector can open (EntryID) or a URL
   to: string;
   subject: string;
 }

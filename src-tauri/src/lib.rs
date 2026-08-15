@@ -12,6 +12,10 @@ mod render;
 mod apps;
 #[cfg(windows)]
 mod outlook_classic;
+#[cfg(windows)]
+mod secrets;
+#[cfg(windows)]
+mod gmail;
 
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -254,7 +258,11 @@ pub fn run() {
             apps::media_control,
             apps::list_windows,
             apps::read_window,
-            outlook_classic::outlook_classic
+            outlook_classic::outlook_classic,
+            secrets::secret_set,
+            secrets::secret_clear,
+            secrets::secret_has,
+            gmail::gmail_imap
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

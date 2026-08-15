@@ -220,6 +220,31 @@ day. This becomes the writeup.
   context now compiles to query1.finance.yahoo.com and a live run answered
   $342.27 — and the demo's own stale on-screen price did not leak into the
   answer.
+- **Render-and-read (owner ask: "make it see the answer on the screen").**
+  A 4-agent research pass + a live probe settled the architecture, and the
+  research caught a trap that would have sunk a naive build: WebView2's
+  CapturePreview NEVER completes on hidden webviews (WebView2Feedback #579)
+  — so the render window is visible-but-parked at -32000px with Chromium's
+  occlusion throttling disabled at startup. The new read_page tool opens the
+  page in a real offscreen InPrivate browser window (fresh cookie jar every
+  visit — "it never carries your logins" is true by construction), cancels
+  every off-fence top-level navigation including redirects (a hole raw
+  fetch never closed), waits for the page to settle with HOST-driven polling
+  (page timers throttle when occluded), then reads: rendered text first
+  (recursive walker through shadow DOM + same-origin iframes), pixels +
+  the local vision model only when text can't carry it — two reads at two
+  scales, numbers must agree, "I don't deliver a coin flip." ExecuteScript
+  runs host-side with zero IPC exposure to the fenced page — the
+  remote-domain IPC capability is never granted. Every rendered read logs
+  the helper truth ("pages pull in helpers from other sites — Private Pilot
+  only ever steered inside this automation's sources"). Verified live: the
+  Bing answer box that started this whole thread reads in 2.0s (342.27 USD
+  in rendered text, agreeing with the Yahoo API to the cent), and a full
+  model-driven run called read_page and answered $342.27 in 7s, verified
+  against the rendered corpus. Search-engine fetches now reroute ("only
+  answers in a real browser — use read_page") and the compiler still
+  prefers APIs when one covers the goal; watchers stay on API sources
+  (rendering is too slow to poll).
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

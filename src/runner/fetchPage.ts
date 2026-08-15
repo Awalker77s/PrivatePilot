@@ -60,10 +60,10 @@ export async function fetchPage(
   const full = url.startsWith("http") ? url : `https://${url}`;
   const host = hostnameOf(full) ?? url;
 
-  // Search results pages don't talk to programs — say so before wasting a
-  // fetch, so the model reroutes to a real data source.
+  // Search results pages only answer in a real browser — reroute the model
+  // to the rendered reader instead of wasting a raw fetch.
   if (SEARCH_ENGINES.some((s) => host === s || host.endsWith(`.${s}`))) {
-    const sentence = `${host} is a search engine — search pages don't work for programs. Fetch the data source directly (for stock prices: https://query1.finance.yahoo.com/v8/finance/chart/TSLA?range=1d&interval=1d).`;
+    const sentence = `${host} only answers in a real browser — use read_page for this URL instead (or fetch a data API directly; stock prices: https://query1.finance.yahoo.com/v8/finance/chart/TSLA?range=1d&interval=1d).`;
     return {
       ok: false,
       text: sentence,

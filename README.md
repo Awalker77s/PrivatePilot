@@ -81,6 +81,14 @@ provable "nothing left this computer."**
   run happens on a sandbox copy. A diff card shows added / changed / deleted
   with before→after hunks — nothing touches real files until you say
   **Keep** (and even Keep is undoable via `.pilot-versions`).
+- **Reads pages like a browser when it must**: some answers only exist on
+  rendered pages (search answer boxes, finance widgets, dashboards). The
+  `read_page` tool opens the page in a real offscreen InPrivate browser
+  window — fresh cookie jar every visit, every off-fence navigation
+  (redirects included) cancelled — waits for the JavaScript to finish, and
+  reads the rendered text; if the answer only exists as pixels, the local
+  vision model reads it twice at two scales and must agree. APIs stay
+  preferred when one covers the goal.
 - **Never silent**: every failure state is a designed sentence in one of
   three families — stopped on purpose (gray), needs you (amber), broke (red).
   A rate-limited API is "asked us to slow down", never a price of 0.

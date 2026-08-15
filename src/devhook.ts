@@ -2,6 +2,7 @@
 // verified over CDP against the real running app. Never ships — main.tsx
 // imports this only under import.meta.env.DEV.
 import { fetch as pluginFetch } from "@tauri-apps/plugin-http";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import * as providers from "./providers";
 import * as ollama from "./providers/ollama";
 import * as stores from "./storage/stores";
@@ -16,6 +17,7 @@ import * as dispatcher from "./dispatcher";
 import * as sandboxMod from "./runner/sandbox";
 import * as diffMod from "./runner/diff";
 import * as fetchMod from "./runner/fetchPage";
+import * as renderMod from "./runner/renderPage";
 
 declare global {
   interface Window {
@@ -43,6 +45,7 @@ async function watchMeFixture(): Promise<void> {
 export function installDevHook() {
   window.__pp = {
     watchMeFixture,
+    WebviewWindow,
     pluginFetch,
     providers,
     ollama,
@@ -58,5 +61,6 @@ export function installDevHook() {
     sandboxMod,
     diffMod,
     fetchMod,
+    renderMod,
   };
 }

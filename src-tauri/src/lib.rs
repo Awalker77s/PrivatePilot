@@ -6,6 +6,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use tauri_plugin_fs::FsExt;
 
+#[cfg(windows)]
+mod render;
+
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
     app.fs_scope()
@@ -215,6 +218,20 @@ fn transcribe_wav_parakeet(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The render-and-read window is visible-but-offscreen; without this flag
+    // Chromium treats it as occluded and throttles it to uselessness. Merge
+    // with anything already set (the dev harness sets the CDP port here).
+    #[cfg(windows)]
+    {
+        let existing = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+        let flag = "--disable-features=CalculateNativeWinOcclusion";
+        if !existing.contains(flag) {
+            std::env::set_var(
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                format!("{existing} {flag}").trim(),
+            );
+        }
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
@@ -227,7 +244,8 @@ pub fn run() {
             walk_stats,
             copy_dir,
             transcribe_wav,
-            transcribe_wav_parakeet
+            transcribe_wav_parakeet,
+            render::render_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

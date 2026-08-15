@@ -44,6 +44,18 @@ import {
   subscribeDictation,
 } from "../../watchme/dictation";
 import { isWatching } from "../chatStore";
+import {
+  activeStudioAutomationId,
+  addAutomationReference,
+  closeAutomationStudio,
+  composerReferences,
+  openAutomationStudio,
+  removeAutomationReference,
+} from "../chatStore";
+import { getState } from "../../storage/stores";
+import { normalizeAutomation, permissionSummary } from "../../storage/revisions";
+import { CategoryGlyph } from "../glyphs";
+import { AUTOMATION_DRAG_TYPE, LibraryPanel } from "../LibraryPanel";
 import { FormattedAnswer } from "../FormattedAnswer";
 
 function DictationTimer({ startedAt }: { startedAt: number }) {
@@ -62,6 +74,7 @@ function DictationTimer({ startedAt }: { startedAt: number }) {
 
 export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   useSyncExternalStore(subscribeChat, chatVersion);
+  useStoreVersion();
   const [draft, setDraft] = useState("");
   const [modelLabel, setModelLabel] = useState("…");
   const [dict, setDict] = useState<DictationHandle>({
@@ -76,6 +89,12 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   const items = chatItems();
   const busy = chatBusy();
   const watching = isWatching();
+  const references = composerReferences();
+  const studioId = activeStudioAutomationId();
+  const studioRecord = studioId
+    ? getState().automations.records.find((record) => record.id === studioId)
+    : null;
+  const studio = studioRecord ? normalizeAutomation(studioRecord) : null;
 
   useEffect(() => subscribeDictation(setDict), []);
 
@@ -115,13 +134,66 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   }
 
   return (
-    <div className="chat">
-      <div className="chat-thread" ref={threadRef} data-testid="chat-thread">
-        {items.map((item) => (
-          <ChatItemView key={item.id} item={item} />
-        ))}
-      </div>
-      <div className="composer card">
+    <div
+      className="chat-workspace"
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes(AUTOMATION_DRAG_TYPE)) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDrop={(event) => {
+        const automationId = event.dataTransfer.getData(AUTOMATION_DRAG_TYPE);
+        if (automationId) {
+          event.preventDefault();
+          addAutomationReference(automationId);
+        }
+      }}
+    >
+      <div className="chat-column">
+        {studio && (
+          <div className="studio-header card" data-testid="studio-header">
+            <CategoryGlyph category={studio.category} size={26} />
+            <div className="studio-heading-copy">
+              <div className="library-item-name">{studio.name}</div>
+              <div className="caption">
+                Automation Studio · revision {studio.revision!.number} · {permissionSummary(studio)}
+              </div>
+            </div>
+            <button className="btn btn-sm btn-ghost" onClick={closeAutomationStudio}>
+              General chat
+            </button>
+          </div>
+        )}
+        <div className="chat">
+          <div className="chat-thread" ref={threadRef} data-testid="chat-thread">
+            {items.map((item) => (
+              <ChatItemView key={item.id} item={item} />
+            ))}
+            {items.length === 0 && studio && (
+              <div className="studio-empty">
+                <div className="empty-status">Perfect this automation</div>
+                <div className="empty-what">
+                  Every message in this Studio edits {studio.name}. Test and reprompt as many times as you need.
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="composer card">
+            {references.length > 0 && (
+              <div className="composer-references" data-testid="composer-references">
+                {references.map((reference) => (
+                  <button
+                    key={reference.automationId}
+                    className="reference-chip"
+                    title="Remove reference"
+                    onClick={() => removeAutomationReference(reference.automationId)}
+                  >
+                    @{reference.name} <span>×</span>
+                  </button>
+                ))}
+              </div>
+            )}
         <textarea
           className="composer-input"
           rows={1}
@@ -239,7 +311,10 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
             )}
           </div>
         </div>
+          </div>
+        </div>
       </div>
+      <LibraryPanel />
     </div>
   );
 }
@@ -249,7 +324,22 @@ function ChatItemView({ item }: { item: ChatItem }) {
     case "user":
       return (
         <div className="msg-row user">
-          <div className="msg-user">{item.text}</div>
+          <div className="msg-user">
+            {item.references && item.references.length > 0 && (
+              <div className="message-references">
+                {item.references.map((reference) => (
+                  <button
+                    key={reference.automationId}
+                    className="reference-chip"
+                    onClick={() => openAutomationStudio(reference.automationId)}
+                  >
+                    @{reference.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {item.text}
+          </div>
         </div>
       );
     case "progress":

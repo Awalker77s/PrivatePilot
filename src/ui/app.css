@@ -313,6 +313,22 @@
   gap: 8px;
 }
 
+.permission-ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.permission-ledger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
 /* ---------- dot ---------- */
 .dot {
   width: 7px;

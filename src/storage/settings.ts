@@ -23,6 +23,17 @@ export interface AppSettings {
   lastWatchTick?: Record<string, number>;
   // One-time multi-image sanity probe result, per model tag.
   visionProbe?: Record<string, boolean>;
+  permissions?: {
+    fullAccess: boolean;
+    // revisionId -> immutable content hash. A changed revision cannot reuse
+    // an approval merely because its automation kept the same name or id.
+    approvedRevisions: Record<string, { contentHash: string; approvedAt: number }>;
+    approvedWorkflowRevisions: Record<
+      string,
+      { contentHash: string; approvedAt: number }
+    >;
+    approvedDirectories: string[];
+  };
 }
 
 const DEFAULTS: AppSettings = {
@@ -30,13 +41,45 @@ const DEFAULTS: AppSettings = {
   pickedFolders: [],
   localModel: null,
   featherless: { enabled: false, key: null, model: "Qwen/Qwen3-32B" },
+  permissions: {
+    fullAccess: false,
+    approvedRevisions: {},
+    approvedWorkflowRevisions: {},
+    approvedDirectories: [],
+  },
 };
 
 const BROWSER_SETTINGS_KEY = "private-pilot:settings";
 let settings: AppSettings = isDesktopApp()
-  ? { ...DEFAULTS }
-  : { ...DEFAULTS, localModel: "qwen3.5:4b" };
+  ? mergeDefaults()
+  : mergeDefaults({ localModel: "qwen3.5:4b" });
 let loaded = false;
+
+function mergeDefaults(raw?: Partial<AppSettings>): AppSettings {
+  return {
+    ...DEFAULTS,
+    ...(raw ?? {}),
+    featherless: {
+      ...DEFAULTS.featherless,
+      ...(raw?.featherless ?? {}),
+    },
+    permissions: {
+      ...DEFAULTS.permissions!,
+      ...(raw?.permissions ?? {}),
+      approvedRevisions: {
+        ...DEFAULTS.permissions!.approvedRevisions,
+        ...(raw?.permissions?.approvedRevisions ?? {}),
+      },
+      approvedWorkflowRevisions: {
+        ...DEFAULTS.permissions!.approvedWorkflowRevisions,
+        ...(raw?.permissions?.approvedWorkflowRevisions ?? {}),
+      },
+      approvedDirectories: [
+        ...(raw?.permissions?.approvedDirectories ?? []),
+      ],
+    },
+  };
+}
 
 async function settingsPath(): Promise<string> {
   return join(await appDataDir(), "settings.json");
@@ -48,18 +91,20 @@ export async function loadSettings(): Promise<AppSettings> {
       if (!isDesktopApp()) {
         const saved = localStorage.getItem(BROWSER_SETTINGS_KEY);
         settings = saved
-          ? { ...DEFAULTS, ...JSON.parse(saved) }
-          : { ...DEFAULTS, localModel: "qwen3.5:4b" };
+          ? mergeDefaults(JSON.parse(saved) as Partial<AppSettings>)
+          : mergeDefaults({ localModel: "qwen3.5:4b" });
       } else {
         const p = await settingsPath();
         if (await exists(p)) {
-          settings = { ...DEFAULTS, ...JSON.parse(await readTextFile(p)) };
+          settings = mergeDefaults(
+            JSON.parse(await readTextFile(p)) as Partial<AppSettings>
+          );
         }
       }
     } catch {
       settings = isDesktopApp()
-        ? { ...DEFAULTS }
-        : { ...DEFAULTS, localModel: "qwen3.5:4b" };
+        ? mergeDefaults()
+        : mergeDefaults({ localModel: "qwen3.5:4b" });
     }
     loaded = true;
   }

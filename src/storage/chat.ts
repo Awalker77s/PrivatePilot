@@ -1,19 +1,28 @@
-// chat.json: the thread persists as a bounded console with scrollback —
-// automations/chains/runs stay the durable record; this file is what lets
-// "schedule this automation for 9am" still resolve tomorrow morning. Same
-// atomic temp→fsync→rename pattern as the three stores.
+// chat.json: General chat plus automation-scoped Studio threads persist as
+// scrollback. automations/chains/runs stay the durable execution record.
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { exists, readTextFile } from "@tauri-apps/plugin-fs";
 import { atomicWriteJson } from "./atomic";
+import type { AutomationReference } from "./types";
 
 export interface DiskChat {
-  v: 1;
+  v: 1 | 2;
   nextId: number;
   // Something live (a compile, a recording, a running card) was stripped at
   // save — the reload says so once instead of silently vanishing it.
   interrupted: boolean;
   pending: unknown | null;
   pendingEditRequest: string | null;
+  activeAutomationId?: string | null;
+  pendingReferences?: AutomationReference[];
+  threadStates?: Record<
+    string,
+    {
+      pending: unknown | null;
+      pendingEditRequest: string | null;
+      pendingReferences: AutomationReference[];
+    }
+  >;
   items: unknown[];
 }
 

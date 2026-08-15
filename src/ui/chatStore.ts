@@ -31,9 +31,11 @@ import {
 import { editAutomation, EditResult } from "../pipeline/edit";
 import { activeLocalModel } from "../providers";
 import { ChainCycleError, assertNoCycle, runChain } from "../dispatcher";
+import type { AutomationRecord, AutomationReference } from "../storage/types";
+import { normalizeAutomation } from "../storage/revisions";
 
 type ChatItemVariant =
-  | { id: number; kind: "user"; text: string }
+  | { id: number; kind: "user"; text: string; references?: AutomationReference[] }
   | {
       id: number;
       kind: "progress";
@@ -81,13 +83,43 @@ type ChatItemVariant =
     };
 
 // Every item carries when it happened — day dividers render from the gaps.
-export type ChatItem = ChatItemVariant & { at?: number };
+export type ChatItem = ChatItemVariant & {
+  at?: number;
+  scopeAutomationId?: string | null;
+};
 
 let items: ChatItem[] = [];
 let nextId = 1;
 let busy = false;
 // The conversation context carried across question cards.
 let pending: DraftContext | null = null;
+let activeAutomationId: string | null = null;
+let pendingReferences: AutomationReference[] = [];
+interface ThreadRuntimeState {
+  pending: DraftContext | null;
+  pendingEditRequest: string | null;
+  pendingReferences: AutomationReference[];
+}
+let threadStates: Record<string, ThreadRuntimeState> = {};
+
+function activeThreadKey(): string {
+  return activeAutomationId ?? "general";
+}
+
+function saveActiveThreadState(): void {
+  threadStates[activeThreadKey()] = {
+    pending,
+    pendingEditRequest,
+    pendingReferences,
+  };
+}
+
+function restoreActiveThreadState(): void {
+  const state = threadStates[activeThreadKey()];
+  pending = state?.pending ?? null;
+  pendingEditRequest = state?.pendingEditRequest ?? null;
+  pendingReferences = state?.pendingReferences ?? [];
+}
 
 const listeners = new Set<() => void>();
 let version = 0;
@@ -100,7 +132,9 @@ export function chatVersion(): number {
   return version;
 }
 export function chatItems(): ChatItem[] {
-  return items;
+  return items.filter(
+    (item) => (item.scopeAutomationId ?? null) === activeAutomationId
+  );
 }
 export function chatBusy(): boolean {
   return busy;
@@ -117,15 +151,19 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   : never;
 
 function push(item: DistributiveOmit<ChatItemVariant, "id">): ChatItem {
-  const it = { ...item, id: nextId++, at: Date.now() } as ChatItem;
+  const it = {
+    ...item,
+    id: nextId++,
+    at: Date.now(),
+    scopeAutomationId: activeAutomationId,
+  } as ChatItem;
   items = [...items, it];
   emit();
   return it;
 }
 
-// ---- Persistent chat memory: the thread survives restarts, so "this
-// automation" typed tomorrow still points at something. ----
-const CHAT_CAP = 200;
+// ---- Persistent chat memory: General chat and every Automation Studio
+// survive restarts independently. ----
 let chatLoaded = false;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -147,20 +185,24 @@ function serializableItems(): { list: ChatItem[]; interrupted: boolean } {
     }
     list.push(i);
   }
-  return { list: list.slice(-CHAT_CAP), interrupted };
+  return { list, interrupted };
 }
 
 function scheduleSave() {
   if (!chatLoaded) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    saveActiveThreadState();
     const { list, interrupted } = serializableItems();
     void writeChatFile({
-      v: 1,
+      v: 2,
       nextId,
       interrupted,
       pending,
       pendingEditRequest,
+      activeAutomationId,
+      pendingReferences,
+      threadStates,
       items: list,
     }).catch(() => {
       // The thread is scrollback, not the record of what ran — a failed
@@ -173,7 +215,24 @@ export async function loadChat(): Promise<void> {
   const disk = await readChatFile();
   if (disk) {
     let loaded = disk.items as ChatItem[];
-    const tail = loaded[loaded.length - 1];
+    const diskScope = disk.activeAutomationId ?? null;
+    activeAutomationId =
+      diskScope && getState().automations.records.some((record) => record.id === diskScope)
+        ? diskScope
+        : null;
+    threadStates = (disk.threadStates as Record<string, ThreadRuntimeState> | undefined) ?? {};
+    if (!disk.threadStates) {
+      threadStates[activeThreadKey()] = {
+        pending: (disk.pending as DraftContext | null) ?? null,
+        pendingEditRequest: disk.pendingEditRequest ?? null,
+        pendingReferences: disk.pendingReferences ?? [],
+      };
+    }
+    restoreActiveThreadState();
+    const activeLoaded = loaded.filter(
+      (item) => (item.scopeAutomationId ?? null) === activeAutomationId
+    );
+    const tail = activeLoaded[activeLoaded.length - 1];
     const tailOpenQuestion =
       tail?.kind === "question" && tail.answered === null;
     // Question cards that lost their compile context are inert — say so
@@ -181,6 +240,7 @@ export async function loadChat(): Promise<void> {
     loaded = loaded.map((i) =>
       i.kind === "question" &&
       i.answered === null &&
+      (i.scopeAutomationId ?? null) === activeAutomationId &&
       !(tailOpenQuestion && i.id === tail.id)
         ? { ...i, answered: "(left unanswered)" }
         : i
@@ -191,12 +251,10 @@ export async function loadChat(): Promise<void> {
       ...loaded.map((i) => i.id + 1),
       1
     );
-    pending = tailOpenQuestion
-      ? ((disk.pending as DraftContext | null) ?? null)
-      : null;
-    pendingEditRequest = tailOpenQuestion
-      ? (disk.pendingEditRequest ?? null)
-      : null;
+    if (!tailOpenQuestion) {
+      pending = null;
+      pendingEditRequest = null;
+    }
     if (disk.interrupted) {
       items = [
         ...items,
@@ -212,6 +270,77 @@ export async function loadChat(): Promise<void> {
   }
   chatLoaded = true;
   emit();
+}
+
+function scopedItems(): ChatItem[] {
+  return items.filter(
+    (item) => (item.scopeAutomationId ?? null) === activeAutomationId
+  );
+}
+
+export function activeStudioAutomationId(): string | null {
+  return activeAutomationId;
+}
+
+export function openAutomationStudio(automationId: string): void {
+  if (busy) return;
+  saveActiveThreadState();
+  activeAutomationId = automationId;
+  restoreActiveThreadState();
+  emit();
+}
+
+export function closeAutomationStudio(): void {
+  if (busy) return;
+  saveActiveThreadState();
+  activeAutomationId = null;
+  restoreActiveThreadState();
+  emit();
+}
+
+export function composerReferences(): AutomationReference[] {
+  return pendingReferences;
+}
+
+export function addAutomationReference(automationId: string): void {
+  const record = getState().automations.records.find((a) => a.id === automationId);
+  if (!record) return;
+  const normalized = normalizeAutomation(record);
+  const reference: AutomationReference = {
+    automationId,
+    revisionId: normalized.revision!.id,
+    name: normalized.name,
+  };
+  pendingReferences = [
+    ...pendingReferences.filter((item) => item.automationId !== automationId),
+    reference,
+  ];
+  emit();
+}
+
+export function removeAutomationReference(automationId: string): void {
+  pendingReferences = pendingReferences.filter(
+    (item) => item.automationId !== automationId
+  );
+  emit();
+}
+
+function referenceContext(
+  references: AutomationReference[],
+  records: AutomationRecord[]
+): string {
+  if (!references.length) return "";
+  const lines = references.map((reference) => {
+    const record = records.find((candidate) => candidate.id === reference.automationId);
+    if (!record) return `Referenced automation: ${reference.name} (${reference.revisionId}).`;
+    return [
+      `Referenced automation \"${record.name}\" (${reference.revisionId}):`,
+      record.sentence,
+      `Inputs: ${record.inputs.map((input) => input.name).join(", ") || "none"}.`,
+      `Outputs: ${record.outputs.map((output) => output.name).join(", ") || "none"}.`,
+    ].join(" ");
+  });
+  return `\n\nStructured library references:\n${lines.join("\n")}`;
 }
 
 function replace(id: number, item: ChatItem | null) {
@@ -412,13 +541,16 @@ function askWhichOne(targets: EditTarget[], request: string) {
 export async function sendText(text: string) {
   if (busy || !text.trim()) return;
   const saved = getState().automations.records;
+  const references = pendingReferences;
+  pendingReferences = [];
   // The digest is rendered BEFORE this message joins the thread — the
   // request itself rides separately as userText.
-  const history = renderHistory(items, saved);
-  push({ kind: "user", text });
+  const thread = scopedItems();
+  const history = renderHistory(thread, saved);
+  push({ kind: "user", text, references });
 
   // An open question card? The typed text is its answer.
-  const lastQuestion = [...items]
+  const lastQuestion = [...thread]
     .reverse()
     .find((i) => i.kind === "question" && i.answered === null) as
     | (ChatItem & { kind: "question" })
@@ -426,7 +558,7 @@ export async function sendText(text: string) {
 
   if (lastQuestion && pendingEditRequest) {
     replace(lastQuestion.id, { ...lastQuestion, answered: text });
-    const target = findTargetNamed(text, items, saved);
+    const target = findTargetNamed(text, thread, saved);
     const request = pendingEditRequest;
     pendingEditRequest = null;
     if (target) {
@@ -451,6 +583,27 @@ export async function sendText(text: string) {
     return;
   }
 
+  // An Automation Studio is an explicit edit scope. It replaces the global
+  // chat's name/pronoun heuristics: every new instruction edits this record.
+  if (activeAutomationId) {
+    const record = saved.find((candidate) => candidate.id === activeAutomationId);
+    if (record) {
+      await runEdit({ record, builtItemId: null }, text);
+      return;
+    }
+  }
+
+  // A single structured reference can be edited without repeating its name.
+  if (references.length === 1 && !NEW_TASK_RE.test(text)) {
+    const record = saved.find(
+      (candidate) => candidate.id === references[0].automationId
+    );
+    if (record) {
+      await runEdit({ record, builtItemId: null }, text);
+      return;
+    }
+  }
+
   // "…and another automation to check meta" = independent jobs. Split before
   // drafting: one compile per job, each with the digest (so job 2 sees job
   // 1's card and doesn't re-create it), chain null by construction.
@@ -460,7 +613,7 @@ export async function sendText(text: string) {
       await runCompile({
         userText: seg,
         answers: [],
-        history: renderHistory(items, saved),
+        history: renderHistory(scopedItems(), saved),
       });
     }
     return;
@@ -469,7 +622,7 @@ export async function sendText(text: string) {
   // A named automation — drafts on built cards are first-class targets, so
   // "schedule the tech news one for 9am" patches the unsaved draft instead
   // of re-building it.
-  const named = findTargetsByName(text, items, saved);
+  const named = findTargetsByName(text, thread, saved);
   if (named.length === 1 && !NEW_TASK_RE.test(text)) {
     await runEdit(named[0], text);
     return;
@@ -486,7 +639,7 @@ export async function sendText(text: string) {
     DELTA_VERB_RE.test(text) &&
     (DEIXIS_RE.test(text) || TIMEY_RE.test(text))
   ) {
-    const focus = focusTargets(items, saved);
+    const focus = focusTargets(thread, saved);
     if (focus.length === 1) {
       await runEdit(focus[0], rewriteDeixis(text, focus[0].record.name));
       return;
@@ -497,7 +650,11 @@ export async function sendText(text: string) {
     }
   }
 
-  await runCompile({ userText: text, answers: [], history });
+  await runCompile({
+    userText: `${text}${referenceContext(references, saved)}`,
+    answers: [],
+    history,
+  });
 }
 
 export async function pickOption(itemId: number, value: string) {
@@ -508,7 +665,7 @@ export async function pickOption(itemId: number, value: string) {
     replace(itemId, { ...item, answered: value });
     const target = findTargetNamed(
       value,
-      items,
+      scopedItems(),
       getState().automations.records
     );
     const request = pendingEditRequest;
@@ -544,6 +701,14 @@ export async function chooseFile(itemId: number) {
   await updateSettings((s) => {
     const dir = item.q.kind === "folder" ? picked : parent;
     if (!s.pickedFolders.includes(dir)) s.pickedFolders.push(dir);
+    s.permissions ??= {
+      fullAccess: false,
+      approvedRevisions: {},
+      approvedWorkflowRevisions: {},
+      approvedDirectories: [],
+    };
+    if (!s.permissions.approvedDirectories.includes(dir))
+      s.permissions.approvedDirectories.push(dir);
   });
   await invoke("allow_folder", {
     path: item.q.kind === "folder" ? picked : parent,
@@ -907,6 +1072,23 @@ function patchBuilt(
   replace(itemId, { ...item, ...patch });
 }
 
+function markBuiltTested(itemId: number): void {
+  const item = builtItem(itemId);
+  if (!item) return;
+  patchBuilt(itemId, {
+    result: {
+      ...item.result,
+      automations: item.result.automations.map((record) => {
+        const normalized = normalizeAutomation(record);
+        return {
+          ...normalized,
+          revision: { ...normalized.revision!, status: "tested" as const },
+        };
+      }),
+    },
+  });
+}
+
 // Try it once: the watched run. Single automations run alone; a drafted
 // chain runs member by member so the hand-off happens with real things in
 // it. The card then renders from run records in runs.json — never model
@@ -932,6 +1114,7 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
         patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
         push({ kind: "note", tone: "amber", text: run.summary ?? "Held back." });
       } else {
+        markBuiltTested(itemId);
         patchBuilt(itemId, { state: "ran", progress: null, runId: run.id });
       }
     } else {
@@ -943,6 +1126,7 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
           }),
       });
       const broke = runs.some((r) => r.status === "broke");
+      if (!broke) markBuiltTested(itemId);
       patchBuilt(itemId, {
         state: broke ? "fresh" : "ran",
         progress: null,

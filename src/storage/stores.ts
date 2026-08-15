@@ -6,8 +6,44 @@ import { exists, mkdir, readTextFile } from "@tauri-apps/plugin-fs";
 import { atomicWriteJson } from "./atomic";
 import { isDesktopApp } from "../platform";
 import type { AutomationRecord, ChainRecord, RunRecord } from "./types";
+import {
+  automationContentHash,
+  normalizeAutomation,
+  publishRevision,
+  mergePermissionManifests,
+  normalizeWorkflow,
+  publishWorkflowRevision,
+  workflowContentHash,
+} from "./revisions";
 
 const VERSIONS_KEPT = 10;
+
+function keepRecentAndPinnedVersions(
+  automationId: string,
+  versions: AutomationRecord[]
+): AutomationRecord[] {
+  const pinned = new Set(
+    [
+      ...state.chains.records,
+      ...Object.values(state.chains.versions).flat(),
+    ].flatMap((chain) =>
+      (chain.components ?? [])
+        .filter((component) => component.automationId === automationId)
+        .map((component) => component.revisionId)
+    )
+  );
+  const kept = [
+    ...versions.slice(0, VERSIONS_KEPT),
+    ...versions.filter((record) =>
+      record.revision ? pinned.has(record.revision.id) : false
+    ),
+  ];
+  return kept.filter(
+    (record, index) =>
+      kept.findIndex((candidate) => candidate.revision?.id === record.revision?.id) ===
+      index
+  );
+}
 
 // The records are verbatim A5; the file containers wrap them so version
 // history can live inside the same three files (see NOTES.md).
@@ -17,6 +53,7 @@ interface AutomationsFile {
 }
 interface ChainsFile {
   records: ChainRecord[];
+  versions: Record<string, ChainRecord[]>;
 }
 interface RunsFile {
   records: RunRecord[]; // append-only
@@ -32,7 +69,7 @@ interface StoreState {
 
 const state: StoreState = {
   automations: { records: [], versions: {} },
-  chains: { records: [] },
+  chains: { records: [], versions: {} },
   runs: { records: [] },
   loaded: false,
   loadError: null,
@@ -113,8 +150,42 @@ export async function loadAll(): Promise<void> {
       records: [],
       versions: {},
     });
-    state.chains = await readStore("chains", { records: [] });
+    state.chains = await readStore("chains", { records: [], versions: {} });
+    state.chains.versions ??= {};
     state.runs = await readStore("runs", { records: [] });
+    state.automations.records = state.automations.records.map((record) =>
+      normalizeAutomation(
+        record,
+        (state.automations.versions[record.id]?.length ?? 0) + 1
+      )
+    );
+    for (const [id, versions] of Object.entries(state.automations.versions)) {
+      state.automations.versions[id] = versions.map((record, index) =>
+        normalizeAutomation(record, Math.max(1, versions.length - index))
+      );
+    }
+    state.chains.records = state.chains.records.map((chain) => {
+      const members = [...new Set(chain.links.flatMap((link) => [link.from, link.to]))]
+        .map((automationId) => state.automations.records.find((a) => a.id === automationId))
+        .filter((record): record is AutomationRecord => !!record);
+      return normalizeWorkflow({
+        ...chain,
+        createdAt: chain.createdAt ?? Date.now(),
+        components:
+          chain.components ??
+          members.map((record) => ({
+            automationId: record.id,
+            revisionId: record.revision!.id,
+            revisionNumber: record.revision!.number,
+          })),
+        permissions: chain.permissions ?? mergePermissionManifests(members),
+      }, (state.chains.versions[chain.id]?.length ?? 0) + 1);
+    });
+    for (const [id, versions] of Object.entries(state.chains.versions)) {
+      state.chains.versions[id] = versions.map((workflow, index) =>
+        normalizeWorkflow(workflow, Math.max(1, versions.length - index))
+      );
+    }
     await recoverInterruptedRuns();
     state.loaded = true;
     state.loadError = null;
@@ -172,18 +243,33 @@ export async function saveAutomation(record: AutomationRecord): Promise<void> {
   const file = state.automations;
   const idx = file.records.findIndex((r) => r.id === record.id);
   if (idx >= 0) {
-    const prev = file.records[idx];
-    const versions = file.versions[record.id] ?? [];
-    file.versions[record.id] = [prev, ...versions].slice(0, VERSIONS_KEPT);
-    file.records[idx] = record;
+    const prev = normalizeAutomation(file.records[idx]);
+    const next = publishRevision(record, prev);
+    if (automationContentHash(prev) !== automationContentHash(next)) {
+      const versions = file.versions[record.id] ?? [];
+      file.versions[record.id] = keepRecentAndPinnedVersions(record.id, [
+        prev,
+        ...versions,
+      ]);
+    }
+    file.records[idx] = next;
   } else {
-    file.records.push(record);
+    file.records.push(publishRevision(record));
   }
   await persistStore("automations", file);
   emit();
 }
 
 export async function deleteAutomation(id: string): Promise<void> {
+  const referenced = [
+    ...state.chains.records,
+    ...Object.values(state.chains.versions).flat(),
+  ].some((workflow) =>
+    (workflow.components ?? []).some(
+      (component) => component.automationId === id
+    )
+  );
+  if (referenced) return;
   const file = state.automations;
   file.records = file.records.filter((r) => r.id !== id);
   delete file.versions[id];
@@ -193,6 +279,17 @@ export async function deleteAutomation(id: string): Promise<void> {
 
 export function getAutomation(id: string): AutomationRecord | undefined {
   return state.automations.records.find((r) => r.id === id);
+}
+
+export function getAutomationRevision(
+  id: string,
+  revisionId: string
+): AutomationRecord | undefined {
+  const current = getAutomation(id);
+  if (current?.revision?.id === revisionId) return current;
+  return (state.automations.versions[id] ?? []).find(
+    (record) => record.revision?.id === revisionId
+  );
 }
 
 export function automationVersions(id: string): AutomationRecord[] {
@@ -220,16 +317,47 @@ export async function restoreVersion(id: string): Promise<boolean> {
 export async function saveChain(record: ChainRecord): Promise<void> {
   const file = state.chains;
   const idx = file.records.findIndex((r) => r.id === record.id);
-  if (idx >= 0) file.records[idx] = record;
-  else file.records.push(record);
+  if (idx >= 0) {
+    const previous = normalizeWorkflow(file.records[idx]);
+    const next = publishWorkflowRevision(record, previous);
+    if (workflowContentHash(previous) !== workflowContentHash(next)) {
+      file.versions[record.id] = [
+        previous,
+        ...(file.versions[record.id] ?? []),
+      ].slice(0, VERSIONS_KEPT);
+    }
+    file.records[idx] = next;
+  } else file.records.push(publishWorkflowRevision(record));
   await persistStore("chains", file);
   emit();
 }
 
 export async function deleteChain(id: string): Promise<void> {
   state.chains.records = state.chains.records.filter((r) => r.id !== id);
+  delete state.chains.versions[id];
   await persistStore("chains", state.chains);
   emit();
+}
+
+export function workflowVersions(id: string): ChainRecord[] {
+  return state.chains.versions[id] ?? [];
+}
+
+export async function restoreWorkflowVersion(id: string): Promise<boolean> {
+  const versions = state.chains.versions[id] ?? [];
+  const previous = versions[0];
+  if (!previous) return false;
+  const index = state.chains.records.findIndex((workflow) => workflow.id === id);
+  if (index < 0) return false;
+  const current = state.chains.records[index];
+  state.chains.records[index] = previous;
+  state.chains.versions[id] = [current, ...versions.slice(1)].slice(
+    0,
+    VERSIONS_KEPT
+  );
+  await persistStore("chains", state.chains);
+  emit();
+  return true;
 }
 
 // ---- runs (append-only; the chain resume checkpoint) ----

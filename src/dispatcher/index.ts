@@ -9,7 +9,13 @@ import type {
   ChainRecord,
   RunRecord,
 } from "../storage/types";
-import { appendRun, getAutomation, getState, newId } from "../storage/stores";
+import {
+  appendRun,
+  getAutomation,
+  getAutomationRevision,
+  getState,
+  newId,
+} from "../storage/stores";
 import { registerRunFinishedHook, runAutomation } from "../runner/run";
 
 // Wire the dispatcher to the runner once, at app start.
@@ -184,7 +190,15 @@ export async function runChain(
   let baton: Record<string, string | number> | null = null;
 
   for (let i = 0; i < order.length; i++) {
-    const auto = byId.get(order[i]) ?? getAutomation(order[i]);
+    const component = chain.components?.find(
+      (candidate) => candidate.automationId === order[i]
+    );
+    const auto =
+      (component
+        ? getAutomationRevision(component.automationId, component.revisionId)
+        : undefined) ??
+      byId.get(order[i]) ??
+      getAutomation(order[i]);
     if (!auto) break;
 
     const already = completed.get(i);
@@ -308,7 +322,12 @@ export async function dispatchAfterRun(run: RunRecord): Promise<void> {
         (l) => l.from === order[i] && l.to === order[i + 1]
       );
       if (!link) break;
-      const next = getAutomation(link.to);
+      const component = chain.components?.find(
+        (candidate) => candidate.automationId === link.to
+      );
+      const next = component
+        ? getAutomationRevision(component.automationId, component.revisionId)
+        : getAutomation(link.to);
       if (!next) break;
       const verdict = evalCondition(
         link.onlyWhen,

@@ -8,6 +8,7 @@ import type { Catalog } from "../catalog";
 import { wireJsonSchema } from "./schema";
 import { getSettings } from "../../storage/settings";
 import { COIN_ALIASES, endpointMenu } from "../endpoints";
+import { connectorMenu } from "../../connectors/registry";
 
 export interface DraftContext {
   userText: string;
@@ -50,6 +51,13 @@ export function draftSystemPrompt(catalog: Catalog): string {
       .map(([k, v]) => `${k}→${v}`)
       .join(", ")}`,
     "",
+    "Apps on this computer an automation can look into (typed tools — write the exact call in the step, e.g. \"outlook_mail_recent since_hours=24 unread_only=true\"):",
+    connectorMenu(catalog.apps),
+    "- An automation that uses an app MUST list that app's id in apps (the fence). Mail, calendar, and music NEVER travel through URLs — no outlook.com, graph, or spotify.com in sources when the app is listed.",
+    "- 'my email / my inbox / my Outlook / my calendar / my meetings' → apps [\"outlook\"] with outlook_* steps. 'what's playing / pause / skip / Spotify' → apps [\"spotify\"]. Any other desktop app the person names (Discord, Teams, Notepad, a game…) or 'what's on my screen / what does X show' → apps [\"computer\"] with a read_app step naming the app.",
+    "- Drafting an email or reply when Outlook is listed = an outlook_draft step (a draft is saved; the person presses Send). Otherwise the answer IS the message, as before.",
+    "- Watchers on Outlook are fine every 5+ minutes; watchers on read_app should stay daily.",
+    "",
     "- One automation unless the person's words name two distinct jobs (shortest chain wins).",
     "- Two SEPARATE jobs with no hand-off ('and another automation that…', 'also make one that…', 'and then one to check…') = draft BOTH automations and leave chain null. Only set chain.links when one job's outputs actually feed the next — a link whose map is empty and whose onlyWhen is null is invalid.",
     "- The conversation context may list automations already built this session. NEVER re-create an automation named there — modifications to those are handled elsewhere; draft only genuinely new jobs.",
@@ -78,6 +86,8 @@ export function draftSystemPrompt(catalog: Catalog): string {
     `\nExisting automations: ${existing}`,
     "",
     'Example: "check the top tech news and another automation to check the meta stock price" is TWO independent automations that share nothing: {"automations": [{...the news job...}, {...the stock job...}], "chain": null, "question": null}.',
+    'Example: "every morning tell me which unread emails need me first" = {"automations": [{"name": "Morning inbox triage", "category": "Email", "steps": ["outlook_mail_recent since_hours=24 unread_only=true limit=20", "outlook_mail_read the two or three that look urgent", "answer with the ones that need a reply first"], "sources": [], "apps": ["outlook"], "files": {"reads": [], "writes": []}, "delivers": "answer", "schedule": {"trigger": "daily", "hour": 8}, "outputs": [{"name": "how_many"}], "inputs": [], ...}], "chain": null, "question": null}',
+    'Example: "what is spotify playing right now" = one automation, "apps": ["spotify"], steps ["spotify_now_playing", "answer with the track and artist"], "sources": [], delivers answer, schedule manual. "what does my Discord window show" = "apps": ["computer"], steps ["read_app Discord", "answer with a short summary"].',
     'Example: "each week read new receipts in Downloads, add the totals to my ledger, then text me a recap" is TWO jobs — reading receipts AND writing their totals into the ledger is one job; the recap is the second. So: {"automations": [{"name": "Receipt totals", "files": {"reads": ["~/Downloads"], "writes": ["~/Documents/ledger.xlsx"]}, "outputs": [{"name": "vendor"}, {"name": "amount"}, {"name": "how_many"}], "delivers": "files", ...}, {"name": "Weekly recap", "inputs": [{"name": "amount", "label": "Total amount", "example": "1240"}, {"name": "how_many", "label": "How many receipts", "example": "3"}], "outputs": [], "files": {"reads": [], "writes": []}, "delivers": "answer", ...}], "chain": {"name": "Receipts then recap", "links": [{"from": "Receipt totals", "to": "Weekly recap", "map": [{"output": "amount", "input": "amount"}, {"output": "how_many", "input": "how_many"}], "onlyWhen": null}]}, "question": null}',
   ].join("\n");
 }

@@ -298,3 +298,69 @@ day. This becomes the writeup.
   named-draft edit lands without a re-compile; the thread survives reload
   with edits intact; Put it back works on a rehydrated card; "change the
   time to 10am" finds its focus after restart.
+- **Look into my apps (Aug 15, branch app-connectors).** The question was
+  how far automations can reach into the apps people actually use, and the
+  best way to do it. Research fleet: six lenses (demand data, integration
+  mechanisms, how competitors do it, local-first auth in Tauri, Windows-
+  local zero-auth access, what a 9B can reliably do with tools), an
+  architect grounded in this codebase, and an adversarial critic that
+  live-verified the risky claims. Findings that decided the design:
+  Zapier/Power Automate/IFTTT/Raycast agree on email + calendar + files +
+  spreadsheet-as-log as the core, Spotify as the one entertainment app with
+  real pull, and reads outnumbering writes ~2:1 (so "nothing sends itself"
+  aligns with demand); every serious product converges on the same reach
+  ladder (typed API tools > structured UI tree > pixels); 7-9B GUI agents
+  finish only 21-42% of desktop tasks and one wrong click can send, so the
+  model never drives a screen; small models pick well from <=10 typed tools
+  and badly from 30, so tools are BOUND PER RECORD; the Spotify Web API is
+  closed to strangers' computers in 2026 (5 allow-listed users, Premium
+  owner) so it was cut, not deferred; classic Outlook COM works with zero
+  registration but the new Outlook has no object model, so Microsoft Graph
+  is the "any device" upgrade behind the same tools; keyring+AES was
+  replaced by DPAPI in the Graph plan (no visible credential, no 2,560-byte
+  cap). Local probes on this machine before building: Windows media
+  session returned Spotify's now-playing with no prompt; classic Outlook
+  COM answered with 2 accounts / 826 inbox items; Discord's UIA tree was
+  rich (375 nodes in 210 ms) while Spotify's Store build exposes almost
+  nothing (so read_app needs the same text->fallback ladder as read_page).
+  What shipped: a new record field `apps` (a closed enum in the wire
+  schema, so a nonexistent app is unsampleable; a validator rule ties every
+  app tool in the steps to its app and bans outlook/spotify URLs when the
+  app is listed); three connectors as small manifests of typed, zod-
+  validated tools with designed sentences - **outlook** (mail_recent,
+  mail_search, mail_read, calendar, draft; classic COM through a hidden
+  PowerShell that attaches to a running Outlook first, 60 s hard timeout,
+  short m1..mN handles so the model never copies a 140-char EntryID, drafts
+  only to addresses the run actually read from or the person's own
+  account, never .Send()), **spotify** (now_playing filtered to the Spotify
+  session so the "Looks into: Spotify" chip is literally true; control
+  play/pause/next/previous), **computer** (list_apps, read_app via
+  Windows UI Automation on its own MTA thread with a 20 s timeout, Chromium
+  lazy-tree retries, echo-line suppression, a deny list for password
+  managers; now_playing across all media apps). Runner: per-record tool
+  binding; a connector needs_you/broke aborts the run held-back so the
+  model never answers from partial app data; app reads count toward the
+  "read nothing -> held" rule; handoffs (the saved draft) render as an
+  "Open the draft in Outlook" button with recipient + subject; a first log
+  line names the apps and, with cloud compute on, says the text leaves.
+  Settings gained a Connected apps card - one Allow per app, no sign-in.
+  Verified live in the running app: "what is spotify playing right now"
+  compiled to apps ["spotify"] and answered "Better in the Dark" by Jordana
+  in 2 turns; "look at my Discord window..." compiled to apps ["computer"]
+  and listed the servers with unread/mentions from a 0.1 s UIA read;
+  "every morning at 8 look at my outlook inbox..." compiled to apps
+  ["outlook"], daily 8am, and read all 5 unread messages and ranked them in
+  8 turns (the model's first call had limit=50, zod bounced it, it retried
+  with 25 - the hardening the critic asked for); a self-addressed test
+  draft landed in Drafts with Sent=False and a working handoff; with Allow
+  off the same run stopped needs_you with the sentence; the old web path
+  still fetched Solana at $75.46. Not done, by design: the Microsoft Graph
+  backend (needs an Entra app registration only Alexander can create -
+  recipe: entra.microsoft.com > App registrations > New > "Personal
+  Microsoft accounts and any org" > platform Mobile and desktop >
+  redirect http://localhost/callback > Allow public client flows: Yes >
+  ship the client_id; scopes offline_access User.Read Mail.ReadWrite
+  Calendars.Read; PKCE loopback in Rust, tokens DPAPI-sealed, the model
+  never sees them) and the PrintWindow+vision fallback for skeletal
+  windows (Chromium surfaces often hand PrintWindow a black frame, so it
+  needs Graphics.Capture - a real half-day, not a stretch item).

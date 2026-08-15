@@ -10,6 +10,7 @@ import {
 import { readDir } from "@tauri-apps/plugin-fs";
 import { getState } from "../storage/stores";
 import { getSettings, loadSettings } from "../storage/settings";
+import { connectorStatuses, ConnectorSnapshot } from "../connectors/registry";
 
 export interface CatalogFile {
   display: string; // "~/Downloads/invoice-jan.pdf" — what records store
@@ -33,6 +34,8 @@ export interface Catalog {
   readTargets: string[]; // folder + file displays — the reads enum
   writeTargets: string[];
   displayToReal: Record<string, string>;
+  // Apps automations can look into, with live status — the drafter's menu.
+  apps: ConnectorSnapshot[];
 }
 
 const MAX_FILES_PER_FOLDER = 250;
@@ -147,6 +150,13 @@ export async function buildCatalog(): Promise<Catalog> {
   const automationNames = getState().automations.records.map((r) => r.name);
   const folderDisplays = folders.filter((f) => f.readable).map((f) => f.display);
   const fileDisplays = files.map((f) => f.display);
+  let apps: ConnectorSnapshot[] = [];
+  try {
+    apps = await connectorStatuses();
+  } catch {
+    // A status probe that breaks must not block compiling — the drafter
+    // just sees no app menu this time.
+  }
 
   return {
     folders,
@@ -155,6 +165,7 @@ export async function buildCatalog(): Promise<Catalog> {
     readTargets: [...folderDisplays, ...fileDisplays],
     writeTargets: [...folderDisplays, ...fileDisplays],
     displayToReal,
+    apps,
   };
 }
 

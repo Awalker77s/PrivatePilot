@@ -21,12 +21,20 @@ export interface AppSettings {
   lastWatchTick?: Record<string, number>;
   // One-time multi-image sanity probe result, per model tag.
   visionProbe?: Record<string, boolean>;
+  // Connected apps — which local senses the person has allowed. Absent
+  // means off: nothing looks into an app until the person says so.
+  apps?: {
+    computerAllowed?: boolean; // read what open app windows show
+    outlookClassicAllowed?: boolean; // read classic Outlook on this PC
+    spotifyAllowed?: boolean; // what's playing / pause / skip on this PC
+  };
 }
 
 const DEFAULTS: AppSettings = {
   aliases: {},
   pickedFolders: [],
   featherless: { enabled: false, key: null, model: "Qwen/Qwen3-32B" },
+  apps: {},
 };
 
 let settings: AppSettings = { ...DEFAULTS };

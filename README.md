@@ -89,6 +89,20 @@ provable "nothing left this computer."**
   reads the rendered text; if the answer only exists as pixels, the local
   vision model reads it twice at two scales and must agree. APIs stay
   preferred when one covers the goal.
+- **Looks into your apps — no sign-in, nothing leaves the computer**: say
+  "every morning tell me which unread emails need me first" and the
+  automation reads your **Outlook** inbox and calendar right on this PC
+  (classic Outlook's own object model), or "what's playing" and it asks
+  Windows what **Spotify** is doing (and can pause/skip), or "look at my
+  Discord window" and it reads what any open app shows through Windows'
+  accessibility tree — the same text a screen reader gets. Each app is one
+  **Allow** in Settings → Connected apps. Records carry an `apps` fence
+  next to `sources`; a run only sees the typed tools of the apps it lists.
+  Reading is the default — the only writes are a **draft** saved into your
+  Outlook Drafts folder (you press Send there; the app never can) and a
+  pause/skip you can undo. If an app isn't allowed or open, the run stops
+  held-back with the sentence that says what to do — never an answer from
+  half-read data.
 - **Never silent**: every failure state is a designed sentence in one of
   three families — stopped on purpose (gray), needs you (amber), broke (red).
   A rate-limited API is "asked us to slow down", never a price of 0.
@@ -252,6 +266,14 @@ Engineering honesty, straight from [NOTES.md](NOTES.md):
 
 ## What's next
 
+- **Outlook from any device** — a Microsoft-account connection (OAuth PKCE
+  in a loopback listener, tokens DPAPI-sealed in Rust, the model never sees
+  them) behind the same five Outlook tools, so the new Outlook and phones
+  work too. Needs one Entra app registration; the recipe is in NOTES.md.
+- **More apps on the same ladder** — notifications ("what pinged me while I
+  was away"), Windows Search (`find_files`), Microsoft To Do, Google
+  Calendar, Notion, browser history — each a 2–5-tool manifest with its own
+  honest sentences.
 - **The .pilot file** — an automation record is already one strict-JSON
   document; sharing is a double-click, with a "what this touches" card before
   anything activates.

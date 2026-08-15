@@ -5,6 +5,7 @@
 // Shape constraints beyond that live in refinements — validator-only.
 import { z } from "zod";
 import type { Catalog } from "../catalog";
+import { CONNECTOR_IDS, allConnectorToolNames, connectorOfTool } from "../../connectors/registry";
 
 export const CATEGORIES = [
   "Documents",
@@ -51,6 +52,9 @@ export function buildWireSchema(catalog: Catalog) {
       writes: z.array(pathEnum(catalog.writeTargets)),
     }),
     sources: z.array(z.string()),
+    // The apps fence — a closed enum, so an app that doesn't exist can't be
+    // sampled at all (same trick as file paths).
+    apps: z.array(z.enum(CONNECTOR_IDS)),
     delivers: z.enum(["answer", "files"]),
     schedule: z.union([
       z.strictObject({
@@ -151,6 +155,37 @@ export function buildWireSchema(catalog: Catalog) {
             });
           }
         }
+        // App tools in the steps must belong to an app in the fence, and
+        // mail/music never travel through URLs when the app is listed.
+        const stepText = a.steps.join("\n");
+        for (const tool of allConnectorToolNames()) {
+          if (new RegExp(`\\b${tool}\\b`).test(stepText)) {
+            const owner = connectorOfTool(tool);
+            if (owner && !a.apps.includes(owner)) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["automations", i, "apps"],
+                message: `The steps call ${tool}, so apps must include "${owner}".`,
+              });
+            }
+          }
+        }
+        for (const s of a.sources) {
+          if (a.apps.includes("outlook") && /outlook|office|graph\.microsoft/i.test(s)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "sources"],
+              message: `Outlook is read through its app tools, not ${s} — remove it from sources.`,
+            });
+          }
+          if (a.apps.includes("spotify") && /spotify/i.test(s)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "sources"],
+              message: `Spotify is read through its app tools, not ${s} — remove it from sources.`,
+            });
+          }
+        }
       });
       // Independent automations are fine unchained — a chain is only for
       // hand-offs the person actually asked for.
@@ -229,9 +264,26 @@ export function lintAutomation(a: {
   steps: string[];
   sources: string[];
   inputs: { name: string }[];
+  apps?: string[];
 }): string[] {
   const issues: string[] = [];
   const stepText = a.steps.join("\n");
+  // Every app tool named in a step must belong to an app in the fence.
+  const apps = a.apps ?? [];
+  for (const tool of allConnectorToolNames()) {
+    if (new RegExp(`\\b${tool}\\b`).test(stepText)) {
+      const owner = connectorOfTool(tool);
+      if (owner && !apps.includes(owner)) {
+        issues.push(
+          `The steps call ${tool}, but "${owner}" isn't in apps — add it to the fence or take the step out.`
+        );
+      }
+    }
+  }
+  // Mail and music never travel through URLs when an app is listed.
+  if (apps.includes("outlook") && /https?:\/\/[^\s]*(outlook|office|graph\.microsoft)/i.test(stepText)) {
+    issues.push("Outlook is read through its app tools, not through a URL — drop the outlook/graph URL from the steps.");
+  }
   // Every hostname fetched in a step must be inside the fence.
   for (const m of stepText.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) {
     const host = m[1].toLowerCase();
@@ -275,6 +327,7 @@ export function validateEditedAutomation(
     outputs: { name: string }[];
     files: { reads: string[]; writes: string[] };
     sources: string[];
+    apps?: string[];
     delivers: string;
     schedule: unknown;
     effort: string;
@@ -294,6 +347,7 @@ export function validateEditedAutomation(
         outputs: record.outputs,
         files: record.files,
         sources: record.sources,
+        apps: record.apps ?? [],
         delivers: record.delivers,
         schedule: record.schedule,
         effort: record.effort,

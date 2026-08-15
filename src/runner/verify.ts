@@ -171,13 +171,16 @@ export function parseOutputs(answer: string): {
   const baton: Record<string, string | number> = {};
   for (const pair of m[1].split(";")) {
     const [k, ...rest] = pair.split("=");
-    const v = rest.join("=").trim();
+    // Models sometimes quote values with spaces — the quotes aren't data.
+    const v = rest.join("=").trim().replace(/^["']|["']$/g, "");
     if (!k.trim() || !v) continue;
     const num = Number(v.replace(/[$,]/g, ""));
     baton[k.trim()] = Number.isNaN(num) || v.match(/[A-Za-z]{2,}/) ? v : num;
   }
   return {
-    cleanAnswer: answer.replace(/^OUTPUTS:.*$/m, "").trim(),
+    // The OUTPUTS line may sit mid-line after the last sentence — strip it
+    // wherever it is, never leave it in the delivered answer.
+    cleanAnswer: stripped,
     baton: Object.keys(baton).length ? baton : null,
   };
 }

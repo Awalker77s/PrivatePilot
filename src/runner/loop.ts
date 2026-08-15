@@ -9,6 +9,9 @@ import { readAnyFile } from "./readFile";
 import { fetchPage } from "./fetchPage";
 import { Sandbox, toSandboxPath } from "./sandbox";
 import { readDir, writeTextFile, exists, mkdir } from "@tauri-apps/plugin-fs";
+import { toolsFor } from "../connectors/registry";
+import type { ToolContext, ToolSpec } from "../connectors/types";
+import type { RunHandoff } from "../storage/types";
 
 const MAX_TURNS = 15;
 const STALL_MS = 30 * 60 * 1000;
@@ -27,6 +30,11 @@ export interface LoopOutcome {
   refusals: string[]; // designed refusal sentences (fence etc.)
   logLines: string[];
   stalled: boolean;
+  // A connector said "needs you" or broke: the run stops here, held back —
+  // the model never gets to answer from partial data.
+  heldBack: string | null;
+  handoffs: RunHandoff[];
+  appsRead: number; // connector reads that returned data
 }
 
 const TOOLS: ToolDef[] = [
@@ -102,19 +110,54 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
-function systemPrompt(record: AutomationRecord, inputValues: Record<string, string>): string {
+// Tools are bound per record: file tools only when the record touches
+// files, web tools only when it names sources, connector tools only for the
+// apps it lists. A triage job sees 5 tools, not 15.
+function bindTools(record: AutomationRecord, sandbox: Sandbox | null): { defs: ToolDef[]; specs: ToolSpec[] } {
+  const defs: ToolDef[] = [];
+  const touchesFiles = sandbox !== null;
+  const hasSources = record.sources.length > 0;
+  for (const t of TOOLS) {
+    const n = t.function.name;
+    if ((n === "list_files" || n === "read_file" || n === "write_file") && !touchesFiles) continue;
+    if ((n === "fetch_page" || n === "read_page") && !hasSources) continue;
+    defs.push(t);
+  }
+  const specs = toolsFor(record.apps);
+  for (const s of specs) defs.push(s.def);
+  // A record with nothing bound at all still gets the web pair, so the
+  // model has a way to say it can't (never zero tools on a tools call).
+  if (defs.length === 0) defs.push(...TOOLS.filter((t) => t.function.name === "fetch_page"));
+  return { defs, specs };
+}
+
+function systemPrompt(record: AutomationRecord, inputValues: Record<string, string>, specs: ToolSpec[]): string {
   const roots = [...new Set([...record.files.reads, ...record.files.writes])].join(", ") || "none";
   const sources = record.sources.join(", ") || "none";
+  const apps = (record.apps ?? []).join(", ") || "none";
   const outputs = record.outputs.map((o) => o.name).join(", ");
   const inputs = Object.entries(inputValues)
     .map(([k, v]) => `${k} = ${v}`)
     .join("; ");
+  const appTools = specs.map((s) => s.def.function.name).join(", ");
+  const now = new Date();
+  const today = now.toLocaleString(undefined, {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
   return [
-    `You run "${record.name}" inside Private Pilot's sandbox.`,
+    `You run "${record.name}" inside Private Pilot's sandbox. Right now it is ${today}.`,
     `The job: ${record.sentence}`,
     `Steps: ${record.steps.join(" → ")}`,
     inputs ? `Given values: ${inputs}` : "",
-    `Folders and files you may touch: ${roots}. Websites you may fetch: ${sources}.`,
+    `Folders and files you may touch: ${roots}. Websites you may fetch: ${sources}. Apps you may look into: ${apps}${appTools ? ` (tools: ${appTools})` : ""}.`,
+    specs.length > 0
+      ? "App tools return rows of real data from this computer — quote them; never fetch mail or music through URLs. Ids like m1 come from a listing in THIS run — never make one up, and in your final answer name messages by sender and subject, never by id. A draft is saved for the person to send; you never send."
+      : "",
     "You are in a loop and can make multiple tool calls before answering. Call exactly one tool per turn.",
     "If the job is to draft, send, or email a message: your final answer IS the message — a subject line, then the body, nothing else. The app shows a Send button; you never send anything yourself and must not say so.",
     "If a fetch is refused, empty, or rate-limited: NEVER invent or guess a value, never output 0 as a stand-in. Say you couldn't read it and end with OUTPUTS: (none).",
@@ -136,9 +179,33 @@ function systemPrompt(record: AutomationRecord, inputValues: Record<string, stri
     "  turn 1 → read_file {\"path\": \"~/Downloads/broken.pdf\"}",
     "  tool says: Refused broken.pdf — it isn't a text format this tool can read.",
     "  turn 2 → final answer: \"Couldn't read broken.pdf, so I stopped rather than guess. OUTPUTS: (none)\"",
+    ...(specs.length > 0
+      ? [
+          "Example session D — job: the unread mail that needs me first:",
+          "  turn 1 → outlook_mail_recent {\"since_hours\": 24, \"unread_only\": true, \"limit\": 20}",
+          "  turn 2 → outlook_mail_read {\"id\": \"<an id from the listing>\"}",
+          "  turn 3 → final answer: \"5 unread since yesterday; the two that need you: … OUTPUTS: how_many=5\"",
+          "Example session E — job: what's playing:",
+          "  turn 1 → spotify_now_playing {}",
+          "  turn 2 → final answer: \"Spotify is playing \\\"…\\\" by … (paused). OUTPUTS: title=…\"",
+        ]
+      : []),
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// Connector args are validated + coerced before anything runs; a bad call
+// goes back to the model as a plain sentence and costs a turn, never a crash.
+function argError(spec: ToolSpec, issues: { path: PropertyKey[]; message: string }[]): string {
+  const what = issues
+    .slice(0, 3)
+    .map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`)
+    .join("; ");
+  const props = Object.keys(
+    (spec.def.function.parameters as { properties?: Record<string, unknown> }).properties ?? {}
+  );
+  return `That call to ${spec.def.function.name} needs fixing — ${what}. Its fields are: ${props.join(", ") || "(none)"}.`;
 }
 
 async function listSandboxFiles(sandbox: Sandbox, folderDisplay: string): Promise<string> {
@@ -161,11 +228,12 @@ export async function runToolLoop(
   contextNote?: string
 ): Promise<LoopOutcome> {
   const startedAt = Date.now();
+  const bound = bindTools(record, sandbox);
   const messages: ChatMessage[] = [
     {
       role: "system",
       content:
-        systemPrompt(record, inputValues) +
+        systemPrompt(record, inputValues, bound.specs) +
         (contextNote
           ? `\nContext: ${contextNote} Any condition in the job's own wording has ALREADY been decided — do not re-check it, just do the job.`
           : ""),
@@ -181,9 +249,18 @@ export async function runToolLoop(
     refusals: [],
     logLines: [],
     stalled: false,
+    heldBack: null,
+    handoffs: [],
+    appsRead: 0,
   };
   let filesRead = 0;
   let filesWritten = 0;
+  const toolCtx: ToolContext = {
+    runNote: (line) => onEvent({ text: `Tool loop — ${line}` }),
+    memory: new Map<string, unknown>([["inputs.values", Object.values(inputValues)]]),
+  };
+  const specByName = new Map(bound.specs.map((s) => [s.def.function.name, s]));
+  const boundNames = bound.defs.map((d) => d.function.name).join(", ");
 
   for (let turn = 1; turn <= MAX_TURNS; turn++) {
     if (Date.now() - startedAt > STALL_MS) {
@@ -212,7 +289,7 @@ export async function runToolLoop(
     const res = await chat({
       model,
       messages,
-      tools: TOOLS, // NO format — never both
+      tools: bound.defs, // NO format — never both
       options: { num_ctx: NUM_CTX_TOOLS, temperature: 0.6, top_p: 0.95, top_k: 20 },
       think: false, // thinking models otherwise spend whole turns saying nothing
     });
@@ -314,8 +391,33 @@ export async function runToolLoop(
           result = f.ok
             ? `${f.text}\n---\n${f.logLine}\nThe job remains: ${record.sentence}`
             : f.text;
+        } else if (specByName.has(name)) {
+          const spec = specByName.get(name)!;
+          const parsed = spec.params.safeParse(args);
+          if (!parsed.success) {
+            result = argError(spec, parsed.error.issues);
+            outcome.logLines.push(`${name}: the model's arguments didn't fit — asked it to fix them.`);
+          } else {
+            const r = await spec.run(parsed.data as Record<string, unknown>, toolCtx);
+            outcome.logLines.push(r.logLine);
+            if (r.ok) {
+              outcome.appsRead++;
+              if (r.corpusText) outcome.corpus += `\n\n=== ${name} ===\n${r.corpusText}`;
+              if (r.handoff) outcome.handoffs.push(r.handoff);
+              result = `${r.text}\n---\n${r.logLine}\nThe job remains: ${record.sentence}`;
+            } else if (r.family === "on_purpose") {
+              outcome.refusals.push(r.text);
+              result = r.text;
+            } else {
+              // needs_you / broke from an app: stop here, held back. The
+              // model never answers from partial app data.
+              outcome.heldBack = r.text;
+              outcome.answer = "";
+              return outcome;
+            }
+          }
         } else {
-          result = `There is no tool named ${name}. The tools are list_files, read_file, write_file, fetch_page, read_page.`;
+          result = `There is no tool named ${name}. The tools are ${boundNames}.`;
         }
       } catch (e) {
         result = `The tool broke: ${String(e)}`;

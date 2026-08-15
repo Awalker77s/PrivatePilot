@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { getAutomation, getRun } from "../storage/stores";
 import { useStoreVersion } from "../storage/useStore";
-import type { StageLog } from "../storage/types";
+import type { RunHandoff, StageLog } from "../storage/types";
 import { elapsedShort } from "./fmt";
 import { DiffCard } from "./DiffCard";
 import { keepRun, putBackRun, sandboxFor } from "../runner/run";
@@ -18,12 +18,41 @@ export function SendDraftButton({
   category,
   name,
 }: {
-  run: { automationId: string; answer: string | null; status: string };
+  run: { automationId: string; answer: string | null; status: string; handoffs?: RunHandoff[] };
   category?: string; // for unsaved drafts the record isn't in the store yet
   name?: string;
 }) {
   const auto = getAutomation(run.automationId);
   const cat = category ?? auto?.category;
+  // A draft already saved in Outlook is the stronger handoff: show it with
+  // its recipient and subject so the person sees exactly what waits.
+  if (run.handoffs && run.handoffs.length > 0) {
+    return (
+      <div className="built-actions" style={{ flexWrap: "wrap" }}>
+        {run.handoffs.map((h) => (
+          <div key={h.ref} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={async () => {
+                const { openDraft } = await import("../connectors/outlook");
+                try {
+                  await openDraft(h.ref);
+                } catch {
+                  // Outlook didn't answer — the draft still sits in Drafts.
+                }
+              }}
+              data-testid="open-draft"
+            >
+              {h.label}
+            </button>
+            <span className="caption">
+              to {h.to || "(no recipient)"} · "{h.subject}" — {h.caption}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (cat !== "Email" || !run.answer || run.status === "broke") return null;
   const body = run.answer.slice(0, 1500);
   const href = `mailto:?subject=${encodeURIComponent(name ?? auto?.name ?? "From Private Pilot")}&body=${encodeURIComponent(body)}`;

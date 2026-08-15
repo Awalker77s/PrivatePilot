@@ -43,6 +43,9 @@ export interface AutomationRecord {
   files: { reads: string[]; writes: string[] };
   formats: Record<string, string>; // resolved at compile from the catalog, never guessed at runtime
   sources: string[]; // the ONLY sites it may fetch — a fence, not a suggestion
+  // The ONLY apps it may look into (connector ids like "outlook", "spotify",
+  // "computer") — the same kind of fence as sources. Absent on old records.
+  apps?: string[];
   delivers: "answer" | "files";
   schedule: Schedule;
   model: string;
@@ -123,6 +126,18 @@ export interface RunRecord {
   didNotDo: string[]; // "What I did not do" — refused hosts, skipped hops, sandbox-only
   diff: RunDiff | null;
   answer: string | null; // delivered answer text (delivers: "answer")
+  // Things the run left waiting for the person's own hand — a draft saved
+  // in Outlook they press Send on. Rendered as buttons; never auto-acted.
+  handoffs?: RunHandoff[];
+}
+
+export interface RunHandoff {
+  kind: "outlook_draft";
+  label: string; // "Open the draft in Outlook"
+  caption: string; // "saved in your Drafts folder — you press Send there"
+  ref: string; // opaque id the connector can open (EntryID)
+  to: string;
+  subject: string;
 }
 
 export interface DiffEntry {

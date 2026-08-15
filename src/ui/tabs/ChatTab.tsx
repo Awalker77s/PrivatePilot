@@ -654,6 +654,14 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
                     {auto ? `${auto.name} — ` : ""}
                     {run.summary}
                   </div>
+                ) : run.status === "needs_you" && !run.diff ? (
+                  // An app needs the person (allow / connect) — amber, not
+                  // a green answer.
+                  <div className="run-answer" style={{ color: "var(--amber)" }}>
+                    <span className="dot dot-amber" />
+                    {auto ? `${auto.name} — ` : ""}
+                    {run.summary}
+                  </div>
                 ) : (
                   <div className="run-answer">
                     <span className="dot dot-green" />

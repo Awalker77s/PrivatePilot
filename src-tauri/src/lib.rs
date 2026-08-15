@@ -8,6 +8,10 @@ use tauri_plugin_fs::FsExt;
 
 #[cfg(windows)]
 mod render;
+#[cfg(windows)]
+mod apps;
+#[cfg(windows)]
+mod outlook_classic;
 
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -245,7 +249,12 @@ pub fn run() {
             copy_dir,
             transcribe_wav,
             transcribe_wav_parakeet,
-            render::render_page
+            render::render_page,
+            apps::media_sessions,
+            apps::media_control,
+            apps::list_windows,
+            apps::read_window,
+            outlook_classic::outlook_classic
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

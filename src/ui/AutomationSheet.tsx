@@ -14,6 +14,7 @@ import { relTime, scheduleSentence } from "./fmt";
 import { runAutomation } from "../runner/run";
 import { seedComposer } from "./chatStore";
 import { getSettings } from "../storage/settings";
+import { connectorById } from "../connectors/registry";
 
 interface Row {
   key: string;
@@ -106,6 +107,16 @@ export function AutomationSheet({
       value: auto.sources.join(" · "),
       sub: "the only sites it may fetch — a fence, not a suggestion",
       changeSeed: `Change which websites it may fetch — right now: ${auto.sources.join(", ")}.`,
+    });
+  }
+  if ((auto.apps ?? []).length > 0) {
+    const labels = (auto.apps ?? []).map((id) => connectorById(id)?.label ?? id);
+    rows.push({
+      key: "apps",
+      label: "Looks into",
+      value: labels.join(" · "),
+      sub: "the only apps on this computer it may read — a fence; nothing sends itself",
+      changeSeed: `Change which apps it may look into — right now: ${labels.join(", ")}.`,
     });
   }
 

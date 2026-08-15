@@ -17,6 +17,11 @@ import { runToolLoop } from "./loop";
 import { scanDiff, applyDiff, putBack } from "./diff";
 import { parseOutputs, thoroughPass, verifyNumbers } from "./verify";
 import { holdModelInMemory, OLLAMA_DOWN_SENTENCE } from "../providers/ollama";
+import { connectorById } from "../connectors/registry";
+
+function appLabel(id: string): string {
+  return connectorById(id)?.label ?? id;
+}
 
 export interface RunOptions {
   cause: string;
@@ -59,6 +64,7 @@ export async function runAutomation(
       writes: auto.files?.writes ?? [],
     },
     sources: auto.sources ?? [],
+    apps: auto.apps ?? [],
     steps: auto.steps ?? [],
     inputs: auto.inputs ?? [],
     outputs: auto.outputs ?? [],
@@ -202,6 +208,18 @@ async function runInner(
     run.didNotDo = ["Touched no files — worked online, answered in the app"];
     line(toolsLog, "No files involved — running online.");
   }
+  if ((auto.apps ?? []).length > 0) {
+    const names = (auto.apps ?? []).map(appLabel).join(", ");
+    line(toolsLog, `Apps this run may look into: ${names}. Reading only — a draft is the most it writes; nothing sends itself.`);
+    if (getSettings().featherless.enabled) {
+      // The cloud toggle changes where app text goes — say it up front.
+      event(
+        "on_purpose",
+        "Cloud compute on",
+        `Reading ${names} with Borrow cloud compute on — what those apps show goes to the borrowed computer too.`
+      );
+    }
+  }
 
   // ---- stage 3 · tool loop ----
   let loop;
@@ -245,6 +263,22 @@ async function runInner(
     toolsLog.sentence = "Stopped after 30 minutes without finishing.";
     event("broke", "Stalled", toolsLog.sentence);
     return finish("broke", toolsLog.sentence);
+  }
+  if (loop.handoffs.length > 0) {
+    run.handoffs = loop.handoffs;
+    run.didNotDo.push("Sent nothing — the draft waits in your Drafts folder.");
+  }
+  if (loop.heldBack) {
+    // An app said "needs you" or broke mid-run: nothing half-read gets an
+    // answer. Held back with the app's own sentence; the pin says what to do.
+    toolsLog.status = "held";
+    toolsLog.finishedAt = Date.now();
+    toolsLog.sentence = loop.heldBack;
+    const family = /Settings|Allow|connect|sign-in|permission/i.test(loop.heldBack)
+      ? "needs_you"
+      : "broke";
+    event(family, "An app stopped the run", loop.heldBack);
+    return finish(family === "needs_you" ? "needs_you" : "held", loop.heldBack);
   }
   if (!loop.answer) {
     toolsLog.status = "broke";
@@ -320,15 +354,18 @@ async function runInner(
   }
   verifyLog.finishedAt = Date.now();
 
-  // A run that reached none of its sources delivered nothing — a purposeful
-  // stop, never a green checkmark that earns Save.
+  // A run that reached none of its sources or apps delivered nothing — a
+  // purposeful stop, never a green checkmark that earns Save.
   if (
     auto.delivers === "answer" &&
-    auto.sources.length > 0 &&
-    loop.corpus.trim().length === 0
+    (auto.sources.length > 0 || (auto.apps ?? []).length > 0) &&
+    loop.corpus.trim().length === 0 &&
+    loop.appsRead === 0
   ) {
     const sentence =
-      "Held back — it couldn't read anything from its sources, so there's nothing real to answer with.";
+      (auto.apps ?? []).length > 0 && auto.sources.length === 0
+        ? "Held back — it couldn't read anything from its apps, so there's nothing real to answer with."
+        : "Held back — it couldn't read anything from its sources, so there's nothing real to answer with.";
     event("on_purpose", "Nothing fetched", sentence);
     return finish("held", sentence);
   }

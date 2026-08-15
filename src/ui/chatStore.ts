@@ -927,8 +927,9 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
       if (run.status === "broke") {
         patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
         push({ kind: "note", tone: "red", text: run.summary ?? "Broke." });
-      } else if (run.status === "held") {
-        // Nothing real happened — the watched run didn't earn Save.
+      } else if (run.status === "held" || (run.status === "needs_you" && !run.diff)) {
+        // Nothing real happened — the watched run didn't earn Save. (A
+        // needs_you WITH a diff is different: files changed, Keep waits.)
         patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
         push({ kind: "note", tone: "amber", text: run.summary ?? "Held back." });
       } else {

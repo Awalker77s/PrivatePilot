@@ -12,9 +12,11 @@ import { XIcon, PlayIcon, ChevronRight } from "./icons";
 import { friendlyName } from "../providers/ollama";
 import { relTime, scheduleSentence } from "./fmt";
 import { runAutomation } from "../runner/run";
-import { seedComposer } from "./chatStore";
+import { openAutomationStudio, seedComposer } from "./chatStore";
 import { getSettings } from "../storage/settings";
 import { connectorById } from "../connectors/registry";
+import { approveRevision, isRevisionApproved, revokeRevision } from "../storage/permissions";
+import { normalizeAutomation, permissionSummary } from "../storage/revisions";
 
 interface Row {
   key: string;
@@ -37,6 +39,7 @@ export function AutomationSheet({
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
+  const [, refreshPermissions] = useState(0);
   // Fill-ins: declared inputs are asked at run time, example shown.
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const { runs, chains } = getState();
@@ -44,6 +47,9 @@ export function AutomationSheet({
     (r) => r.automationId === auto.id && r.cause !== "you described a task"
   );
   const cloud = getSettings().featherless.enabled;
+  const normalized = normalizeAutomation(auto);
+  const approved = isRevisionApproved(normalized);
+  const fullAccess = getSettings().permissions?.fullAccess ?? false;
 
   const memberChains = chains.records.filter((c) =>
     c.links.some((l) => l.from === auto.id || l.to === auto.id)
@@ -138,7 +144,9 @@ export function AutomationSheet({
       key: `chain-${chain.id}`,
       label: "Part of",
       value: `${chain.name} — step ${idx + 1} of ${order.length} ›`,
-      sub: null,
+      sub: chain.components
+        ? `This sequence pins revision ${chain.components.find((component) => component.automationId === auto.id)?.revisionNumber ?? "?"}.`
+        : "Legacy sequence — it follows the current automation version.",
       changeSeed: null,
     });
   }
@@ -172,7 +180,8 @@ export function AutomationSheet({
 
   function change(seed: string | null) {
     if (!seed) return;
-    seedComposer(`About "${auto.name}": ${seed} `);
+    openAutomationStudio(auto.id);
+    seedComposer(`${seed} `);
     close();
     goToChat();
   }
@@ -223,8 +232,10 @@ export function AutomationSheet({
           <button
             className="chip effort-toggle"
             onClick={async () => {
-              auto.effort = auto.effort === "quick" ? "thorough" : "quick";
-              await saveAutomation({ ...auto });
+              await saveAutomation({
+                ...auto,
+                effort: auto.effort === "quick" ? "thorough" : "quick",
+              });
             }}
             title="Thorough re-reads its own answer against the source"
           >
@@ -244,6 +255,22 @@ export function AutomationSheet({
             onClick={() => run("you pressed Test run")}
           >
             Test run
+          </button>
+          <button
+            className={`btn btn-sm ${approved ? "btn-ghost" : "btn-primary"}`}
+            disabled={fullAccess}
+            title={`${permissionSummary(normalized)}. Approval is pinned to revision ${normalized.revision!.number}.`}
+            onClick={async () => {
+              if (approved) await revokeRevision(normalized);
+              else await approveRevision(normalized);
+              refreshPermissions((value) => value + 1);
+            }}
+          >
+            {fullAccess
+              ? "Covered by full access"
+              : approved
+                ? "Revoke approval"
+                : `Approve v${normalized.revision!.number}`}
           </button>
         </div>
         {auto.inputs.length > 0 && (

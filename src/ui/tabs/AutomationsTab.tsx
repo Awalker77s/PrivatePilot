@@ -4,7 +4,12 @@
 import React, { useState } from "react";
 import type { TabId } from "../App";
 import { SearchIcon, PlayIcon, LinkIcon, ArrowRightIcon } from "../icons";
-import { getState, deleteAutomation, saveAutomation } from "../../storage/stores";
+import {
+  getAutomationRevision,
+  getState,
+  deleteAutomation,
+  saveAutomation,
+} from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
 import type { AutomationRecord, ChainRecord } from "../../storage/types";
 import { CategoryGlyph } from "../glyphs";
@@ -14,6 +19,13 @@ import { runAutomation } from "../../runner/run";
 import { hostnameOf } from "../../runner/fetchPage";
 import { chainOrder, latestExecution, runChain } from "../../dispatcher";
 import { StarterGallery } from "../StarterGallery";
+import {
+  approveWorkflowRevision,
+  isWorkflowApproved,
+  revokeWorkflowRevision,
+} from "../../storage/permissions";
+import { normalizeWorkflow, permissionManifestSummary } from "../../storage/revisions";
+import { getSettings } from "../../storage/settings";
 
 export function AutomationsTab({ goTo }: { goTo: (t: TabId) => void }) {
   useStoreVersion();
@@ -71,19 +83,19 @@ export function AutomationsTab({ goTo }: { goTo: (t: TabId) => void }) {
             />
           ))}
           <div className="tile-grid" data-testid="tile-grid">
-            {records
-              .filter(
-                (a) =>
-                  !getState().chains.records.some((c) =>
-                    chainOrder(c).includes(a.id)
-                  )
-              )
-              .map((a) => (
+            {records.map((a) => (
                 <Tile
                   key={a.id}
                   auto={a}
                   running={runningIds.has(a.id)}
                   open={() => setSheetFor(a.id)}
+                  workflowNames={getState().chains.records
+                    .filter((chain) =>
+                      (chain.components ?? []).some(
+                        (component) => component.automationId === a.id
+                      )
+                    )
+                    .map((chain) => chain.name)}
                 />
               ))}
           </div>
@@ -105,10 +117,12 @@ function Tile({
   auto,
   running,
   open,
+  workflowNames,
 }: {
   auto: AutomationRecord;
   running: boolean;
   open: () => void;
+  workflowNames: string[];
 }) {
   const [menu, setMenu] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -202,10 +216,13 @@ function Tile({
           ) : (
             <>
               <div className="caption" style={{ padding: "4px 10px" }}>
-                Delete "{auto.name}"?
+                {workflowNames.length
+                  ? `Used by ${workflowNames.join(", ")} — remove it from those sequences first.`
+                  : `Delete "${auto.name}"?`}
               </div>
               <button
                 className="tile-menu-item tile-menu-danger"
+                disabled={workflowNames.length > 0}
                 onClick={() => deleteAutomation(auto.id)}
               >
                 Delete it
@@ -238,10 +255,21 @@ function ChainStrip({
 }) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
+  const [, refreshPermissions] = useState(0);
+  const normalized = normalizeWorkflow(chain);
+  const approved = isWorkflowApproved(normalized);
+  const fullAccess = getSettings().permissions?.fullAccess ?? false;
   const { automations } = getState();
   const order = chainOrder(chain);
   const members = order
-    .map((id) => automations.records.find((a) => a.id === id))
+    .map((id) => {
+      const component = chain.components?.find(
+        (candidate) => candidate.automationId === id
+      );
+      return component
+        ? getAutomationRevision(component.automationId, component.revisionId)
+        : automations.records.find((a) => a.id === id);
+    })
     .filter((a): a is AutomationRecord => !!a);
   if (members.length === 0) return null;
 
@@ -270,6 +298,7 @@ function ChainStrip({
       <div className="strip-bar">
         <LinkIcon size={13} />
         <b>{chain.name}</b>
+        <span className="chip chip-gray">v{normalized.revision!.number}</span>
         <span className="chip chip-gray">{members.length} steps</span>
         {first.schedule.trigger !== "manual" && (
           <span className="chip chip-gray">
@@ -292,6 +321,26 @@ function ChainStrip({
             </>
           )}
         </span>
+        <button
+          className={`btn btn-sm ${approved ? "btn-ghost" : "btn-primary"}`}
+          disabled={fullAccess}
+          title={
+            normalized.permissions
+              ? permissionManifestSummary(normalized.permissions)
+              : "Approve this exact sequence revision"
+          }
+          onClick={async () => {
+            if (approved) await revokeWorkflowRevision(normalized);
+            else await approveWorkflowRevision(normalized);
+            refreshPermissions((value) => value + 1);
+          }}
+        >
+          {fullAccess
+            ? "Covered by full access"
+            : approved
+              ? "Revoke approval"
+              : "Approve sequence"}
+        </button>
         <button
           className="btn btn-primary btn-sm"
           disabled={running}

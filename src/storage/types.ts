@@ -25,6 +25,48 @@ export interface AutomationOutput {
   name: string;
 }
 
+// The runner team can extend these manifests with command/application actions
+// without changing how the library, approvals, or workflows identify a
+// revision. Paths and hosts are the capabilities the current runner already
+// understands; commands/applications are deliberately data-only for now.
+export interface PermissionManifest {
+  filesystem: {
+    mode: "none" | "scoped" | "full";
+    reads: string[];
+    writes: string[];
+  };
+  network: { hosts: string[] };
+  commands: {
+    executable: string;
+    arguments: string[];
+    workingDirectories: string[];
+  }[];
+  applications: { applicationId: string; actions: string[] }[];
+  capabilities: string[];
+}
+
+export interface AutomationRevisionMeta {
+  id: string;
+  number: number;
+  contentHash: string;
+  status: "draft" | "tested" | "published";
+  createdAt: number;
+}
+
+export interface WorkflowRevisionMeta {
+  id: string;
+  number: number;
+  contentHash: string;
+  status: "draft" | "tested" | "published";
+  createdAt: number;
+}
+
+export interface AutomationLibraryMeta {
+  description: string;
+  tags: string[];
+  archivedAt: number | null;
+}
+
 export type RunStatus =
   | "ok" // Ran
   | "broke" // Broke
@@ -58,6 +100,11 @@ export interface AutomationRecord {
   model: string;
   effort: "quick" | "thorough";
   compiledBy: string; // the model passport — re-runs under a different brain say so
+  // Optional on disk for backwards compatibility. loadAll normalizes old
+  // records before a surface sees them.
+  revision?: AutomationRevisionMeta;
+  library?: AutomationLibraryMeta;
+  permissions?: PermissionManifest;
   // Provenance — app-written after validation, never sampled from the model.
   origin?: {
     kind: "told" | "watched" | "edited";
@@ -91,6 +138,22 @@ export interface ChainRecord {
   name: string;
   links: ChainLink[];
   timeoutMinutes: number;
+  // A workflow pins the exact member revisions it was tested with. Legacy
+  // chains are upgraded from their links at load time.
+  components?: {
+    automationId: string;
+    revisionId: string;
+    revisionNumber: number;
+  }[];
+  permissions?: PermissionManifest;
+  revision?: WorkflowRevisionMeta;
+  createdAt?: number;
+}
+
+export interface AutomationReference {
+  automationId: string;
+  revisionId: string;
+  name: string;
 }
 
 // ---- run records (append-only) ----

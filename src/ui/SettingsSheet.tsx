@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { XIcon } from "./icons";
 import { runStorageSelfTest, SelfTestResult } from "../storage/selftest";
 import { useStore } from "../storage/useStore";
@@ -19,9 +21,17 @@ import {
 import { getSettings, updateSettings } from "../storage/settings";
 import { ensureParakeet, parakeetReady } from "../watchme/transcribe";
 import { ConnectedAppsCard, HeavyTasksCard } from "./ConnectedAppsCard";
+import {
+  permissionCounts,
+  revokeAllRevisionApprovals,
+  revokeRevision,
+  revokeWorkflowRevision,
+  setFullAccess,
+} from "../storage/permissions";
+import type { AutomationRecord, ChainRecord } from "../storage/types";
 
 export function SettingsSheet({ close }: { close: () => void }) {
-  const { loadError } = useStore();
+  const { loadError, automations, chains } = useStore();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<SelfTestResult | null>(null);
   const [doctor, setDoctor] = useState<DoctorReport | null>(null);
@@ -156,6 +166,11 @@ export function SettingsSheet({ close }: { close: () => void }) {
         <ListeningCard />
 
         <BorrowCloudCard />
+
+        <PermissionsCard
+          records={automations.records}
+          workflows={chains.records}
+        />
 
         <div className="settings-card">
           <div className="settings-card-title">
@@ -307,6 +322,153 @@ function ModelChooser({
       {extras.map((m) => (
         <Row key={m.id} value={m.id} title={friendlyName(m.id)} sub="Also installed on this computer." />
       ))}
+    </div>
+  );
+}
+
+function PermissionsCard({
+  records,
+  workflows,
+}: {
+  records: AutomationRecord[];
+  workflows: ChainRecord[];
+}) {
+  const [, refresh] = useState(0);
+  const counts = permissionCounts();
+  const settings = getSettings().permissions;
+  const approved = records.filter((record) => {
+    const revision = record.revision;
+    return !!revision && !!settings?.approvedRevisions[revision.id];
+  });
+  const approvedWorkflows = workflows.filter((workflow) => {
+    const revision = workflow.revision;
+    return !!revision && !!settings?.approvedWorkflowRevisions?.[revision.id];
+  });
+
+  return (
+    <div className="settings-card" data-testid="permission-settings">
+      <div className="settings-card-title">
+        Permissions
+        <span className={`chip ${counts.fullAccess ? "chip-red" : "chip-gray"}`}>
+          {counts.fullAccess ? "Full access" : "Ask as needed"}
+        </span>
+      </div>
+      <div className="caption">
+        Approvals are pinned to an exact automation revision. Changing what it
+        touches makes it ask again.
+      </div>
+      <button
+        className={`btn btn-sm ${counts.fullAccess ? "btn-danger" : "btn-ghost"}`}
+        onClick={async () => {
+          if (
+            !counts.fullAccess &&
+            !window.confirm(
+              "Full access lets approved future terminal and app actions run without per-revision prompts. Enable it?"
+            )
+          )
+            return;
+          await setFullAccess(!counts.fullAccess);
+          refresh((value) => value + 1);
+        }}
+      >
+        {counts.fullAccess ? "Turn off full access" : "Enable full access…"}
+      </button>
+      {counts.fullAccess && (
+        <div className="status-line" style={{ color: "var(--red)" }}>
+          Advanced: future app and terminal actions will not ask per revision.
+        </div>
+      )}
+      <div className="permission-ledger">
+        <div className="caption">
+          {counts.revisions} approved revision{counts.revisions === 1 ? "" : "s"} · {getSettings().pickedFolders.length} picked folder{getSettings().pickedFolders.length === 1 ? "" : "s"}
+        </div>
+        {approved.map((record) => (
+          <div className="permission-ledger-row" key={record.id}>
+            <span>{record.name} · v{record.revision?.number}</span>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={async () => {
+                await revokeRevision(record);
+                refresh((value) => value + 1);
+              }}
+            >
+              Revoke
+            </button>
+          </div>
+        ))}
+        {approvedWorkflows.map((workflow) => (
+          <div className="permission-ledger-row" key={workflow.id}>
+            <span>{workflow.name} · sequence v{workflow.revision?.number}</span>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={async () => {
+                await revokeWorkflowRevision(workflow);
+                refresh((value) => value + 1);
+              }}
+            >
+              Revoke
+            </button>
+          </div>
+        ))}
+        {getSettings().pickedFolders.map((folder) => (
+          <div className="permission-ledger-row" key={folder}>
+            <span title={folder}>{folder.split(/[\\/]/).filter(Boolean).pop() ?? folder}</span>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={async () => {
+                await updateSettings((appSettings) => {
+                  appSettings.pickedFolders = appSettings.pickedFolders.filter(
+                    (candidate) => candidate !== folder
+                  );
+                  if (appSettings.permissions) {
+                    appSettings.permissions.approvedDirectories =
+                      appSettings.permissions.approvedDirectories.filter(
+                        (candidate) => candidate !== folder
+                      );
+                  }
+                });
+                refresh((value) => value + 1);
+              }}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <button
+          className="btn btn-sm btn-ghost"
+          onClick={async () => {
+            const picked = await openDialog({ directory: true, multiple: false });
+            if (!picked || typeof picked !== "string") return;
+            await invoke("allow_folder", { path: picked });
+            await updateSettings((appSettings) => {
+              if (!appSettings.pickedFolders.includes(picked))
+                appSettings.pickedFolders.push(picked);
+              appSettings.permissions ??= {
+                fullAccess: false,
+                approvedRevisions: {},
+                approvedWorkflowRevisions: {},
+                approvedDirectories: [],
+              };
+              if (!appSettings.permissions.approvedDirectories.includes(picked))
+                appSettings.permissions.approvedDirectories.push(picked);
+            });
+            refresh((value) => value + 1);
+          }}
+        >
+          Add approved folder…
+        </button>
+        {counts.revisions > 0 && (
+          <button
+            className="btn btn-sm btn-ghost"
+            onClick={async () => {
+              await revokeAllRevisionApprovals();
+              refresh((value) => value + 1);
+            }}
+          >
+            Revoke all automation approvals
+          </button>
+        )}
+      </div>
     </div>
   );
 }

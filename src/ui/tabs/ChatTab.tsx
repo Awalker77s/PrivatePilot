@@ -11,8 +11,11 @@ import {
   consumeComposerSeed,
   discardBuilt,
   keepBuilt,
+  keepEdit,
+  notNowBuilt,
   pickOption,
   putBackBuilt,
+  revertEdit,
   saveBuilt,
   sendText,
   subscribeChat,
@@ -116,6 +119,8 @@ function ChatItemView({ item }: { item: ChatItem }) {
       return <QuestionCard item={item} />;
     case "built":
       return <BuiltCard item={item} />;
+    case "edit":
+      return <EditCard item={item} />;
     case "note":
       return (
         <div className={`note-card note-${item.tone}`} data-testid="note">
@@ -123,6 +128,49 @@ function ChatItemView({ item }: { item: ChatItem }) {
         </div>
       );
   }
+}
+
+// The before→after card: field-level diffs against the current version,
+// Keep it / Put it back.
+function EditCard({ item }: { item: ChatItem & { kind: "edit" } }) {
+  const { result, state } = item;
+  return (
+    <div className="built-card card" data-testid="edit-card">
+      <div className="caption">Changing "{result.before.name}":</div>
+      {result.changed.map((c) => (
+        <div key={c.key} className="edit-row">
+          <span className="sheet-row-label">{c.key === "schedule" ? "When" : c.key}</span>
+          <span className="edit-from">{c.from}</span>
+          <span className="edit-arrow">→</span>
+          <span className="edit-to">{c.to}</span>
+        </div>
+      ))}
+      {state === "fresh" && (
+        <div className="built-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => keepEdit(item.id)}
+            data-testid="keep-edit"
+          >
+            Keep it
+          </button>
+          <button className="btn btn-ghost" data-testid="drop-edit">
+            Put it back
+          </button>
+        </div>
+      )}
+      {state === "kept" && (
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => revertEdit(item.id)}
+          data-testid="revert-edit"
+        >
+          Put it back the way it was ›
+        </button>
+      )}
+      {state === "reverted" && <div className="caption">Put back.</div>}
+    </div>
+  );
 }
 
 function ProgressCard({
@@ -185,8 +233,19 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
   useStoreVersion();
   const { result, state } = item;
   const discarded = state === "discarded";
-  const run = item.runId ? getRun(item.runId) : undefined;
   const singleAuto = result.automations.length === 1;
+  const stepRunIds = item.chainRunIds ?? (item.runId ? [item.runId] : []);
+  const stepRuns = stepRunIds
+    .map((id) => getRun(id))
+    .filter((r): r is NonNullable<typeof r> => !!r);
+  // Fill-ins: declared inputs are asked at run time, example shown.
+  const askInputs =
+    singleAuto && result.automations[0].inputs.length > 0 && !result.chain;
+  const [inputValues, setInputValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      result.automations[0]?.inputs.map((i) => [i.name, ""]) ?? []
+    )
+  );
   return (
     <div
       className={`built-card card${discarded ? " discarded" : ""}`}
@@ -236,41 +295,74 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
         </div>
       )}
 
-      {run && state !== "running" && (
+      {stepRuns.length > 0 && state !== "running" && (
         <div className="run-result" data-testid="run-result">
-          {run.status === "broke" ? (
-            <div className="run-answer" style={{ color: "var(--red)" }}>
-              <span className="dot dot-red" />
-              {run.summary}
-            </div>
-          ) : (
-            run.answer && (
-              <div className="run-answer">
-                <span className="dot dot-green" />
-                {run.answer}
+          {stepRuns.map((run, i) => {
+            const auto = result.automations.find(
+              (a) => a.id === run.automationId
+            );
+            return (
+              <div key={run.id} className="step-result">
+                {run.status === "broke" ? (
+                  <div className="run-answer" style={{ color: "var(--red)" }}>
+                    <span className="dot dot-red" />
+                    {auto ? `${auto.name} — ` : ""}
+                    {run.summary}
+                  </div>
+                ) : run.status === "held" ? (
+                  <div className="run-answer" style={{ color: "var(--muted)" }}>
+                    <span className="dot dot-gray" />
+                    {auto ? `${auto.name} — ` : ""}
+                    {run.summary}
+                  </div>
+                ) : (
+                  <div className="run-answer">
+                    <span className="dot dot-green" />
+                    {stepRuns.length > 1 && auto ? <b>{auto.name}&nbsp;— </b> : null}
+                    {run.answer ?? run.summary}
+                  </div>
+                )}
+                {run.baton && i < stepRuns.length - 1 && (
+                  <div className="baton-line" data-testid="baton">
+                    Handing off:{" "}
+                    {Object.entries(run.baton)
+                      .map(([k, v]) => `${k} = ${v}`)
+                      .join(" · ")}
+                  </div>
+                )}
+                {run.diff && run.diff.entries.length > 0 && (
+                  <DiffCard
+                    diff={run.diff}
+                    keepSentence={item.keepSentence}
+                    onToggle={(rel) => toggleDiffEntry(item.id, rel, run.id)}
+                    onKeep={() => keepBuilt(item.id, run.id)}
+                    onPutBack={() => putBackBuilt(item.id, run.id)}
+                    onNotNow={() => notNowBuilt(item.id, run.id)}
+                  />
+                )}
               </div>
-            )
-          )}
-          {run.baton && (
-            <div className="baton-line" data-testid="baton">
-              Handing off:{" "}
-              {Object.entries(run.baton)
-                .map(([k, v]) => `${k} = ${v}`)
-                .join(" · ")}
-            </div>
-          )}
-          {run.diff && run.diff.entries.length > 0 && (
-            <DiffCard
-              diff={run.diff}
-              keepSentence={item.keepSentence}
-              onToggle={(rel) => toggleDiffEntry(item.id, rel)}
-              onKeep={() => keepBuilt(item.id)}
-              onPutBack={() => putBackBuilt(item.id)}
-            />
-          )}
+            );
+          })}
           <div className="caption">
-            {run.didNotDo.join(" · ")}
+            {[...new Set(stepRuns.flatMap((r) => r.didNotDo))].join(" · ")}
           </div>
+        </div>
+      )}
+
+      {askInputs && state !== "saved" && state !== "ran" && (
+        <div className="fillins">
+          {result.automations[0].inputs.map((inp) => (
+            <label key={inp.name} className="fillin">
+              <span className="caption">{inp.label}</span>
+              <input
+                placeholder={`e.g. ${inp.example}`}
+                value={inputValues[inp.name] ?? ""}
+                onChange={(e) =>
+                  setInputValues((v) => ({ ...v, [inp.name]: e.target.value }))
+                }
+              />
+            </label>
+          ))}
         </div>
       )}
 
@@ -279,13 +371,17 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
           {state !== "ran" && state !== "saved" && (
             <button
               className="btn btn-primary"
-              disabled={!singleAuto || state === "running"}
-              title={
-                singleAuto
-                  ? undefined
-                  : "Chained drafts run together once chains land"
+              disabled={state === "running"}
+              onClick={() =>
+                tryOnce(
+                  item.id,
+                  askInputs
+                    ? Object.fromEntries(
+                        Object.entries(inputValues).filter(([, v]) => v.trim())
+                      )
+                    : undefined
+                )
               }
-              onClick={() => tryOnce(item.id)}
               data-testid="try-once"
             >
               {state === "running" ? "Running…" : "Try it once"}
@@ -302,7 +398,13 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
             onClick={() => saveBuilt(item.id)}
             data-testid="save-built"
           >
-            {state === "saved" ? "Saved" : "Save"}
+            {state === "saved"
+              ? "Saved"
+              : result.automations.length === 2
+                ? "Save both"
+                : result.automations.length > 2
+                  ? "Save all"
+                  : "Save"}
           </button>
           {state !== "saved" && (
             <button

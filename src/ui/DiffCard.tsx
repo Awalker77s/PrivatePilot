@@ -11,6 +11,7 @@ export function DiffCard({
   onToggle,
   onKeep,
   onPutBack,
+  onNotNow,
   keepSentence,
 }: {
   diff: RunDiff;
@@ -18,6 +19,7 @@ export function DiffCard({
   onToggle: (relPath: string) => void;
   onKeep: () => void;
   onPutBack: () => void;
+  onNotNow?: () => void;
   keepSentence?: string | null;
 }) {
   const [openFile, setOpenFile] = useState<string | null>(
@@ -91,7 +93,12 @@ export function DiffCard({
           >
             Keep
           </button>
-          <button className="btn btn-ghost" data-testid="not-now" disabled={disabled}>
+          <button
+            className="btn btn-ghost"
+            data-testid="not-now"
+            disabled={disabled}
+            onClick={onNotNow}
+          >
             Not now
           </button>
         </div>

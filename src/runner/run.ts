@@ -23,6 +23,14 @@ export interface RunOptions {
   chainId?: string | null;
   stepIndex?: number | null;
   onProgress?: (text: string) => void;
+  viaChain?: boolean; // the chain driver handles hand-offs itself
+}
+
+// The dispatcher registers here (avoids a circular import): it runs whenever
+// any run finishes and follows chain links with plain-JS conditions.
+let runFinishedHook: ((run: RunRecord) => void) | null = null;
+export function registerRunFinishedHook(fn: (run: RunRecord) => void): void {
+  runFinishedHook = fn;
 }
 
 export interface RunHandle {
@@ -72,7 +80,9 @@ export async function runAutomation(
 
   const releaseHold = holdModelInMemory();
   try {
-    return await runInner(auto, run, opts, onProgress, anchor);
+    const result = await runInner(auto, run, opts, onProgress, anchor);
+    if (!opts.viaChain && runFinishedHook) runFinishedHook(result);
+    return result;
   } finally {
     releaseHold();
   }
@@ -130,42 +140,51 @@ async function runInner(
     return finish("broke", OLLAMA_DOWN_SENTENCE);
   }
 
-  // ---- sandbox (pre-flight + copy) ----
-  onProgress("Copying your files into the sandbox…");
+  // ---- sandbox (pre-flight + copy) — only when files are involved ----
+  const touchesFiles =
+    auto.files.reads.length > 0 || auto.files.writes.length > 0;
   const toolsLog = stage("tools");
-  let sandbox: Sandbox;
-  try {
-    const catalog = await buildCatalog();
-    sandbox = await buildSandbox(
-      runId,
-      auto.files.reads,
-      auto.files.writes,
-      catalog
+  let sandbox: Sandbox | null = null;
+  if (touchesFiles) {
+    onProgress("Copying your files into the sandbox…");
+    try {
+      const catalog = await buildCatalog();
+      sandbox = await buildSandbox(
+        runId,
+        auto.files.reads,
+        auto.files.writes,
+        catalog
+      );
+    } catch (e) {
+      const sentence =
+        e instanceof SandboxRefusal
+          ? e.sentence
+          : `Couldn't set up the sandbox — ${String(e)}`;
+      toolsLog.status = "broke";
+      toolsLog.finishedAt = Date.now();
+      toolsLog.sentence = sentence;
+      event("broke", "Folder unreadable", sentence);
+      return finish("broke", sentence);
+    }
+    sandboxes.set(runId, sandbox);
+    run.sandbox = {
+      path: runId,
+      preflightBytes: sandbox.preflightBytes,
+      preflightFiles: sandbox.preflightFiles,
+    };
+    line(
+      toolsLog,
+      `Copied ${sandbox.preflightFiles.toLocaleString()} files (${(sandbox.preflightBytes / 1e6).toFixed(1)} MB) into the sandbox.`
     );
-  } catch (e) {
-    const sentence =
-      e instanceof SandboxRefusal
-        ? e.sentence
-        : `Couldn't set up the sandbox — ${String(e)}`;
-    toolsLog.status = "broke";
-    toolsLog.finishedAt = Date.now();
-    toolsLog.sentence = sentence;
-    event("broke", "Folder unreadable", sentence);
-    return finish("broke", sentence);
-  }
-  sandboxes.set(runId, sandbox);
-  run.sandbox = {
-    path: runId,
-    preflightBytes: sandbox.preflightBytes,
-    preflightFiles: sandbox.preflightFiles,
-  };
-  line(
-    toolsLog,
-    `Copied ${sandbox.preflightFiles.toLocaleString()} files (${(sandbox.preflightBytes / 1e6).toFixed(1)} MB) into the sandbox.`
-  );
-  if (sandbox.copyNote) {
-    line(toolsLog, sandbox.copyNote);
-    run.didNotDo.push(sandbox.copyNote);
+    if (sandbox.copyNote) {
+      line(toolsLog, sandbox.copyNote);
+      run.didNotDo.push(sandbox.copyNote);
+    }
+  } else {
+    // An online automation: no files, no sandbox — the fence and the
+    // verification stages are the whole safety story.
+    run.didNotDo = ["Touched no files — worked online, answered in the app"];
+    line(toolsLog, "No files involved — running online.");
   }
 
   // ---- stage 3 · tool loop ----
@@ -279,7 +298,11 @@ async function runInner(
   }
   verifyLog.finishedAt = Date.now();
 
-  // ---- diff ----
+  // ---- diff (only when a sandbox exists) ----
+  if (!sandbox) {
+    const summary = cleanAnswer.split("\n")[0].slice(0, 140) || "Ran.";
+    return finish("ok", summary);
+  }
   onProgress("Comparing the sandbox against your real files…");
   const diff = await scanDiff(sandbox);
   run.diff = diff;

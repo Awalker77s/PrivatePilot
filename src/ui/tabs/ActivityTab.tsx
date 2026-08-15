@@ -7,9 +7,20 @@ import type { TabId } from "../App";
 import { getState } from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
 import type { RunRecord } from "../../storage/types";
-import { clockTime, dayLabel } from "../fmt";
+import { clockTime, dayLabel, relTime } from "../fmt";
 import { RunDetail } from "../RunDetail";
 import { LinkIcon } from "../icons";
+import { CategoryGlyph } from "../glyphs";
+
+// The one value worth showing big: a money amount, a number, or the first
+// line of the answer — from the record, never recomputed.
+function headlineValue(r: RunRecord): string {
+  const answer = r.answer ?? r.summary ?? "";
+  const money = answer.match(/\$[\d,]+(?:\.\d+)?/);
+  if (money) return money[0];
+  const firstLine = answer.split("\n")[0];
+  return firstLine.length > 80 ? firstLine.slice(0, 80) + "…" : firstLine;
+}
 
 export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
   useStoreVersion();
@@ -44,20 +55,78 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
     );
   }
 
-  // Day groups over the non-pinned rows.
-  const groups: { label: string; rows: RunRecord[] }[] = [];
+  // A chain run is ONE row that folds open into per-step lines: collapse
+  // consecutive runs sharing a chainId.
+  type FeedItem = { kind: "run"; run: RunRecord } | { kind: "chain"; runs: RunRecord[] };
+  const feed: FeedItem[] = [];
   for (const r of rest) {
-    const label = dayLabel(r.startedAt);
+    const last = feed[feed.length - 1];
+    if (
+      r.chainId &&
+      last?.kind === "chain" &&
+      last.runs[0].chainId === r.chainId
+    ) {
+      last.runs.push(r);
+    } else if (r.chainId) {
+      feed.push({ kind: "chain", runs: [r] });
+    } else {
+      feed.push({ kind: "run", run: r });
+    }
+  }
+
+  // Day groups over the feed.
+  const groups: { label: string; items: FeedItem[] }[] = [];
+  for (const it of feed) {
+    const at = it.kind === "run" ? it.run.startedAt : it.runs[0].startedAt;
+    const label = dayLabel(at);
     const g = groups.find((g) => g.label === label);
-    if (g) g.rows.push(r);
-    else groups.push({ label, rows: [r] });
+    if (g) g.items.push(it);
+    else groups.push({ label, items: [it] });
   }
 
   const allLocal = runs.records.every((r) => r.ranOn === "local");
   const cloudCount = runs.records.filter((r) => r.ranOn !== "local").length;
 
+  // The results shelf: the newest delivered answers, one per automation —
+  // a price, a summary, a status — read straight from run records.
+  const results: RunRecord[] = [];
+  for (const r of all) {
+    if (r.status !== "ok" || !r.answer) continue;
+    if (results.some((x) => x.automationId === r.automationId)) continue;
+    results.push(r);
+    if (results.length >= 4) break;
+  }
+
   return (
     <div className="activity" data-testid="activity">
+      {results.length > 0 && (
+        <div className="results-shelf" data-testid="results-shelf">
+          {results.map((r) => {
+            const auto = automations.records.find(
+              (a) => a.id === r.automationId
+            );
+            return (
+              <button
+                key={r.id}
+                className="result-card card"
+                onClick={() => setOpenRun(openRun === r.id ? null : r.id)}
+              >
+                <div className="result-name">
+                  {auto && <CategoryGlyph category={auto.category} size={20} />}
+                  <span>{auto?.name ?? nameOf(r)}</span>
+                  <span className="caption">{relTime(r.startedAt)}</span>
+                </div>
+                <div className="result-value">{headlineValue(r)}</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {results.some((r) => openRun === r.id) && (
+        <div className="activity-detail card" style={{ padding: "0 14px" }}>
+          <RunDetail runId={openRun!} />
+        </div>
+      )}
       {needsYou.map((r) => (
         <div key={r.id} className="pinned-card card" data-testid="pinned">
           <div className="pinned-head">
@@ -80,49 +149,170 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
         {groups.map((g) => (
           <div key={g.label}>
             <div className="caption day-label">{g.label.toUpperCase()}</div>
-            {g.rows.map((r) => (
-              <div key={r.id}>
-                <button
-                  className="activity-row"
-                  onClick={() => setOpenRun(openRun === r.id ? null : r.id)}
-                  data-testid="activity-row"
-                >
-                  <span
-                    className={`dot ${
-                      r.status === "ok"
-                        ? "dot-green"
-                        : r.status === "broke"
-                          ? "dot-red"
-                          : r.status === "needs_you"
-                            ? "dot-amber"
-                            : r.status === "running"
-                              ? "dot-gray"
-                              : "dot-gray"
-                    }`}
-                  />
-                  {r.chainId && <LinkIcon size={12} />}
-                  <span className="activity-name">{nameOf(r)}</span>
-                  <span className="activity-summary">
-                    {r.status === "running" ? "running…" : (r.summary ?? "")}
-                  </span>
-                  <span className="caption">{clockTime(r.startedAt)}</span>
-                </button>
-                {openRun === r.id && (
-                  <div className="activity-detail">
-                    <RunDetail runId={r.id} />
-                  </div>
-                )}
-              </div>
-            ))}
+            {g.items.map((it) =>
+              it.kind === "run" ? (
+                <PlainRow
+                  key={it.run.id}
+                  r={it.run}
+                  name={nameOf(it.run)}
+                  open={openRun}
+                  setOpen={setOpenRun}
+                />
+              ) : (
+                <ChainRow
+                  key={it.runs[0].id}
+                  runs={it.runs}
+                  nameOf={nameOf}
+                  open={openRun}
+                  setOpen={setOpenRun}
+                />
+              )
+            )}
           </div>
         ))}
       </div>
 
-      <div className="activity-footer caption" data-testid="activity-footer">
-        {allLocal
-          ? "✓ Everything ran on this computer"
-          : `${cloudCount} run${cloudCount === 1 ? "" : "s"} borrowed cloud compute (Featherless) — the rest ran on this computer`}
-      </div>
+      <FooterMark allLocal={allLocal} cloudCount={cloudCount} />
+    </div>
+  );
+}
+
+function statusDot(status: RunRecord["status"]): string {
+  return status === "ok"
+    ? "dot-green"
+    : status === "broke"
+      ? "dot-red"
+      : status === "needs_you"
+        ? "dot-amber"
+        : "dot-gray";
+}
+
+function PlainRow({
+  r,
+  name,
+  open,
+  setOpen,
+}: {
+  r: RunRecord;
+  name: string;
+  open: string | null;
+  setOpen: (id: string | null) => void;
+}) {
+  return (
+    <div>
+      <button
+        className="activity-row"
+        onClick={() => setOpen(open === r.id ? null : r.id)}
+        data-testid="activity-row"
+      >
+        <span className={`dot ${statusDot(r.status)}`} />
+        <span className="activity-name">{name}</span>
+        <span className="activity-summary">
+          {r.status === "running" ? "running…" : (r.summary ?? "")}
+        </span>
+        <span className="caption">{clockTime(r.startedAt)}</span>
+      </button>
+      {open === r.id && (
+        <div className="activity-detail">
+          <RunDetail runId={r.id} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One row per chain run; folds open into per-step lines, numbers inline.
+function ChainRow({
+  runs,
+  nameOf,
+  open,
+  setOpen,
+}: {
+  runs: RunRecord[];
+  nameOf: (r: RunRecord) => string;
+  open: string | null;
+  setOpen: (id: string | null) => void;
+}) {
+  const key = `chain-${runs[0].id}`;
+  const { chains } = getState();
+  const chain = chains.records.find((c) => c.id === runs[0].chainId);
+  const okCount = runs.filter((r) => r.status === "ok" || r.status === "needs_you").length;
+  const anyBroke = runs.some((r) => r.status === "broke");
+  const running = runs.some((r) => r.status === "running");
+  const batons = runs
+    .filter((r) => r.baton)
+    .flatMap((r) => Object.keys(r.baton!));
+  const last = runs[runs.length - 1];
+  const stalledMin = running
+    ? Math.floor((Date.now() - (runs.find((r) => r.status === "running")?.startedAt ?? Date.now())) / 60000)
+    : 0;
+
+  const summary = running
+    ? `Waiting for ${nameOf(runs.find((r) => r.status === "running")!)} — ${stalledMin} min`
+    : anyBroke
+      ? (runs.find((r) => r.status === "broke")?.summary ?? "broke")
+      : `${okCount} steps ✓${batons.length ? ` — handed ${[...new Set(batons)].map((b) => b.replace(/_/g, " ")).join(", ")}` : ""} → ${last.summary ?? ""}`;
+
+  return (
+    <div>
+      <button
+        className="activity-row"
+        onClick={() => setOpen(open === key ? null : key)}
+        data-testid="activity-chain-row"
+      >
+        <span
+          className={`dot ${anyBroke ? "dot-red" : running ? "dot-gray" : "dot-green"}`}
+        />
+        <LinkIcon size={12} />
+        <span className="activity-name">{chain?.name ?? "Chain"}</span>
+        <span className="activity-summary">{summary}</span>
+        <span className="caption">{clockTime(runs[0].startedAt)}</span>
+      </button>
+      {open === key && (
+        <div className="activity-detail">
+          <ChainSteps runs={runs} nameOf={nameOf} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Per-step lines, each with its own expandable run detail.
+function ChainSteps({
+  runs,
+  nameOf,
+}: {
+  runs: RunRecord[];
+  nameOf: (r: RunRecord) => string;
+}) {
+  const [openStep, setOpenStep] = useState<string | null>(null);
+  return (
+    <>
+      {runs.map((r) => (
+        <PlainRow
+          key={r.id}
+          r={r}
+          name={`${(r.stepIndex ?? 0) + 1} · ${nameOf(r)}`}
+          open={openStep}
+          setOpen={setOpenStep}
+        />
+      ))}
+    </>
+  );
+}
+
+function FooterMark({
+  allLocal,
+  cloudCount,
+}: {
+  allLocal: boolean;
+  cloudCount: number;
+}) {
+  return (
+    <div className="activity-footer caption" data-testid="activity-footer">
+      {allLocal
+        ? "✓ Everything ran on this computer"
+        : `${cloudCount} run${cloudCount === 1 ? "" : "s"} borrowed cloud compute (Featherless) — the rest ran on this computer`}
     </div>
   );
 }

@@ -36,6 +36,8 @@ export function AutomationSheet({
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
+  // Fill-ins: declared inputs are asked at run time, example shown.
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const { runs, chains } = getState();
   const myRuns = runs.records.filter(
     (r) => r.automationId === auto.id && r.cause !== "you described a task"
@@ -144,7 +146,13 @@ export function AutomationSheet({
     setRunning(true);
     setProgress("Starting…");
     try {
-      await runAutomation(auto, { cause, onProgress: setProgress });
+      await runAutomation(auto, {
+        cause,
+        inputValues: Object.fromEntries(
+          Object.entries(inputValues).filter(([, v]) => v.trim())
+        ),
+        onProgress: setProgress,
+      });
     } finally {
       setRunning(false);
       setProgress(null);
@@ -218,6 +226,25 @@ export function AutomationSheet({
             Test run
           </button>
         </div>
+        {auto.inputs.length > 0 && (
+          <div className="fillins">
+            {auto.inputs.map((inp) => (
+              <label key={inp.name} className="fillin">
+                <span className="caption">{inp.label}</span>
+                <input
+                  placeholder={`e.g. ${inp.example}`}
+                  value={inputValues[inp.name] ?? ""}
+                  onChange={(e) =>
+                    setInputValues((v) => ({
+                      ...v,
+                      [inp.name]: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+            ))}
+          </div>
+        )}
         {progress && (
           <div className="pipeline-card" style={{ border: "none", padding: 0 }}>
             <span className="spinner" />

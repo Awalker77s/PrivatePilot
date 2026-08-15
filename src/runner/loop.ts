@@ -139,7 +139,7 @@ async function listSandboxFiles(sandbox: Sandbox, folderDisplay: string): Promis
 export async function runToolLoop(
   record: AutomationRecord,
   model: string,
-  sandbox: Sandbox,
+  sandbox: Sandbox | null, // null = an online automation touching no files
   inputValues: Record<string, string>,
   onEvent: (e: LoopEvent) => void
 ): Promise<LoopOutcome> {
@@ -231,12 +231,19 @@ export async function runToolLoop(
       const name = call.function.name;
       const args = call.function.arguments ?? {};
       let result: string;
+      const NO_FILES =
+        "This automation touches no files — it works online. Use fetch_page, or answer.";
       try {
         if (name === "list_files") {
-          result = await listSandboxFiles(sandbox, String(args.folder ?? ""));
+          result = sandbox
+            ? await listSandboxFiles(sandbox, String(args.folder ?? ""))
+            : NO_FILES;
         } else if (name === "read_file") {
           const display = String(args.path ?? "");
-          const sb = toSandboxPath(sandbox, display);
+          const sb = sandbox ? toSandboxPath(sandbox, display) : null;
+          if (!sandbox) {
+            result = NO_FILES;
+          } else
           if (!sb) {
             result = `Refused — ${display} is outside this automation's folders.`;
             outcome.refusals.push(result);
@@ -251,8 +258,10 @@ export async function runToolLoop(
           }
         } else if (name === "write_file") {
           const display = String(args.path ?? "");
-          const sb = toSandboxPath(sandbox, display);
-          if (!sb) {
+          const sb = sandbox ? toSandboxPath(sandbox, display) : null;
+          if (!sandbox) {
+            result = NO_FILES;
+          } else if (!sb) {
             result = `Refused — ${display} is outside this automation's folders.`;
             outcome.refusals.push(result);
           } else {

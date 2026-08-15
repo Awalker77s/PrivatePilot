@@ -3,6 +3,7 @@ import { GearIcon } from "./icons";
 import { loadAll, getState } from "../storage/stores";
 import { useStoreVersion } from "../storage/useStore";
 import { loadSettings } from "../storage/settings";
+import { initDispatcher } from "../dispatcher";
 import { ChatTab } from "./tabs/ChatTab";
 import { AutomationsTab } from "./tabs/AutomationsTab";
 import { ActivityTab } from "./tabs/ActivityTab";
@@ -44,6 +45,7 @@ export default function App() {
   useEffect(() => {
     loadAll();
     loadSettings();
+    initDispatcher();
   }, []);
 
   const problems = currentProblems();

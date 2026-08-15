@@ -639,6 +639,123 @@
   font-family: var(--mono);
 }
 
+/* ---------- chain strip ---------- */
+.chain-strip {
+  border-radius: var(--radius-strip);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: none;
+  margin-bottom: 12px;
+}
+
+.strip-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.strip-members {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.strip-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.strip-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--blue);
+  min-width: 68px;
+}
+
+.mini-tile {
+  appearance: none;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: var(--text);
+  cursor: pointer;
+  min-width: 170px;
+}
+
+.mini-tile:hover {
+  border-color: #33363e;
+}
+
+/* ---------- edit card ---------- */
+.edit-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.edit-from {
+  color: var(--red);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.edit-arrow {
+  color: var(--caption);
+}
+
+.edit-to {
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* ---------- fill-ins ---------- */
+.fillins {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fillin {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fillin input {
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 5px 10px;
+  outline: none;
+  width: 180px;
+}
+
+.fillin input:focus {
+  border-color: var(--green);
+}
+
+.step-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* ---------- activity ---------- */
 .activity {
   display: flex;
@@ -648,6 +765,51 @@
   margin: 0 auto;
   width: 100%;
   gap: 10px;
+}
+
+/* ---------- results shelf: the newest answers, big ---------- */
+.results-shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  flex: none;
+}
+
+.result-card {
+  appearance: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  padding: 11px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.result-card:hover {
+  border-color: #33363e;
+}
+
+.result-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-tile-name);
+  font-weight: var(--fw-tile-name);
+}
+
+.result-name .caption {
+  margin-left: auto;
+}
+
+.result-value {
+  font-size: 17px;
+  font-weight: 660;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pinned-card {

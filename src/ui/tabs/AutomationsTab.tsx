@@ -3,15 +3,16 @@
 // "…" (the confirm names the thing). Click opens the sheet.
 import React, { useState } from "react";
 import type { TabId } from "../App";
-import { SearchIcon, PlayIcon } from "../icons";
+import { SearchIcon, PlayIcon, LinkIcon, ArrowRightIcon } from "../icons";
 import { getState, deleteAutomation, saveAutomation } from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
-import type { AutomationRecord } from "../../storage/types";
+import type { AutomationRecord, ChainRecord } from "../../storage/types";
 import { CategoryGlyph } from "../glyphs";
-import { relTime, nextRunSentence } from "../fmt";
+import { relTime, nextRunSentence, scheduleSentence } from "../fmt";
 import { AutomationSheet } from "../AutomationSheet";
 import { runAutomation } from "../../runner/run";
 import { hostnameOf } from "../../runner/fetchPage";
+import { chainOrder, latestExecution, runChain } from "../../dispatcher";
 
 export function AutomationsTab({ goTo }: { goTo: (t: TabId) => void }) {
   useStoreVersion();
@@ -68,16 +69,32 @@ export function AutomationsTab({ goTo }: { goTo: (t: TabId) => void }) {
           </button>
         </div>
       ) : (
-        <div className="tile-grid" data-testid="tile-grid">
-          {records.map((a) => (
-            <Tile
-              key={a.id}
-              auto={a}
-              running={runningIds.has(a.id)}
-              open={() => setSheetFor(a.id)}
+        <>
+          {getState().chains.records.map((c) => (
+            <ChainStrip
+              key={c.id}
+              chain={c}
+              openSheet={(id) => setSheetFor(id)}
             />
           ))}
-        </div>
+          <div className="tile-grid" data-testid="tile-grid">
+            {records
+              .filter(
+                (a) =>
+                  !getState().chains.records.some((c) =>
+                    chainOrder(c).includes(a.id)
+                  )
+              )
+              .map((a) => (
+                <Tile
+                  key={a.id}
+                  auto={a}
+                  running={runningIds.has(a.id)}
+                  open={() => setSheetFor(a.id)}
+                />
+              ))}
+          </div>
+        </>
       )}
 
       {sheetAuto && (
@@ -215,6 +232,135 @@ function Tile({
       )}
     </div>
   );
+}
+
+// A chain renders as a full-width strip: name bar (status dot · last ran ·
+// next · Run) + member mini-tiles joined by arrows carrying their conditions.
+function ChainStrip({
+  chain,
+  openSheet,
+}: {
+  chain: ChainRecord;
+  openSheet: (autoId: string) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+  const { automations } = getState();
+  const order = chainOrder(chain);
+  const members = order
+    .map((id) => automations.records.find((a) => a.id === id))
+    .filter((a): a is AutomationRecord => !!a);
+  if (members.length === 0) return null;
+
+  const exec = latestExecution(chain.id);
+  const lastAt = exec.length ? exec[exec.length - 1].startedAt : null;
+  const anyBroke = exec.some((r) => r.status === "broke");
+  const first = members[0];
+  const next = nextRunSentence(first.schedule);
+
+  async function run() {
+    setRunning(true);
+    try {
+      await runChain(chain, members, {
+        cause: "you pressed Run",
+        resume: anyBroke,
+        onProgress: (p) => setProgress(`${p.autoName} — ${p.text}`),
+      });
+    } finally {
+      setRunning(false);
+      setProgress(null);
+    }
+  }
+
+  return (
+    <div className="chain-strip card" data-testid="chain-strip">
+      <div className="strip-bar">
+        <LinkIcon size={13} />
+        <b>{chain.name}</b>
+        <span className="chip chip-gray">{members.length} steps</span>
+        {first.schedule.trigger !== "manual" && (
+          <span className="chip chip-gray">
+            {scheduleSentence(first.schedule).toLowerCase()}
+          </span>
+        )}
+        <span className="status-line" style={{ flex: 1 }}>
+          {running ? (
+            <>
+              <span className="spinner" style={{ width: 10, height: 10 }} />
+              {progress ?? "running…"}
+            </>
+          ) : (
+            <>
+              <span
+                className={`dot ${anyBroke ? "dot-red" : exec.length ? "dot-green" : "dot-gray"}`}
+              />
+              {lastAt ? `ran ${relTime(lastAt)}` : "never run"}
+              {next ? ` · ${next}` : ""}
+            </>
+          )}
+        </span>
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={running}
+          onClick={run}
+          data-testid="chain-run"
+        >
+          <PlayIcon size={11} /> Run
+        </button>
+      </div>
+      <div className="strip-members">
+        {members.map((m, i) => {
+          const link = chain.links.find((l) => l.to === m.id);
+          return (
+            <div key={m.id} className="strip-member">
+              {i > 0 && (
+                <div className="strip-arrow">
+                  <ArrowRightIcon size={13} />
+                  {link?.onlyWhen && (
+                    <span className="caption">
+                      {conditionLabel(link.onlyWhen)}
+                    </span>
+                  )}
+                </div>
+              )}
+              <button className="mini-tile" onClick={() => openSheet(m.id)}>
+                <CategoryGlyph category={m.category} size={22} />
+                <div>
+                  <div className="tile-name">{m.name}</div>
+                  <div className="status-line">
+                    {m.lastRun
+                      ? `${m.lastRun.status === "ok" ? "✓" : m.lastRun.status === "broke" ? "✕" : "●"} ${m.lastRun.summary.slice(0, 34)}`
+                      : m.outputs.length
+                        ? `hands back ${m.outputs.map((o) => o.name.replace(/_/g, " ")).join(", ")}`
+                        : "never run"}
+                  </div>
+                </div>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function conditionLabel(c: {
+  field: string;
+  op: string;
+  value: string | number | null;
+}): string {
+  switch (c.op) {
+    case "crosses_above":
+      return `only over ${typeof c.value === "number" && c.value >= 100 ? "$" : ""}${c.value}`;
+    case "crosses_below":
+      return `only under ${c.value}`;
+    case "moves_more_than_pct":
+      return `moves >${c.value}%`;
+    case "now_contains":
+      return `mentions "${c.value}"`;
+    default:
+      return `${c.field} changed`;
+  }
 }
 
 function tileStatus(auto: AutomationRecord, running: boolean): React.ReactNode {

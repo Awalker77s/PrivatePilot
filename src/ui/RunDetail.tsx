@@ -149,6 +149,14 @@ export function RunDetail({ runId }: { runId: string }) {
               await putBackRun(runId);
               setKeepNote(null);
             }}
+            onNotNow={() =>
+              updateRun(runId, (r) => {
+                if (r.status === "needs_you") {
+                  r.status = "held";
+                  r.summary = "Left in the copy — nothing applied.";
+                }
+              })
+            }
           />
         </>
       )}

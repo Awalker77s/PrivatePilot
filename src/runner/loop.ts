@@ -103,6 +103,8 @@ function systemPrompt(record: AutomationRecord, inputValues: Record<string, stri
     inputs ? `Given values: ${inputs}` : "",
     `Folders and files you may touch: ${roots}. Websites you may fetch: ${sources}.`,
     "You are in a loop and can make multiple tool calls before answering. Call exactly one tool per turn.",
+    "If the job is to draft, send, or email a message: your final answer IS the message — a subject line, then the body, nothing else. The app shows a Send button; you never send anything yourself and must not say so.",
+    "Answer in at most three sentences unless the job asks for more. Never describe your tools or limitations.",
     "When the job is done, answer in plain words: what you did and the key values. If the job defines outputs, end with one line exactly like:",
     outputs ? `OUTPUTS: ${record.outputs.map((o) => `${o.name}=<value>`).join("; ")}` : "OUTPUTS: (none)",
     "",

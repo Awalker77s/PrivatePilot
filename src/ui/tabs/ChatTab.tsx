@@ -25,6 +25,7 @@ import {
 import { getRun } from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
 import { DiffCard } from "../DiffCard";
+import { SendDraftButton } from "../RunDetail";
 
 export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   useSyncExternalStore(subscribeChat, chatVersion);
@@ -340,6 +341,11 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
                     onNotNow={() => notNowBuilt(item.id, run.id)}
                   />
                 )}
+                <SendDraftButton
+                  run={run}
+                  category={auto?.category}
+                  name={auto?.name}
+                />
               </div>
             );
           })}

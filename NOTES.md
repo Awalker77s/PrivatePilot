@@ -85,6 +85,27 @@ day. This becomes the writeup.
   5. *MVP verified with file hashes*: the tracking sheet's SHA256 was
      identical through build + run + diff; changed only at Keep; the
      .pilot-versions restore brought back the exact original hash.
+- **Mid-build pivot (owner direction): online-first.** Automations now
+  default to fetching the web and answering in the app; files are a
+  background capability with the sandbox/Keep story intact. A four-agent
+  research pass live-verified a keyless endpoint catalog (CoinGecko, Yahoo
+  v8 chart, Open-Meteo, frankfurter.dev — note: .app is dead, moved to
+  .dev/v1 — Google News RSS, HN Algolia, statuspages, TheSportsDB) and
+  flagged the broken ones (Stooq now serves a JS proof-of-work wall, Binance
+  geo-blocks US IPs with 451, Reddit JSON 403s). endpoints.ts is the single
+  source of truth: the drafting prompt's menu is generated from it.
+- **Verification kept blocking honest rounding** — the model says "-0.78%"
+  for a source value of -0.7789 and subset-sum can't derive rounding, so
+  stage 5 gained a precision-aware match (a claim verifies if a source
+  number rounds to it at the claim's own precision).
+- **"Send email" made the 9B ramble about its missing tools** mid-answer.
+  One loop-prompt rule fixed it: a drafting job's final answer IS the
+  message; the app owns the Send button (mailto: opens the user's own mail
+  client — nothing sends itself).
+- **The starter gallery doubles as the empty state** — eight hand-written,
+  guaranteed-valid records (one fenced hostname each); Try it saves and runs
+  in one click, so the first result card lands in seconds. Curated records
+  skip earned-Save: that rule guards model drafts, not vetted ones.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

@@ -11,6 +11,7 @@ import { clockTime, dayLabel, relTime } from "../fmt";
 import { RunDetail } from "../RunDetail";
 import { LinkIcon } from "../icons";
 import { CategoryGlyph } from "../glyphs";
+import { StarterGallery } from "../StarterGallery";
 
 // The one value worth showing big: a money amount, a number, or the first
 // line of the answer — from the record, never recomputed.
@@ -43,14 +44,7 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
   if (all.length === 0) {
     return (
       <div className="activity">
-        <div className="empty">
-          <div className="empty-what">
-            Run something and what happened lands here.
-          </div>
-          <button className="btn" onClick={() => _props.goTo("automations")}>
-            See automations
-          </button>
-        </div>
+        <StarterGallery goToChat={() => _props.goTo("chat")} />
       </div>
     );
   }
@@ -116,7 +110,13 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
                   <span>{auto?.name ?? nameOf(r)}</span>
                   <span className="caption">{relTime(r.startedAt)}</span>
                 </div>
-                <div className="result-value">{headlineValue(r)}</div>
+                <div className="result-value-row">
+                  <span className="result-value">{headlineValue(r)}</span>
+                  <DeltaChip run={r} all={all} />
+                </div>
+                {auto && auto.sources.length > 0 && (
+                  <span className="caption">{auto.sources[0]}</span>
+                )}
               </button>
             );
           })}
@@ -174,6 +174,35 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
 
       <FooterMark allLocal={allLocal} cloudCount={cloudCount} />
     </div>
+  );
+}
+
+// ▲/▼ vs the previous answer of the same automation — the ticker feel
+// without a ticker, computed from persisted run records only.
+function DeltaChip({ run, all }: { run: RunRecord; all: RunRecord[] }) {
+  const firstNum = (s: string | null): number | null => {
+    const m = s?.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+    return m ? Number(m[0]) : null;
+  };
+  const current = firstNum(run.answer);
+  if (current === null) return null;
+  const prev = all.find(
+    (r) =>
+      r.automationId === run.automationId &&
+      r.id !== run.id &&
+      r.startedAt < run.startedAt &&
+      r.status === "ok" &&
+      r.answer
+  );
+  const prevNum = prev ? firstNum(prev.answer) : null;
+  if (prevNum === null || prevNum === 0) return null;
+  const pct = ((current - prevNum) / prevNum) * 100;
+  if (!Number.isFinite(pct) || Math.abs(pct) < 0.005) return null;
+  const up = pct > 0;
+  return (
+    <span className={`chip ${up ? "chip-green" : "chip-red"}`}>
+      {up ? "▲" : "▼"} {Math.abs(pct).toFixed(1)}%
+    </span>
   );
 }
 

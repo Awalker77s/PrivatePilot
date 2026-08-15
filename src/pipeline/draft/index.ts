@@ -7,6 +7,7 @@ import type { ChatMessage } from "../../providers/types";
 import type { Catalog } from "../catalog";
 import { wireJsonSchema } from "./schema";
 import { getSettings } from "../../storage/settings";
+import { COIN_ALIASES, endpointMenu } from "../endpoints";
 
 export interface DraftContext {
   userText: string;
@@ -32,19 +33,17 @@ export function draftSystemPrompt(catalog: Catalog): string {
     "Rules:",
     "- Most jobs are ONLINE: fetch a price, a number, a page, or a status from the web and deliver the answer right in the app. Prefer that shape.",
     "- files.reads and files.writes stay EMPTY unless the person explicitly names files or folders. Online jobs touch no files.",
-    "- sources: the bare hostnames the job will fetch from — propose them yourself. Use the known-good endpoints below when they fit, and put the FULL URL to fetch inside the steps so the runner knows exactly where to go.",
+    "- sources: the bare hostnames the job will fetch from — propose them yourself. Use the known-good endpoints below when they fit, and put the FULL URL to fetch inside the steps so the runner knows exactly where to go. Any public site the person names is also fine: its own hostname.",
     "",
-    "Known-good endpoints (free, no key):",
-    "- Crypto price: api.coingecko.com — https://api.coingecko.com/api/v3/simple/price?ids=<coin-id>&vs_currencies=usd (coin-id: bitcoin, ethereum, solana, dogecoin…)",
-    "- Stock price: query1.finance.yahoo.com — https://query1.finance.yahoo.com/v8/finance/chart/<TICKER>?range=1d&interval=1d (price at chart.result[0].meta.regularMarketPrice)",
-    "- Weather: api.open-meteo.com — https://api.open-meteo.com/v1/forecast?latitude=<lat>&longitude=<lon>&current_weather=true",
-    "- Currency rates: api.frankfurter.app — https://api.frankfurter.app/latest?from=USD&to=EUR",
-    "- Tech news front page: hn.algolia.com — https://hn.algolia.com/api/v1/search?tags=front_page",
-    "- Any public page the person names: its own hostname.",
+    "Known-good endpoints (free, no key, live-verified):",
+    endpointMenu(),
+    `Coin shorthand: ${Object.entries(COIN_ALIASES)
+      .map(([k, v]) => `${k}→${v}`)
+      .join(", ")}`,
     "",
     "- One automation unless the person's words name two distinct jobs handing off to each other (shortest chain wins).",
-    "- A phrase like 'then email me a summary' or 'then tell me about it' IS a second job: draft one automation per job, and set chain.links mapping the first job's outputs to the second job's inputs by name.",
-    "- Fetching data and reporting it is ONE job, not two. Split only where one job's finished outputs feed a different kind of job ('then …').",
+    "- 'then email me…', 'then text me…', 'then message me a summary' is ALWAYS its own second automation (the message-drafting job), chained after the data job — set chain.links mapping the first job's outputs to the second job's inputs by name.",
+    "- Otherwise, fetching data and reporting the values is ONE job. Split only where one job's finished outputs feed a different kind of job ('then …').",
     "- 'Email me X' or 'send me X' means the automation drafts the message and delivers it as answer — the person presses Send themselves. Nothing sends itself.",
     '- If the person names a file, folder, or thing you cannot find in the catalog below, set question and leave automations empty. Never guess a path. question.asking is a short question a person can answer ("Which tracking sheet?"); question.term is their exact words for the thing.',
     "- When the person names a particular document (my tracking sheet, the budget file), writes must point at that exact file from the catalog — a bare folder is not specific enough. If no catalog file clearly matches, ask.",

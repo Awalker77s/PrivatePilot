@@ -3,13 +3,46 @@
 // stage auto-expands with its designed sentence, stable anchor ids, and a
 // searchable log. Ends with the "What I did not do" line.
 import { useState } from "react";
-import { getRun } from "../storage/stores";
+import { getAutomation, getRun } from "../storage/stores";
 import { useStoreVersion } from "../storage/useStore";
 import type { StageLog } from "../storage/types";
 import { elapsedShort } from "./fmt";
 import { DiffCard } from "./DiffCard";
 import { keepRun, putBackRun, sandboxFor } from "../runner/run";
 import { updateRun } from "../storage/stores";
+
+// An Email automation drafts the message; the person presses Send — the
+// draft opens in their own mail app via mailto:. Nothing sends itself.
+export function SendDraftButton({
+  run,
+  category,
+  name,
+}: {
+  run: { automationId: string; answer: string | null; status: string };
+  category?: string; // for unsaved drafts the record isn't in the store yet
+  name?: string;
+}) {
+  const auto = getAutomation(run.automationId);
+  const cat = category ?? auto?.category;
+  if (cat !== "Email" || !run.answer || run.status === "broke") return null;
+  const body = run.answer.slice(0, 1500);
+  const href = `mailto:?subject=${encodeURIComponent(name ?? auto?.name ?? "From Private Pilot")}&body=${encodeURIComponent(body)}`;
+  return (
+    <div className="built-actions">
+      <button
+        className="btn btn-primary btn-sm"
+        onClick={async () => {
+          const { openUrl } = await import("@tauri-apps/plugin-opener");
+          await openUrl(href);
+        }}
+        data-testid="send-draft"
+      >
+        Send
+      </button>
+      <span className="caption">opens in your own mail app — you press Send there</span>
+    </div>
+  );
+}
 
 const STAGE_TITLES: Record<StageLog["stage"], string> = {
   draft: "1 · Schema-constrained drafting",
@@ -125,6 +158,8 @@ export function RunDetail({ runId }: { runId: string }) {
             .join(" · ")}
         </div>
       )}
+
+      <SendDraftButton run={run} />
 
       {run.diff && run.diff.entries.length > 0 && (
         <>

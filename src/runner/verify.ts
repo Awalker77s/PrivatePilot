@@ -78,6 +78,19 @@ function subsetSumDerivation(target: number, corpus: string): string | null {
   return null;
 }
 
+function roundedMatch(claimed: string, corpus: string): string | null {
+  const decimals = (claimed.split(".")[1] ?? "").length;
+  const target = Math.abs(Number(claimed));
+  if (!Number.isFinite(target)) return null;
+  const nums = corpus.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/g) ?? [];
+  for (const raw of nums) {
+    const v = Math.abs(Number(raw));
+    if (!Number.isFinite(v) || v === target) continue;
+    if (Number(v.toFixed(decimals)) === target) return raw;
+  }
+  return null;
+}
+
 export async function verifyNumbers(
   model: string,
   answer: string,
@@ -91,6 +104,15 @@ export async function verifyNumbers(
 
   for (const n of numbers) {
     if (flatCorpus.includes(n)) continue; // verbatim in the source — verified
+
+    // A model saying "-0.78%" for a source value of -0.7789 is honest
+    // rounding, not invention: accept when a source number rounds to the
+    // claim at the claim's own precision.
+    const rounded = roundedMatch(n, corpus);
+    if (rounded) {
+      checkedLines.push(`${n} ≈ ${rounded} in the source, rounded · checked in code`);
+      continue;
+    }
 
     const derivation = subsetSumDerivation(Number(n), corpus);
     if (derivation) {
@@ -140,9 +162,10 @@ export function parseOutputs(answer: string): {
   cleanAnswer: string;
   baton: Record<string, string | number> | null;
 } {
-  const m = answer.match(/^OUTPUTS:\s*(.+)$/m);
+  const m = answer.match(/OUTPUTS:\s*([^\n]*)/);
+  const stripped = answer.replace(/\s*OUTPUTS:[^\n]*/g, "").trim();
   if (!m || /\(none\)/.test(m[1])) {
-    return { cleanAnswer: answer.replace(/^OUTPUTS:.*$/m, "").trim(), baton: null };
+    return { cleanAnswer: stripped, baton: null };
   }
   const baton: Record<string, string | number> = {};
   for (const pair of m[1].split(";")) {

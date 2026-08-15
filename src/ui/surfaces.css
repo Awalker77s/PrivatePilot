@@ -803,6 +803,39 @@
   margin-left: auto;
 }
 
+.result-value-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.starter-gallery {
+  max-width: 720px;
+  margin: 24px auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+
+.starter-gallery .empty-status,
+.starter-gallery .empty-what {
+  text-align: center;
+}
+
+.starter-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.starter-card {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .result-value {
   font-size: 17px;
   font-weight: 660;

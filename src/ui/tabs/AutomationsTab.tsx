@@ -13,6 +13,7 @@ import { AutomationSheet } from "../AutomationSheet";
 import { runAutomation } from "../../runner/run";
 import { hostnameOf } from "../../runner/fetchPage";
 import { chainOrder, latestExecution, runChain } from "../../dispatcher";
+import { StarterGallery } from "../StarterGallery";
 
 export function AutomationsTab({ goTo }: { goTo: (t: TabId) => void }) {
   useStoreVersion();
@@ -59,15 +60,7 @@ export function AutomationsTab({ goTo }: { goTo: (t: TabId) => void }) {
       </div>
 
       {automations.records.length === 0 ? (
-        <div className="empty">
-          <div className="empty-status">Nothing built yet.</div>
-          <div className="empty-what">
-            Automations are recorded tasks compiled into records you can read.
-          </div>
-          <button className="btn" onClick={() => goTo("chat")}>
-            Describe a task
-          </button>
-        </div>
+        <StarterGallery goToChat={() => goTo("chat")} />
       ) : (
         <>
           {getState().chains.records.map((c) => (

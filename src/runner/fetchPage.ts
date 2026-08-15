@@ -98,7 +98,7 @@ export async function fetchPage(
 
   const ctype = res.headers.get("Content-Type") ?? "";
   const isText =
-    /text\/|application\/(json|xml|xhtml)/i.test(ctype) || ctype === "";
+    /text\/|application\/(json|xml|xhtml|rss|atom)/i.test(ctype) || ctype === "";
   if (!isText) {
     const sentence = `${host} sent ${ctype.split(";")[0] || "something"} — not a page this tool reads.`;
     return {
@@ -114,8 +114,15 @@ export async function fetchPage(
   const body = raw.length > BODY_CAP ? raw.slice(0, BODY_CAP) : raw;
 
   let text: string;
-  if (/json/i.test(ctype) || body.trimStart().startsWith("{") || body.trimStart().startsWith("[")) {
+  const trimmedStart = body.trimStart();
+  if (/json/i.test(ctype) || trimmedStart.startsWith("{") || trimmedStart.startsWith("[")) {
     text = body;
+  } else if (
+    /xml|rss|atom/i.test(ctype) ||
+    trimmedStart.startsWith("<?xml") ||
+    trimmedStart.includes("<rss")
+  ) {
+    text = parseFeed(body) ?? (await extractReadable(body, full));
   } else {
     text = await extractReadable(body, full);
   }
@@ -148,6 +155,33 @@ async function extractReadable(html: string, url: string): Promise<string> {
     // fall through to raw text
   }
   return doc.body?.textContent ?? "";
+}
+
+// RSS/Atom → plain headline lines: "title — link (date)". News for anything.
+function parseFeed(xml: string): string | null {
+  try {
+    const doc = new DOMParser().parseFromString(xml, "text/xml");
+    if (doc.querySelector("parsererror")) return null;
+    const items = [
+      ...doc.querySelectorAll("item"),
+      ...doc.querySelectorAll("entry"),
+    ].slice(0, 10);
+    if (items.length === 0) return null;
+    const lines = items.map((it) => {
+      const title = it.querySelector("title")?.textContent?.trim() ?? "";
+      const link =
+        it.querySelector("link")?.textContent?.trim() ||
+        it.querySelector("link")?.getAttribute("href") ||
+        "";
+      const date =
+        it.querySelector("pubDate, updated, published")?.textContent?.trim() ??
+        "";
+      return `- ${title}${date ? ` (${date})` : ""}${link ? `\n  ${link}` : ""}`;
+    });
+    return `Feed headlines:\n${lines.join("\n")}`;
+  } catch {
+    return null;
+  }
 }
 
 function stripHtml(s: string): string {

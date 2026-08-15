@@ -1,5 +1,5 @@
 // Stage 3 · The agentic tool loop. Four tools as JSON, one call per turn,
-// cap 15 turns, 30-minute stall timeout, stream off. Sampling: temp 0.6 /
+// bounded turns and stall time, stream off. Sampling: temp 0.6 /
 // top_p 0.95 / top_k 20. Small models sometimes emit the call as JSON text
 // in content — recovered and logged, never dropped.
 import { chat, NUM_CTX_DRAFT, NUM_CTX_TOOLS } from "../providers";
@@ -16,11 +16,6 @@ import { heavyToolsFor, heavyAllowed } from "../heavy/registry";
 import { findBinary } from "../heavy/runTool";
 import type { HeavyContext, HeavyToolSpec } from "../heavy/types";
 
-const MAX_TURNS = 15;
-// App connectors take one turn per read, and a mailbox has many — give
-// those runs more room before the loop gives up.
-const MAX_TURNS_APPS = 22;
-const STALL_MS = 30 * 60 * 1000;
 const CTX_GUARD = 0.85;
 
 export interface LoopEvent {
@@ -279,6 +274,22 @@ export async function runToolLoop(
   // Online jobs carry no file corpus, so 16k is ample and substantially
   // quicker on CPU-only machines. File jobs retain the full 32k window.
   const contextSize = sandbox ? NUM_CTX_TOOLS : NUM_CTX_DRAFT;
+  // Effort sets the base ceiling (quick finishes faster on CPU). App
+  // connectors and heavy tools spend one turn per read/step — a mailbox
+  // triage needs more room, so those runs get a higher cap.
+  const hasConnectorWork = bound.specs.length > 0 || bound.heavy.length > 0;
+  const maxTurns = hasConnectorWork
+    ? record.effort === "quick"
+      ? 15
+      : 22
+    : sandbox
+      ? record.effort === "quick"
+        ? 10
+        : 15
+      : record.effort === "quick"
+        ? 4
+        : 10;
+  const stallMs = record.effort === "quick" ? 5 * 60 * 1000 : 30 * 60 * 1000;
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -340,13 +351,11 @@ export async function runToolLoop(
       }
     : null;
   const boundNames = bound.defs.map((d) => d.function.name).join(", ");
-  const maxTurns =
-    bound.specs.length > 0 || bound.heavy.length > 0 ? MAX_TURNS_APPS : MAX_TURNS;
   // A run that writes files needs room to emit whole-file content in one call.
   const writesFiles = (record.files?.writes?.length ?? 0) > 0;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
-    if (Date.now() - startedAt > STALL_MS) {
+    if (Date.now() - startedAt > stallMs) {
       outcome.stalled = true;
       outcome.answer = "";
       return outcome;
@@ -579,7 +588,7 @@ export async function runToolLoop(
     }
   }
 
-  // 15 turns without a final answer.
+  // The effort-appropriate turn cap was reached without a final answer.
   outcome.answer = "";
   return outcome;
 }

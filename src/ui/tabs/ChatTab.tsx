@@ -10,6 +10,7 @@ import {
   chatItems,
   chatVersion,
   chooseFile,
+  clearGeneralChat,
   compileFromDemo,
   compileFromTypedDemo,
   hasNarration,
@@ -59,6 +60,12 @@ import { CategoryGlyph } from "../glyphs";
 import { AUTOMATION_DRAG_TYPE, LibraryPanel } from "../LibraryPanel";
 import { FormattedAnswer } from "../FormattedAnswer";
 
+const GENERAL_CHAT_STARTERS = [
+  "Show me today's top 10 tech headlines",
+  "Check Bitcoin and Tesla prices",
+  "Is Discord down?",
+];
+
 function DictationTimer({ startedAt }: { startedAt: number }) {
   const [, tick] = useState(0);
   useEffect(() => {
@@ -77,6 +84,7 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   useSyncExternalStore(subscribeChat, chatVersion);
   useStoreVersion();
   const [draft, setDraft] = useState("");
+  const [clearArmed, setClearArmed] = useState(false);
   const [modelLabel, setModelLabel] = useState("…");
   const [dict, setDict] = useState<DictationHandle>({
     state: "idle",
@@ -120,6 +128,10 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [items.length]);
+
+  useEffect(() => {
+    setClearArmed(false);
+  }, [studioId]);
 
   // A sheet's Change link may have seeded the composer.
   const seed = consumeComposerSeed();
@@ -167,10 +179,72 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
           </div>
         )}
         <div className="chat">
+          {!studio && (
+            <div className="chat-toolbar">
+              <div className="chat-toolbar-copy">
+                <div className="chat-toolbar-title">General chat</div>
+                <div className="caption">Live answers and new automations</div>
+              </div>
+              {clearArmed ? (
+                <div className="chat-clear-confirm" role="group" aria-label="Confirm clear chat">
+                  <span className="caption">Clear messages and unsaved cards?</span>
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={() => {
+                      clearGeneralChat();
+                      setDraft("");
+                      setClearArmed(false);
+                    }}
+                    data-testid="confirm-clear-chat"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setClearArmed(false)}
+                    data-testid="cancel-clear-chat"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="btn btn-ghost btn-sm chat-clear"
+                  disabled={items.length === 0 || busy || watching}
+                  title="Remove this conversation. Saved automations and Activity stay."
+                  onClick={() => setClearArmed(true)}
+                  data-testid="clear-chat"
+                >
+                  Clear chat
+                </button>
+              )}
+            </div>
+          )}
           <div className="chat-thread" ref={threadRef} data-testid="chat-thread">
             {items.map((item) => (
               <ChatItemView key={item.id} item={item} />
             ))}
+            {items.length === 0 && !studio && (
+              <div className="chat-welcome" data-testid="chat-welcome">
+                <span className="brand-glyph chat-welcome-glyph">P</span>
+                <div className="empty-status">What would you like to automate?</div>
+                <div className="empty-what">
+                  Ask for a live answer, a schedule, or something to watch.
+                </div>
+                <div className="chat-starters" aria-label="Example requests">
+                  {GENERAL_CHAT_STARTERS.map((starter) => (
+                    <button
+                      key={starter}
+                      className="chat-starter"
+                      onClick={() => setDraft(starter)}
+                    >
+                      {starter}
+                      <ArrowRightIcon size={12} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {items.length === 0 && studio && (
               <div className="studio-empty">
                 <div className="empty-status">Perfect this automation</div>
@@ -625,13 +699,15 @@ function QuestionCard({
             {o.label}
           </button>
         ))}
-        <button
-          className="btn btn-sm btn-ghost"
-          disabled={item.answered !== null}
-          onClick={() => chooseFile(item.id)}
-        >
-          Choose…
-        </button>
+        {(item.q.kind === "file" || item.q.kind === "folder") && (
+          <button
+            className="btn btn-sm btn-ghost"
+            disabled={item.answered !== null}
+            onClick={() => chooseFile(item.id)}
+          >
+            Choose…
+          </button>
+        )}
       </div>
       {item.answered && (
         <div className="caption">You picked: {item.answered}</div>

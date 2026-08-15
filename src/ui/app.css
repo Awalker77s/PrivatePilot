@@ -105,6 +105,10 @@
   padding: 20px 24px;
 }
 
+.chat-tabpanel {
+  padding-right: 16px;
+}
+
 /* ---------- buttons: always the verb, 1–2 words ---------- */
 .btn {
   appearance: none;

@@ -29,6 +29,7 @@ import * as heavyRun from "./heavy/runTool";
 import * as ragIndex from "./rag/index";
 import * as ragAnswer from "./rag/answer";
 import * as ragStore from "./rag/store";
+import * as quickDraft from "./pipeline/quickDraft";
 
 declare global {
   interface Window {
@@ -84,5 +85,6 @@ export function installDevHook() {
     ragIndex,
     ragAnswer,
     ragStore,
+    quickDraft,
   };
 }

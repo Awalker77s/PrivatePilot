@@ -82,10 +82,15 @@ export async function fetchPage(
 
   const full = url.startsWith("http") ? url : `https://${url}`;
   const host = hostnameOf(full) ?? url;
+  const verifiedGoogleNewsFeed =
+    host === "news.google.com" && new URL(full).pathname.startsWith("/rss");
 
   // Search results pages only answer in a real browser — reroute the model
   // to the rendered reader instead of wasting a raw fetch.
-  if (SEARCH_ENGINES.some((s) => host === s || host.endsWith(`.${s}`))) {
+  if (
+    !verifiedGoogleNewsFeed &&
+    SEARCH_ENGINES.some((s) => host === s || host.endsWith(`.${s}`))
+  ) {
     const sentence = `${host} only answers in a real browser — use read_page for this URL instead (or fetch a data API directly; stock prices: https://query1.finance.yahoo.com/v8/finance/chart/TSLA?range=1d&interval=1d).`;
     return {
       ok: false,

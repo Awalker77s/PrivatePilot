@@ -14,7 +14,7 @@ import type {
 } from "../storage/types";
 import { buildSandbox, Sandbox, SandboxRefusal } from "./sandbox";
 import { runToolLoop } from "./loop";
-import { runDirectEndpoint } from "./direct";
+import { DirectEndpointError, runDirectEndpoint } from "./direct";
 import { scanDiff, applyDiff, putBack } from "./diff";
 import { parseOutputs, thoroughPass, verifyNumbers } from "./verify";
 import { holdModelInMemory, OLLAMA_DOWN_SENTENCE } from "../providers/ollama";
@@ -267,7 +267,9 @@ async function runInner(
     }
   } catch (e) {
     const sentence =
-      e instanceof ProviderError ? e.sentence : `The tool loop broke — ${String(e)}`;
+      e instanceof ProviderError || e instanceof DirectEndpointError
+        ? e.sentence
+        : `The tool loop broke — ${String(e)}`;
     toolsLog.status = "broke";
     toolsLog.finishedAt = Date.now();
     toolsLog.sentence = sentence;

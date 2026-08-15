@@ -1147,6 +1147,27 @@ export function consumeComposerSeed(): string | null {
   return s;
 }
 
+// Clear only the General chat scrollback. Saved automations, Activity runs,
+// and every automation-scoped Studio conversation remain untouched.
+export function clearGeneralChat(): void {
+  if (busy || watchSession) return;
+  items = items.filter(
+    (item) => (item.scopeAutomationId ?? null) !== null
+  );
+  threadStates.general = {
+    pending: null,
+    pendingEditRequest: null,
+    pendingReferences: [],
+  };
+  if (activeAutomationId === null) {
+    pending = null;
+    pendingEditRequest = null;
+    pendingReferences = [];
+    composerSeed = null;
+  }
+  emit();
+}
+
 function builtItem(itemId: number) {
   const item = items.find((i) => i.id === itemId);
   return item && item.kind === "built" ? item : null;

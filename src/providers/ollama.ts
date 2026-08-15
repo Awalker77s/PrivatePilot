@@ -103,10 +103,12 @@ async function ollamaFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  // Embedding a document batch on CPU can take minutes — it gets the long
-  // ceiling like chat, not the 20s one meant for tags/show/ps.
+  // A single chat turn shouldn't hold the UI for five minutes (public-data
+  // jobs bypass the model; unusual model-backed turns get two minutes).
+  // Embedding a document batch on CPU genuinely takes minutes, so it keeps the
+  // long ceiling.
   const timeoutMs =
-    path === "/api/chat" || path === "/api/embed" ? 300_000 : 20_000;
+    path === "/api/embed" ? 300_000 : path === "/api/chat" ? 120_000 : 20_000;
   const signal = AbortSignal.timeout(timeoutMs);
   try {
     // A wedged request must become a designed sentence, never a forever-hang
@@ -138,7 +140,7 @@ async function ollamaFetch(
       (e instanceof Error && e.name === "TimeoutError");
     throw new ProviderError(
       timedOut
-        ? "The local AI took too long to answer — try again."
+        ? "The local AI took over two minutes — switch to Qwen 4B in Settings, or try again."
         : OLLAMA_DOWN_SENTENCE,
       String(e)
     );

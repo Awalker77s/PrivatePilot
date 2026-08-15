@@ -267,3 +267,34 @@ day. This becomes the writeup.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.
+- **Chat memory (Aug 15).** Three reported failures, one root cause: the chat
+  was stateless. Fixed with a deterministic, app-owned memory design (three
+  research agents surveyed memory architectures for small local models,
+  follow-up handling in v0/Canvas/Claude-artifacts/Zapier Copilot, and
+  persistence in LM Studio/Jan/Open WebUI; synthesis grounded in this repo).
+  The model never manages memory and never sees a pronoun. (1) A
+  coordination splitter ("...and another automation to...") compiles each
+  independent job separately - the drafter only ever sees one job per call;
+  the validator now also rejects chain links that carry nothing (empty map,
+  no onlyWhen), and the forced-chain refinement that made independent
+  multi-automation drafts unrepresentable is gone. (2) Unsaved drafts on
+  built cards are first-class edit targets, searched before saved records -
+  "schedule the Top Tech News automation for 8am" patches the draft in
+  place instead of re-building. (3) Deixis resolves app-side: "schedule
+  this automation for 9am" / "change the time" resolve against a focus
+  stack (last edit card, else last built card) and the text is rewritten
+  CQR-style to name the real automation before the edit model runs. Draft
+  edits mutate the built card and drop an already-kept edit card (the
+  Zapier mutate-in-place pattern); Put it back swaps the before-record in;
+  execution-affecting patches demote a "ran" card to "fresh" so Save stays
+  earned. (4) A template-rendered digest (never model-written - a 9B
+  summarizing its own thread compounds its own errors) rides into every
+  compile as DraftContext.history, hard-capped at 4.5k chars. (5) The
+  thread persists to chat.json (atomic write, cap 200 items, progress +
+  watch-me items stripped so the burn contract holds - no data: URLs on
+  disk, verified), rehydrates after loadAll so run references resolve.
+  Verified live over CDP: the exact failing sentence yields two chain-null
+  cards; the deixis edit lands on the last card (manual -> daily 9am); the
+  named-draft edit lands without a re-compile; the thread survives reload
+  with edits intact; Put it back works on a rehydrated card; "change the
+  time to 10am" finds its focus after restart.

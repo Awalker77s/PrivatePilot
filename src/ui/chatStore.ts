@@ -3,6 +3,20 @@
 // prose.
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { readChatFile, writeChatFile } from "../storage/chat";
+import {
+  DEIXIS_RE,
+  DELTA_VERB_RE,
+  EditTarget,
+  NEW_TASK_RE,
+  TIMEY_RE,
+  findTargetNamed,
+  findTargetsByName,
+  focusTargets,
+  renderHistory,
+  rewriteDeixis,
+  splitCoordination,
+} from "./memory";
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
@@ -17,9 +31,8 @@ import {
 import { editAutomation, EditResult } from "../pipeline/edit";
 import { activeLocalModel } from "../providers";
 import { ChainCycleError, assertNoCycle, runChain } from "../dispatcher";
-import type { AutomationRecord } from "../storage/types";
 
-export type ChatItem =
+type ChatItemVariant =
   | { id: number; kind: "user"; text: string }
   | {
       id: number;
@@ -50,6 +63,9 @@ export type ChatItem =
       id: number;
       kind: "edit";
       autoId: string;
+      // The built card holding the unsaved draft this edit patches — null
+      // means the target is a saved record in the store.
+      builtItemId: number | null;
       result: EditResult;
       state: "fresh" | "kept" | "reverted";
     }
@@ -63,6 +79,9 @@ export type ChatItem =
       reason: string | null; // the designed sentence when a rung degrades
       micOk: boolean;
     };
+
+// Every item carries when it happened — day dividers render from the gaps.
+export type ChatItem = ChatItemVariant & { at?: number };
 
 let items: ChatItem[] = [];
 let nextId = 1;
@@ -90,17 +109,109 @@ export function chatBusy(): boolean {
 function emit() {
   version++;
   for (const fn of listeners) fn();
+  scheduleSave();
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
-function push(item: DistributiveOmit<ChatItem, "id">): ChatItem {
-  const it = { ...item, id: nextId++ } as ChatItem;
+function push(item: DistributiveOmit<ChatItemVariant, "id">): ChatItem {
+  const it = { ...item, id: nextId++, at: Date.now() } as ChatItem;
   items = [...items, it];
   emit();
   return it;
+}
+
+// ---- Persistent chat memory: the thread survives restarts, so "this
+// automation" typed tomorrow still points at something. ----
+const CHAT_CAP = 200;
+let chatLoaded = false;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function serializableItems(): { list: ChatItem[]; interrupted: boolean } {
+  let interrupted = false;
+  const list: ChatItem[] = [];
+  for (const i of items) {
+    if (i.kind === "progress" || i.kind === "watchme") {
+      // A dead spinner would wait forever; watch-me thumbs are data: URLs of
+      // the screen — persisting them would break the burn() promise that a
+      // crash leaves zero recording bytes on disk.
+      interrupted = true;
+      continue;
+    }
+    if (i.kind === "built" && i.state === "running") {
+      interrupted = true;
+      list.push({ ...i, state: "fresh", progress: null });
+      continue;
+    }
+    list.push(i);
+  }
+  return { list: list.slice(-CHAT_CAP), interrupted };
+}
+
+function scheduleSave() {
+  if (!chatLoaded) return;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const { list, interrupted } = serializableItems();
+    void writeChatFile({
+      v: 1,
+      nextId,
+      interrupted,
+      pending,
+      pendingEditRequest,
+      items: list,
+    }).catch(() => {
+      // The thread is scrollback, not the record of what ran — a failed
+      // save must never block the conversation.
+    });
+  }, 500);
+}
+
+export async function loadChat(): Promise<void> {
+  const disk = await readChatFile();
+  if (disk) {
+    let loaded = disk.items as ChatItem[];
+    const tail = loaded[loaded.length - 1];
+    const tailOpenQuestion =
+      tail?.kind === "question" && tail.answered === null;
+    // Question cards that lost their compile context are inert — say so
+    // instead of leaving dead buttons.
+    loaded = loaded.map((i) =>
+      i.kind === "question" &&
+      i.answered === null &&
+      !(tailOpenQuestion && i.id === tail.id)
+        ? { ...i, answered: "(left unanswered)" }
+        : i
+    );
+    items = loaded;
+    nextId = Math.max(
+      disk.nextId ?? 1,
+      ...loaded.map((i) => i.id + 1),
+      1
+    );
+    pending = tailOpenQuestion
+      ? ((disk.pending as DraftContext | null) ?? null)
+      : null;
+    pendingEditRequest = tailOpenQuestion
+      ? (disk.pendingEditRequest ?? null)
+      : null;
+    if (disk.interrupted) {
+      items = [
+        ...items,
+        {
+          id: nextId++,
+          kind: "note",
+          tone: "gray",
+          at: Date.now(),
+          text: "Something was still running when the app closed — it was stopped, and nothing half-done was kept.",
+        },
+      ];
+    }
+  }
+  chatLoaded = true;
+  emit();
 }
 
 function replace(id: number, item: ChatItem | null) {
@@ -163,23 +274,19 @@ async function runCompile(context: DraftContext) {
 // An edit in flight, waiting for a "Which one?" answer.
 let pendingEditRequest: string | null = null;
 
-// "make it 7am" about an existing automation is an edit, not a build.
-// Resolve the target by name; two matches → a one-tap "Which one?" card,
-// never a silent pick.
-function editTargets(text: string): AutomationRecord[] {
-  const t = text.toLowerCase();
-  const aboutMatch = text.match(/^About "(.+?)":/);
-  const records = getState().automations.records;
-  if (aboutMatch) {
-    const named = records.filter(
-      (a) => a.name.toLowerCase() === aboutMatch[1].toLowerCase()
-    );
-    if (named.length > 0) return named;
+async function runEdit(target: EditTarget, request: string) {
+  // The patch base is the record's CURRENT state — a draft may have been
+  // pinned or re-edited since the target was picked (the v0 disease: patching
+  // a stale copy silently reverts the user's tweaks).
+  let auto = target.record;
+  if (target.builtItemId !== null) {
+    const host = builtItem(target.builtItemId);
+    const cur = host?.result.automations.find((a) => a.id === auto.id);
+    if (cur) auto = cur;
+  } else {
+    auto = getState().automations.records.find((r) => r.id === auto.id) ?? auto;
   }
-  return records.filter((a) => t.includes(a.name.toLowerCase()));
-}
 
-async function runEdit(auto: AutomationRecord, request: string) {
   busy = true;
   const progress = push({
     kind: "progress",
@@ -198,8 +305,16 @@ async function runEdit(auto: AutomationRecord, request: string) {
         tone: "amber",
         text: result.failSentence ?? "The edit didn't land.",
       });
+    } else if (target.builtItemId !== null) {
+      applyDraftEdit(target.builtItemId, result);
     } else {
-      push({ kind: "edit", autoId: auto.id, result, state: "fresh" });
+      push({
+        kind: "edit",
+        autoId: auto.id,
+        builtItemId: null,
+        result,
+        state: "fresh",
+      });
     }
   } catch (e) {
     replace(progress.id, null);
@@ -208,6 +323,36 @@ async function runEdit(auto: AutomationRecord, request: string) {
     busy = false;
     emit();
   }
+}
+
+// A draft edit mutates the built card in place (the Zapier/GPT-builder
+// pattern: one open draft, follow-ups change IT) and drops an already-kept
+// edit card as the visible change summary — Put it back reverses it.
+function applyDraftEdit(builtItemId: number, result: EditResult) {
+  const host = builtItem(builtItemId);
+  if (!host || !result.after) return;
+  result.after.origin = { kind: "edited", at: Date.now() };
+  const autos = host.result.automations.map((a) =>
+    a.id === result.after!.id ? result.after! : a
+  );
+  // A watched run stays earned through cosmetic patches; changing what the
+  // job actually DOES demands a fresh watched run before Save.
+  const execChanged = result.changed.some((c) =>
+    ["steps", "sources", "files", "inputs", "delivers"].includes(c.key)
+  );
+  patchBuilt(builtItemId, {
+    result: { ...host.result, automations: autos },
+    ...(host.state === "ran" && execChanged
+      ? { state: "fresh" as const, runId: host.runId }
+      : {}),
+  });
+  push({
+    kind: "edit",
+    autoId: result.after.id,
+    builtItemId,
+    result,
+    state: "kept",
+  });
 }
 
 // Keep it: the patched record becomes current (the old version is kept for
@@ -224,12 +369,52 @@ export async function keepEdit(itemId: number) {
 export async function revertEdit(itemId: number) {
   const item = items.find((i) => i.id === itemId);
   if (!item || item.kind !== "edit" || item.state !== "kept") return;
-  await restoreVersion(item.autoId);
+  if (item.builtItemId !== null) {
+    // Draft edits never touched the store — put the before-record back into
+    // the built card.
+    const host = builtItem(item.builtItemId);
+    if (host) {
+      patchBuilt(item.builtItemId, {
+        result: {
+          ...host.result,
+          automations: host.result.automations.map((a) =>
+            a.id === item.autoId ? item.result.before : a
+          ),
+        },
+      });
+    }
+  } else {
+    await restoreVersion(item.autoId);
+  }
   replace(itemId, { ...item, state: "reverted" });
+}
+
+// A one-tap "Which one?" card — a delta with an ambiguous target never
+// guesses and never falls through to a fresh build.
+function askWhichOne(targets: EditTarget[], request: string) {
+  pendingEditRequest = request;
+  push({
+    kind: "question",
+    q: {
+      asking: "Which one?",
+      term: request,
+      kind: "automation",
+      options: targets.map((t) => ({
+        label: `${t.record.name}${t.builtItemId === null ? "" : " (unsaved draft)"}`,
+        value: t.record.name,
+      })),
+    },
+    answered: null,
+    runId: null,
+  });
 }
 
 export async function sendText(text: string) {
   if (busy || !text.trim()) return;
+  const saved = getState().automations.records;
+  // The digest is rendered BEFORE this message joins the thread — the
+  // request itself rides separately as userText.
+  const history = renderHistory(items, saved);
   push({ kind: "user", text });
 
   // An open question card? The typed text is its answer.
@@ -241,9 +426,7 @@ export async function sendText(text: string) {
 
   if (lastQuestion && pendingEditRequest) {
     replace(lastQuestion.id, { ...lastQuestion, answered: text });
-    const target = getState().automations.records.find(
-      (a) => a.name.toLowerCase() === text.trim().toLowerCase()
-    );
+    const target = findTargetNamed(text, items, saved);
     const request = pendingEditRequest;
     pendingEditRequest = null;
     if (target) {
@@ -259,7 +442,7 @@ export async function sendText(text: string) {
     await rememberAlias(lastQuestion.q.asking, text);
     await resolveQuestionRun(lastQuestion.runId, text);
     await runCompile({
-      userText: pending.userText,
+      ...pending,
       answers: [
         ...pending.answers,
         { asking: lastQuestion.q.asking, answer: text },
@@ -268,28 +451,53 @@ export async function sendText(text: string) {
     return;
   }
 
-  const targets = editTargets(text);
-  if (targets.length === 1) {
-    await runEdit(targets[0], text);
-    return;
-  }
-  if (targets.length > 1) {
-    pendingEditRequest = text;
-    push({
-      kind: "question",
-      q: {
-        asking: "Which one?",
-        term: text,
-        kind: "automation",
-        options: targets.map((a) => ({ label: a.name, value: a.name })),
-      },
-      answered: null,
-      runId: null,
-    });
+  // "…and another automation to check meta" = independent jobs. Split before
+  // drafting: one compile per job, each with the digest (so job 2 sees job
+  // 1's card and doesn't re-create it), chain null by construction.
+  const segments = splitCoordination(text);
+  if (segments.length > 1) {
+    for (const seg of segments) {
+      await runCompile({
+        userText: seg,
+        answers: [],
+        history: renderHistory(items, saved),
+      });
+    }
     return;
   }
 
-  await runCompile({ userText: text, answers: [] });
+  // A named automation — drafts on built cards are first-class targets, so
+  // "schedule the tech news one for 9am" patches the unsaved draft instead
+  // of re-building it.
+  const named = findTargetsByName(text, items, saved);
+  if (named.length === 1 && !NEW_TASK_RE.test(text)) {
+    await runEdit(named[0], text);
+    return;
+  }
+  if (named.length > 1 && !NEW_TASK_RE.test(text)) {
+    askWhichOne(named, text);
+    return;
+  }
+
+  // Deixis: "schedule this for 9am", "change the time" — the thread knows
+  // what "this" is; the model never sees the bare pronoun.
+  if (
+    !NEW_TASK_RE.test(text) &&
+    DELTA_VERB_RE.test(text) &&
+    (DEIXIS_RE.test(text) || TIMEY_RE.test(text))
+  ) {
+    const focus = focusTargets(items, saved);
+    if (focus.length === 1) {
+      await runEdit(focus[0], rewriteDeixis(text, focus[0].record.name));
+      return;
+    }
+    if (focus.length > 1) {
+      askWhichOne(focus, text);
+      return;
+    }
+  }
+
+  await runCompile({ userText: text, answers: [], history });
 }
 
 export async function pickOption(itemId: number, value: string) {
@@ -298,8 +506,10 @@ export async function pickOption(itemId: number, value: string) {
 
   if (pendingEditRequest) {
     replace(itemId, { ...item, answered: value });
-    const target = getState().automations.records.find(
-      (a) => a.name === value
+    const target = findTargetNamed(
+      value,
+      items,
+      getState().automations.records
     );
     const request = pendingEditRequest;
     pendingEditRequest = null;
@@ -312,7 +522,7 @@ export async function pickOption(itemId: number, value: string) {
   await rememberAlias(item.q.asking, value);
   await resolveQuestionRun(item.runId, value);
   await runCompile({
-    userText: pending.userText,
+    ...pending,
     answers: [...pending.answers, { asking: item.q.asking, answer: value }],
   });
 }
@@ -623,6 +833,7 @@ export async function compileFromDemo(
   await runCompile({
     userText: "",
     answers: [],
+    history: renderHistory(items, getState().automations.records),
     demo: {
       transcript: transcriptText,
       evidence,
@@ -665,6 +876,7 @@ export async function compileFromTypedDemo(
   await runCompile({
     userText: "",
     answers: [],
+    history: renderHistory(items, getState().automations.records),
     demo: { transcript: typed.trim(), evidence, frames: evidence ? frameCount : 0 },
   });
 }

@@ -12,6 +12,9 @@ import { COIN_ALIASES, endpointMenu } from "../endpoints";
 export interface DraftContext {
   userText: string;
   answers: { asking: string; answer: string }[]; // question-card answers, newest last
+  // A condensed transcript of the conversation so far — follow-ups like
+  // "make one for meta too" only make sense with it.
+  history?: string;
   // Watch-me: the recording is an input adapter, not a second pipeline.
   demo?: {
     transcript: string;
@@ -47,7 +50,9 @@ export function draftSystemPrompt(catalog: Catalog): string {
       .map(([k, v]) => `${k}→${v}`)
       .join(", ")}`,
     "",
-    "- One automation unless the person's words name two distinct jobs handing off to each other (shortest chain wins).",
+    "- One automation unless the person's words name two distinct jobs (shortest chain wins).",
+    "- Two SEPARATE jobs with no hand-off ('and another automation that…', 'also make one that…', 'and then one to check…') = draft BOTH automations and leave chain null. Only set chain.links when one job's outputs actually feed the next — a link whose map is empty and whose onlyWhen is null is invalid.",
+    "- The conversation context may list automations already built this session. NEVER re-create an automation named there — modifications to those are handled elsewhere; draft only genuinely new jobs.",
     "- 'then email me…', 'then text me…', 'then message me a summary' is ALWAYS its own second automation (the message-drafting job), chained after the data job — set chain.links mapping the first job's outputs to the second job's inputs by name.",
     '- "when it drops below N" / "when it crosses above N" / "alert me if…" is ALWAYS two automations: the first watches (trigger watch) and outputs the value; the second acts; the link between them carries onlyWhen {"field": <that output name>, "op": "crosses_below" or "crosses_above", "value": N}. Never fold the condition into the sentence alone.',
     "- Otherwise, fetching data and reporting the values is ONE job. Split only where one job's finished outputs feed a different kind of job ('then …').",
@@ -72,6 +77,7 @@ export function draftSystemPrompt(catalog: Catalog): string {
     aliases ? `\nRemembered answers:\n${aliases}` : "",
     `\nExisting automations: ${existing}`,
     "",
+    'Example: "check the top tech news and another automation to check the meta stock price" is TWO independent automations that share nothing: {"automations": [{...the news job...}, {...the stock job...}], "chain": null, "question": null}.',
     'Example: "each week read new receipts in Downloads, add the totals to my ledger, then text me a recap" is TWO jobs — reading receipts AND writing their totals into the ledger is one job; the recap is the second. So: {"automations": [{"name": "Receipt totals", "files": {"reads": ["~/Downloads"], "writes": ["~/Documents/ledger.xlsx"]}, "outputs": [{"name": "vendor"}, {"name": "amount"}, {"name": "how_many"}], "delivers": "files", ...}, {"name": "Weekly recap", "inputs": [{"name": "amount", "label": "Total amount", "example": "1240"}, {"name": "how_many", "label": "How many receipts", "example": "3"}], "outputs": [], "files": {"reads": [], "writes": []}, "delivers": "answer", ...}], "chain": {"name": "Receipts then recap", "links": [{"from": "Receipt totals", "to": "Weekly recap", "map": [{"output": "amount", "input": "amount"}, {"output": "how_many", "input": "how_many"}], "onlyWhen": null}]}, "question": null}',
   ].join("\n");
 }
@@ -97,6 +103,9 @@ export function draftMessages(
         ? ["", "MY NOTE:", context.userText.trim()]
         : []),
     ].join("\n");
+  }
+  if (context.history) {
+    userContent = `Our conversation so far (for context — the request below is what to act on):\n${context.history}\n\nNow they ask:\n${userContent}`;
   }
   const messages: ChatMessage[] = [
     { role: "system", content: draftSystemPrompt(catalog) },
@@ -142,7 +151,12 @@ export async function planFreeThenTranscribe(
         content:
           "Plan an automation in plain words: which real files/folders it reads and writes, the steps, what it hands back, any schedule. Be concrete and short.",
       },
-      { role: "user", content: context.userText },
+      {
+        role: "user",
+        content: context.history
+          ? `Context — our conversation so far:\n${context.history}\n\nThe request:\n${context.userText}`
+          : context.userText,
+      },
       ...context.answers.map(
         (a) =>
           ({

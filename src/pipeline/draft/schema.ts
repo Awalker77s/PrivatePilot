@@ -152,28 +152,8 @@ export function buildWireSchema(catalog: Catalog) {
           }
         }
       });
-      if (v.automations.length > 1 && (!v.chain || v.chain.links.length === 0)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["chain"],
-          message:
-            "Multiple automations must hand off to each other — set chain.links, or merge them into one automation.",
-        });
-      }
-      if (v.chain && v.automations.length > 1) {
-        for (const a of v.automations) {
-          const inChain = v.chain.links.some(
-            (l) => l.from === a.name || l.to === a.name
-          );
-          if (!inChain) {
-            ctx.addIssue({
-              code: "custom",
-              path: ["chain", "links"],
-              message: `"${a.name}" is not connected to the chain — link it or merge it.`,
-            });
-          }
-        }
-      }
+      // Independent automations are fine unchained — a chain is only for
+      // hand-offs the person actually asked for.
       if (v.chain) {
         if (v.chain.links.length > 3) {
           ctx.addIssue({
@@ -185,6 +165,14 @@ export function buildWireSchema(catalog: Catalog) {
         const known = (n: string) =>
           names.has(n) || false; // existing automations join in later steps
         v.chain.links.forEach((l, i) => {
+          if (l.map.length === 0 && l.onlyWhen === null) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "links", i],
+              message:
+                "This link carries nothing — map outputs to inputs, set onlyWhen, or leave the jobs independent with chain null.",
+            });
+          }
           if (l.from === l.to) {
             ctx.addIssue({
               code: "custom",

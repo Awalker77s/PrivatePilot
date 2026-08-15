@@ -30,12 +30,48 @@ export function fenceAllows(sources: string[], url: string): boolean {
   return sources.some((s) => host === s || host.endsWith(`.${s}`));
 }
 
+const SEARCH_ENGINES = [
+  "bing.com",
+  "www.bing.com",
+  "google.com",
+  "www.google.com",
+  "duckduckgo.com",
+  "search.yahoo.com",
+  "search.brave.com",
+];
+
 export async function fetchPage(
   url: string,
   sources: string[]
 ): Promise<FetchOutcome> {
+  // A phrase is not an address: "google com finance tsla" must never reach
+  // the network (URL parsing would punycode it into gibberish).
+  if (/\s|%20/.test(url.trim()) || !/^[a-z0-9.:/?#&=_%+~-]+$/i.test(url.trim())) {
+    const sentence = `That isn't a web address — fetch_page needs a full URL like https://api.example.com/… (got "${url.slice(0, 60)}").`;
+    return {
+      ok: false,
+      text: sentence,
+      sentence,
+      family: "on_purpose",
+      logLine: sentence,
+    };
+  }
+
   const full = url.startsWith("http") ? url : `https://${url}`;
   const host = hostnameOf(full) ?? url;
+
+  // Search results pages only answer in a real browser — reroute the model
+  // to the rendered reader instead of wasting a raw fetch.
+  if (SEARCH_ENGINES.some((s) => host === s || host.endsWith(`.${s}`))) {
+    const sentence = `${host} only answers in a real browser — use read_page for this URL instead (or fetch a data API directly; stock prices: https://query1.finance.yahoo.com/v8/finance/chart/TSLA?range=1d&interval=1d).`;
+    return {
+      ok: false,
+      text: sentence,
+      sentence,
+      family: "on_purpose",
+      logLine: sentence,
+    };
+  }
 
   // The fence: enforced in TypeScript, in code we own, before any fetch.
   if (!fenceAllows(sources, full)) {

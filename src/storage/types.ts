@@ -48,6 +48,13 @@ export interface AutomationRecord {
   model: string;
   effort: "quick" | "thorough";
   compiledBy: string; // the model passport — re-runs under a different brain say so
+  // Provenance — app-written after validation, never sampled from the model.
+  origin?: {
+    kind: "told" | "watched" | "edited";
+    at: number;
+    frames?: number;
+    narrationWords?: number;
+  };
   lastRun: { at: number; status: RunStatus; summary: string } | null;
 }
 

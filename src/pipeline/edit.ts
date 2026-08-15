@@ -5,6 +5,8 @@
 import { chat, NUM_CTX_DRAFT } from "../providers";
 import type { AutomationRecord } from "../storage/types";
 import { scheduleSentence } from "../ui/fmt";
+import { buildCatalog } from "./catalog";
+import { validateEditedAutomation } from "./draft/schema";
 
 // Only these keys may be patched — the model can't rename ids or forge runs.
 const PATCHABLE = new Set([
@@ -137,6 +139,25 @@ export async function editAutomation(
     patch
   ) as unknown as AutomationRecord;
 
+  // The compiler's grounding applies to edits too: an edit can't smuggle in
+  // an unfenced host, an uncataloged path, or a dangling {fill_in}.
+  try {
+    const catalog = await buildCatalog();
+    const verdict = validateEditedAutomation(after, catalog);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        patch: null,
+        before: auto,
+        after: null,
+        changed: [],
+        failSentence: `That edit doesn't hold together: ${verdict.issues[0]}${verdict.issues.length > 1 ? ` (and ${verdict.issues.length - 1} more)` : ""}`,
+      };
+    }
+  } catch {
+    // catalog unavailable — shape-only edits still apply
+  }
+
   const changed = Object.keys(patch).map((key) => ({
     key,
     from: fieldLabel(key, auto),
@@ -144,4 +165,19 @@ export async function editAutomation(
   }));
 
   return { ok: true, patch, before: auto, after, changed, failSentence: null };
+}
+
+// A one-line what-changed summary between two versions — powers version
+// history rows. Reuses the same field labels the edit card shows.
+export function diffRecords(
+  a: AutomationRecord,
+  b: AutomationRecord
+): { key: string; from: string; to: string }[] {
+  const out: { key: string; from: string; to: string }[] = [];
+  for (const key of PATCHABLE) {
+    const fa = fieldLabel(key, a);
+    const fb = fieldLabel(key, b);
+    if (fa !== fb) out.push({ key, from: fa, to: fb });
+  }
+  return out;
 }

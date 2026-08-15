@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TabId } from "../App";
-import { PlusIcon, MicIcon, ArrowRightIcon } from "../icons";
+import { MicIcon, ArrowRightIcon } from "../icons";
 import { activeModelLabel } from "../../providers";
 import {
   ChatItem,
@@ -8,16 +8,24 @@ import {
   chatItems,
   chatVersion,
   chooseFile,
+  compileFromDemo,
+  compileFromTypedDemo,
+  hasNarration,
   consumeComposerSeed,
   discardBuilt,
+  discardWatchMe,
+  dropWatchFrame,
   keepBuilt,
   keepEdit,
   notNowBuilt,
   pickOption,
+  pinDemoValue,
   putBackBuilt,
   revertEdit,
   saveBuilt,
   sendText,
+  startWatchMe,
+  stopWatchMe,
   subscribeChat,
   toggleDiffEntry,
   tryOnce,
@@ -26,14 +34,59 @@ import { getRun } from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
 import { DiffCard } from "../DiffCard";
 import { SendDraftButton } from "../RunDetail";
+import {
+  DictationHandle,
+  cancelDictation,
+  dictationState,
+  startDictation,
+  stopDictation,
+  subscribeDictation,
+} from "../../watchme/dictation";
+import { isWatching } from "../chatStore";
+
+function DictationTimer({ startedAt }: { startedAt: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Math.floor((Date.now() - startedAt) / 1000);
+  return (
+    <span className="caption">
+      {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
+    </span>
+  );
+}
 
 export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   useSyncExternalStore(subscribeChat, chatVersion);
   const [draft, setDraft] = useState("");
   const [modelLabel, setModelLabel] = useState("…");
+  const [dict, setDict] = useState<DictationHandle>({
+    state: "idle",
+    level: 0,
+    startedAt: 0,
+    hint: null,
+    error: null,
+  });
   const threadRef = useRef<HTMLDivElement>(null);
+  const micHeldAt = useRef(0);
   const items = chatItems();
   const busy = chatBusy();
+  const watching = isWatching();
+
+  useEffect(() => subscribeDictation(setDict), []);
+
+  async function toggleDictation() {
+    if (dictationState().state === "listening") {
+      const text = await stopDictation();
+      if (text) {
+        setDraft((d) => (d.trim() ? `${d.trim()} ${text}` : text));
+      }
+    } else if (dictationState().state === "idle") {
+      await startDictation();
+    }
+  }
 
   useEffect(() => {
     activeModelLabel()
@@ -82,23 +135,105 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
         />
         <div className="composer-row">
           <div className="composer-left">
-            <button className="btn btn-sm btn-ghost" title="Watch me / Tell it">
-              <PlusIcon size={13} />
+            {/* Watch me: a labeled SESSION control, nothing like the mic. */}
+            <button
+              className={`btn btn-sm ${watching ? "mic-live" : "btn-ghost"}`}
+              title={
+                watching
+                  ? "Stop watching"
+                  : "Watch me — Do it once. It learns by watching. No video is kept."
+              }
+              onClick={() => (watching ? stopWatchMe() : startWatchMe())}
+              data-testid="watch-me-start"
+            >
+              <span
+                className={`dot dot-red${watching ? " rec-pulse" : ""}`}
+                style={{ width: 8, height: 8 }}
+              />
+              &nbsp;{watching ? "Stop" : "Watch me"}
             </button>
-            <button className="btn btn-sm btn-ghost" title="Watch me">
-              <MicIcon size={13} />
-            </button>
+            {dict.error && <span className="caption">{dict.error}</span>}
+            {dict.hint && <span className="caption">{dict.hint}</span>}
           </div>
           <div className="composer-right">
-            <span className="chip chip-gray">{modelLabel}</span>
-            <button
-              className="btn btn-primary btn-sm"
-              disabled={busy || !draft.trim()}
-              onClick={submit}
-              data-testid="send"
-            >
-              Send
-            </button>
+            {dict.state === "listening" ? (
+              /* The listening contract replaces the right rail in place:
+                 waveform · elapsed · ✕ · ✓ — your words land in the box. */
+              <>
+                <span className="wave" data-testid="dictate-wave">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <span
+                      key={i}
+                      className="wave-bar"
+                      style={{
+                        height: `${3 + dict.level * 11 * ((i % 3) + 1)}px`,
+                      }}
+                    />
+                  ))}
+                </span>
+                <DictationTimer startedAt={dict.startedAt} />
+                <button
+                  className="btn btn-sm btn-ghost"
+                  title="Throw the audio away"
+                  onClick={() => cancelDictation()}
+                  data-testid="dictate-cancel"
+                >
+                  ✕
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  title="Done — put my words in the box"
+                  onClick={toggleDictation}
+                  data-testid="dictate-confirm"
+                >
+                  ✓
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="chip chip-gray">{modelLabel}</span>
+                <button
+                  className={`btn btn-sm btn-ghost${dict.state === "transcribing" ? " mic-busy" : ""}`}
+                  title="Speak instead of typing — tap, or hold to talk"
+                  onPointerDown={() => {
+                    micHeldAt.current = Date.now();
+                    if (dict.state === "idle") void startDictation();
+                  }}
+                  onPointerUp={() => {
+                    // Hold >300ms = push-to-talk: release is the confirm.
+                    if (
+                      dict.state === "listening" &&
+                      Date.now() - micHeldAt.current > 300
+                    ) {
+                      void toggleDictation();
+                    }
+                  }}
+                  disabled={dict.state === "transcribing"}
+                  data-testid="mic-dictate"
+                >
+                  {dict.state === "transcribing" ? (
+                    <span
+                      className="spinner"
+                      style={{
+                        width: 11,
+                        height: 11,
+                        borderTopColor: "var(--blue)",
+                      }}
+                    />
+                  ) : (
+                    <MicIcon size={13} />
+                  )}
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={busy || !draft.trim()}
+                  onClick={submit}
+                  data-testid="send"
+                >
+                  Send
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -122,6 +257,8 @@ function ChatItemView({ item }: { item: ChatItem }) {
       return <BuiltCard item={item} />;
     case "edit":
       return <EditCard item={item} />;
+    case "watchme":
+      return <WatchMeCard item={item} />;
     case "note":
       return (
         <div className={`note-card note-${item.tone}`} data-testid="note">
@@ -129,6 +266,169 @@ function ChatItemView({ item }: { item: ChatItem }) {
         </div>
       );
   }
+}
+
+// Watch me: recording pill → consent strip → the same compile pipe.
+// The frames-held counter is real, and deletion is a visible event.
+function WatchMeCard({ item }: { item: ChatItem & { kind: "watchme" } }) {
+  const [, tick] = useState(0);
+  const [typed, setTyped] = useState("");
+  useEffect(() => {
+    if (item.state !== "recording") return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [item.state]);
+  const elapsed = Math.floor((Date.now() - item.startedAt) / 1000);
+
+  if (item.state === "recording") {
+    return (
+      <div className="built-card card" data-testid="watchme-recording">
+        <div className="watchme-bar">
+          <span className="dot dot-red rec-pulse" />
+          <b>Watching</b>
+          <span className="caption">
+            {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
+          </span>
+          <span className="chip chip-gray" data-testid="frames-held">
+            frames held: {item.framesHeld}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-primary btn-sm" onClick={() => stopWatchMe()}>
+            Stop
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => discardWatchMe(item.id)}
+          >
+            Throw it away
+          </button>
+        </div>
+        <div className="caption">
+          Do the task and say what you're doing out loud. No video is kept —
+          only these frames, and they're deleted the moment it compiles.
+        </div>
+        {item.reason && (
+          <div className="status-line" style={{ color: "var(--amber)" }}>
+            {item.reason}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (item.state === "review") {
+    return (
+      <div className="built-card card" data-testid="watchme-review">
+        <div className="caption">
+          Compile from these? Drop any frame you'd rather I never saw.
+        </div>
+        <div className="consent-strip" data-testid="consent-strip">
+          {item.thumbs
+            .filter((t) => !t.dropped)
+            .map((t) => (
+              <div key={t.tMs} className="consent-thumb">
+                <img src={t.url} alt="" />
+                <button
+                  className="thumb-drop"
+                  title="Drop this frame"
+                  onClick={() => dropWatchFrame(item.id, t.tMs)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          {item.framesHeld === 0 && (
+            <span className="caption">No frames held.</span>
+          )}
+        </div>
+        <div className="built-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => compileFromDemo(item.id, false)}
+            data-testid="compile-demo"
+          >
+            Compile from these
+          </button>
+          <button
+            className="btn"
+            onClick={() => compileFromDemo(item.id, true)}
+          >
+            Words only
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => discardWatchMe(item.id)}
+          >
+            Throw it away
+          </button>
+        </div>
+        {!item.micOk && item.reason && (
+          <div className="status-line" style={{ color: "var(--amber)" }}>
+            {item.reason}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (item.state === "listening" || item.state === "reading") {
+    return (
+      <div className="pipeline-card card">
+        <span className="spinner" />
+        <span className="stage-text">
+          {item.state === "listening"
+            ? "Listening back…"
+            : "Reading the frames…"}
+        </span>
+      </div>
+    );
+  }
+
+  // failed: the session survives — retry listening, or type what you did;
+  // never lose an expensive recording to a processing error.
+  return (
+    <div className="built-card card" data-testid="watchme-failed">
+      <div className="status-line" style={{ color: "var(--amber)" }}>
+        {item.reason}
+      </div>
+      {hasNarration(item.id) && (
+        <button
+          className="btn btn-sm"
+          onClick={() => compileFromDemo(item.id, false)}
+          data-testid="retry-listen"
+        >
+          Listen again
+        </button>
+      )}
+      <textarea
+        className="composer-input"
+        style={{
+          background: "var(--nested)",
+          borderRadius: 8,
+          padding: "8px 10px",
+        }}
+        rows={2}
+        placeholder="What did you do? e.g. I checked the Solana price on CoinGecko…"
+        value={typed}
+        onChange={(e) => setTyped(e.target.value)}
+      />
+      <div className="built-actions">
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={!typed.trim()}
+          onClick={() => compileFromTypedDemo(item.id, typed)}
+        >
+          Compile it
+        </button>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => discardWatchMe(item.id)}
+        >
+          Throw it away
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // The before→after card: field-level diffs against the current version,
@@ -281,6 +581,44 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
       ))}
       {result.keptToOneStep && (
         <div className="caption">Kept this to one step — that's all it needs.</div>
+      )}
+      {result.automations[0]?.origin?.kind === "watched" && (
+        <>
+          <div className="caption" data-testid="provenance">
+            Compiled from your recording —{" "}
+            {result.automations[0].origin.frames
+              ? `${result.automations[0].origin.frames} frame${result.automations[0].origin.frames === 1 ? "" : "s"} + your words.`
+              : "your words alone."}{" "}
+            Frames deleted.
+          </div>
+          {result.automations.some((a) => a.inputs.length > 0) &&
+            state !== "saved" && (
+              <div className="param-strip" data-testid="param-strip">
+                {result.automations.flatMap((a) =>
+                  a.inputs.map((inp) => (
+                    <span key={a.id + inp.name} className="param-chip">
+                      <span className="caption">{inp.label}</span>
+                      <b>"{inp.example}"</b>
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        title="It will ask you each time (keeps the blank)"
+                        disabled
+                      >
+                        Asks each time
+                      </button>
+                      <button
+                        className="btn btn-sm"
+                        title="Always use the demonstrated value"
+                        onClick={() => pinDemoValue(item.id, a.id, inp.name)}
+                      >
+                        Always this
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+            )}
+        </>
       )}
       <div className="argument">
         {result.argument.map((l, i) => (

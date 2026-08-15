@@ -87,6 +87,19 @@ const TOOLS: ToolDef[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "read_page",
+      description:
+        "Open a page in a real invisible browser (JavaScript runs), wait for it to finish, and return what a person would see. Use when fetch_page returns empty or shell HTML, or for pages that only work in a browser (search answer boxes, finance pages, dashboards). Slower than fetch_page — prefer fetch_page for APIs.",
+      parameters: {
+        type: "object",
+        properties: { url: { type: "string" } },
+        required: ["url"],
+      },
+    },
+  },
 ];
 
 function systemPrompt(record: AutomationRecord, inputValues: Record<string, string>): string {
@@ -290,8 +303,19 @@ export async function runToolLoop(
           result = f.ok
             ? `${f.text}\n---\n${f.logLine}\nThe job remains: ${record.sentence}`
             : f.text;
+        } else if (name === "read_page") {
+          onEvent({ text: `Tool loop — reading a page like a browser…` });
+          const { readRenderedPage } = await import("./renderPage");
+          const f = await readRenderedPage(String(args.url ?? ""), record.sources);
+          outcome.logLines.push(f.logLine);
+          if (f.ok)
+            outcome.corpus += `\n\n=== rendered ${args.url}${f.method === "vision" ? " (vision read)" : ""} ===\n${f.text}`;
+          if (!f.ok && f.family === "on_purpose") outcome.refusals.push(f.text);
+          result = f.ok
+            ? `${f.text}\n---\n${f.logLine}\nThe job remains: ${record.sentence}`
+            : f.text;
         } else {
-          result = `There is no tool named ${name}. The tools are list_files, read_file, write_file, fetch_page.`;
+          result = `There is no tool named ${name}. The tools are list_files, read_file, write_file, fetch_page, read_page.`;
         }
       } catch (e) {
         result = `The tool broke: ${String(e)}`;

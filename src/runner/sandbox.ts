@@ -122,6 +122,8 @@ export async function buildSandbox(
       totalBytes += catalogBytes;
       totalFiles += catalogFiles.length;
       copyNote = `Copied only the ${catalogFiles.length} cataloged files — ${display} holds ${full.files.toLocaleString()} files (${(full.bytes / 1e9).toFixed(1)} GB).`;
+      // The dir usually exists already from the per-file copies above — an
+      // EEXIST here is expected, and a real failure surfaces on first write.
       await mkdir(sandboxPath, { recursive: true }).catch(() => {});
     }
     roots.push({ display, real, sandboxPath });

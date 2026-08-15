@@ -26,6 +26,7 @@ export interface ChatMessage {
   content: string;
   tool_calls?: ToolCall[];
   tool_name?: string;
+  images?: string[]; // base64 — vision keyframes (Ollama /api/chat)
 }
 
 export interface ChatOptions {

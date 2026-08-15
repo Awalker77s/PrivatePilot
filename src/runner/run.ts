@@ -51,6 +51,18 @@ export async function runAutomation(
   auto: AutomationRecord,
   opts: RunOptions
 ): Promise<RunRecord> {
+  // A malformed record (imported, hand-built) must degrade, not crash.
+  auto = {
+    ...auto,
+    files: {
+      reads: auto.files?.reads ?? [],
+      writes: auto.files?.writes ?? [],
+    },
+    sources: auto.sources ?? [],
+    steps: auto.steps ?? [],
+    inputs: auto.inputs ?? [],
+    outputs: auto.outputs ?? [],
+  };
   const runId = newId("run");
   const onProgress = opts.onProgress ?? (() => {});
   let anchorN = 0;
@@ -307,6 +319,19 @@ async function runInner(
     verifyLog.sentence = "Nothing was read or fetched — no numbers to check.";
   }
   verifyLog.finishedAt = Date.now();
+
+  // A run that reached none of its sources delivered nothing — a purposeful
+  // stop, never a green checkmark that earns Save.
+  if (
+    auto.delivers === "answer" &&
+    auto.sources.length > 0 &&
+    loop.corpus.trim().length === 0
+  ) {
+    const sentence =
+      "Held back — it couldn't read anything from its sources, so there's nothing real to answer with.";
+    event("on_purpose", "Nothing fetched", sentence);
+    return finish("held", sentence);
+  }
 
   // ---- diff (only when a sandbox exists) ----
   if (!sandbox) {

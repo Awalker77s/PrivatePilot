@@ -6,6 +6,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use tauri_plugin_fs::FsExt;
 
+#[cfg(windows)]
+mod render;
+
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
     app.fs_scope()
@@ -129,8 +132,106 @@ fn copy_dir(src: String, dst: String) -> Result<u64, String> {
     Ok(n)
 }
 
+/// Watch-me transcription: spawn the bundled whisper-cli on a WAV the
+/// frontend wrote into app data, return the JSON transcript. Mechanism only —
+/// model choice, audio conversion, and deletion policy live in TypeScript.
+#[tauri::command]
+fn transcribe_wav(
+    app: tauri::AppHandle,
+    wav_path: String,
+    model_path: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    #[cfg(debug_assertions)]
+    let exe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/whisper-cli.exe");
+    #[cfg(not(debug_assertions))]
+    let exe = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("binaries/whisper-cli.exe");
+    if !exe.exists() {
+        return Err(format!("NoSidecar:whisper-cli not found at {}", exe.display()));
+    }
+    let out_base = wav_path.trim_end_matches(".wav").to_string();
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args([
+        "-m", &model_path, "-f", &wav_path, "-oj", "-of", &out_base, "-np", "-t", "4",
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — no console flash
+    }
+    let output = cmd.output().map_err(|e| format!("Spawn:{e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "WhisperFailed:{}:{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let json_path = format!("{out_base}.json");
+    let json = fs::read_to_string(&json_path).map_err(|e| format!("{:?}:{}", e.kind(), e))?;
+    let _ = fs::remove_file(&json_path);
+    Ok(json)
+}
+
+/// High-accuracy transcription via NVIDIA Parakeet on the same whisper.cpp
+/// runtime. parakeet-cli has no JSON output — the transcript arrives as
+/// plain stdout text.
+#[tauri::command]
+fn transcribe_wav_parakeet(
+    app: tauri::AppHandle,
+    wav_path: String,
+    model_path: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    #[cfg(debug_assertions)]
+    let exe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/parakeet-cli.exe");
+    #[cfg(not(debug_assertions))]
+    let exe = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("binaries/parakeet-cli.exe");
+    if !exe.exists() {
+        return Err(format!("NoSidecar:parakeet-cli not found at {}", exe.display()));
+    }
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["-m", &model_path, "-f", &wav_path, "-t", "4", "-np"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output().map_err(|e| format!("Spawn:{e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ParakeetFailed:{}:{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The render-and-read window is visible-but-offscreen; without this flag
+    // Chromium treats it as occluded and throttles it to uselessness. Merge
+    // with anything already set (the dev harness sets the CDP port here).
+    #[cfg(windows)]
+    {
+        let existing = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+        let flag = "--disable-features=CalculateNativeWinOcclusion";
+        if !existing.contains(flag) {
+            std::env::set_var(
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                format!("{existing} {flag}").trim(),
+            );
+        }
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
@@ -141,7 +242,10 @@ pub fn run() {
             allow_file,
             atomic_write,
             walk_stats,
-            copy_dir
+            copy_dir,
+            transcribe_wav,
+            transcribe_wav_parakeet,
+            render::render_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

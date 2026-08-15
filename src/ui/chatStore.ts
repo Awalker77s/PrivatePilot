@@ -3,6 +3,20 @@
 // prose.
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { readChatFile, writeChatFile } from "../storage/chat";
+import {
+  DEIXIS_RE,
+  DELTA_VERB_RE,
+  EditTarget,
+  NEW_TASK_RE,
+  TIMEY_RE,
+  findTargetNamed,
+  findTargetsByName,
+  focusTargets,
+  renderHistory,
+  rewriteDeixis,
+  splitCoordination,
+} from "./memory";
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
@@ -17,9 +31,8 @@ import {
 import { editAutomation, EditResult } from "../pipeline/edit";
 import { activeLocalModel } from "../providers";
 import { ChainCycleError, assertNoCycle, runChain } from "../dispatcher";
-import type { AutomationRecord } from "../storage/types";
 
-export type ChatItem =
+type ChatItemVariant =
   | { id: number; kind: "user"; text: string }
   | {
       id: number;
@@ -50,9 +63,25 @@ export type ChatItem =
       id: number;
       kind: "edit";
       autoId: string;
+      // The built card holding the unsaved draft this edit patches — null
+      // means the target is a saved record in the store.
+      builtItemId: number | null;
       result: EditResult;
       state: "fresh" | "kept" | "reverted";
+    }
+  | {
+      id: number;
+      kind: "watchme";
+      state: "recording" | "review" | "listening" | "reading" | "failed";
+      framesHeld: number;
+      startedAt: number;
+      thumbs: { tMs: number; url: string; dropped: boolean }[];
+      reason: string | null; // the designed sentence when a rung degrades
+      micOk: boolean;
     };
+
+// Every item carries when it happened — day dividers render from the gaps.
+export type ChatItem = ChatItemVariant & { at?: number };
 
 let items: ChatItem[] = [];
 let nextId = 1;
@@ -80,17 +109,109 @@ export function chatBusy(): boolean {
 function emit() {
   version++;
   for (const fn of listeners) fn();
+  scheduleSave();
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
-function push(item: DistributiveOmit<ChatItem, "id">): ChatItem {
-  const it = { ...item, id: nextId++ } as ChatItem;
+function push(item: DistributiveOmit<ChatItemVariant, "id">): ChatItem {
+  const it = { ...item, id: nextId++, at: Date.now() } as ChatItem;
   items = [...items, it];
   emit();
   return it;
+}
+
+// ---- Persistent chat memory: the thread survives restarts, so "this
+// automation" typed tomorrow still points at something. ----
+const CHAT_CAP = 200;
+let chatLoaded = false;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function serializableItems(): { list: ChatItem[]; interrupted: boolean } {
+  let interrupted = false;
+  const list: ChatItem[] = [];
+  for (const i of items) {
+    if (i.kind === "progress" || i.kind === "watchme") {
+      // A dead spinner would wait forever; watch-me thumbs are data: URLs of
+      // the screen — persisting them would break the burn() promise that a
+      // crash leaves zero recording bytes on disk.
+      interrupted = true;
+      continue;
+    }
+    if (i.kind === "built" && i.state === "running") {
+      interrupted = true;
+      list.push({ ...i, state: "fresh", progress: null });
+      continue;
+    }
+    list.push(i);
+  }
+  return { list: list.slice(-CHAT_CAP), interrupted };
+}
+
+function scheduleSave() {
+  if (!chatLoaded) return;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const { list, interrupted } = serializableItems();
+    void writeChatFile({
+      v: 1,
+      nextId,
+      interrupted,
+      pending,
+      pendingEditRequest,
+      items: list,
+    }).catch(() => {
+      // The thread is scrollback, not the record of what ran — a failed
+      // save must never block the conversation.
+    });
+  }, 500);
+}
+
+export async function loadChat(): Promise<void> {
+  const disk = await readChatFile();
+  if (disk) {
+    let loaded = disk.items as ChatItem[];
+    const tail = loaded[loaded.length - 1];
+    const tailOpenQuestion =
+      tail?.kind === "question" && tail.answered === null;
+    // Question cards that lost their compile context are inert — say so
+    // instead of leaving dead buttons.
+    loaded = loaded.map((i) =>
+      i.kind === "question" &&
+      i.answered === null &&
+      !(tailOpenQuestion && i.id === tail.id)
+        ? { ...i, answered: "(left unanswered)" }
+        : i
+    );
+    items = loaded;
+    nextId = Math.max(
+      disk.nextId ?? 1,
+      ...loaded.map((i) => i.id + 1),
+      1
+    );
+    pending = tailOpenQuestion
+      ? ((disk.pending as DraftContext | null) ?? null)
+      : null;
+    pendingEditRequest = tailOpenQuestion
+      ? (disk.pendingEditRequest ?? null)
+      : null;
+    if (disk.interrupted) {
+      items = [
+        ...items,
+        {
+          id: nextId++,
+          kind: "note",
+          tone: "gray",
+          at: Date.now(),
+          text: "Something was still running when the app closed — it was stopped, and nothing half-done was kept.",
+        },
+      ];
+    }
+  }
+  chatLoaded = true;
+  emit();
 }
 
 function replace(id: number, item: ChatItem | null) {
@@ -153,23 +274,19 @@ async function runCompile(context: DraftContext) {
 // An edit in flight, waiting for a "Which one?" answer.
 let pendingEditRequest: string | null = null;
 
-// "make it 7am" about an existing automation is an edit, not a build.
-// Resolve the target by name; two matches → a one-tap "Which one?" card,
-// never a silent pick.
-function editTargets(text: string): AutomationRecord[] {
-  const t = text.toLowerCase();
-  const aboutMatch = text.match(/^About "(.+?)":/);
-  const records = getState().automations.records;
-  if (aboutMatch) {
-    const named = records.filter(
-      (a) => a.name.toLowerCase() === aboutMatch[1].toLowerCase()
-    );
-    if (named.length > 0) return named;
+async function runEdit(target: EditTarget, request: string) {
+  // The patch base is the record's CURRENT state — a draft may have been
+  // pinned or re-edited since the target was picked (the v0 disease: patching
+  // a stale copy silently reverts the user's tweaks).
+  let auto = target.record;
+  if (target.builtItemId !== null) {
+    const host = builtItem(target.builtItemId);
+    const cur = host?.result.automations.find((a) => a.id === auto.id);
+    if (cur) auto = cur;
+  } else {
+    auto = getState().automations.records.find((r) => r.id === auto.id) ?? auto;
   }
-  return records.filter((a) => t.includes(a.name.toLowerCase()));
-}
 
-async function runEdit(auto: AutomationRecord, request: string) {
   busy = true;
   const progress = push({
     kind: "progress",
@@ -188,8 +305,16 @@ async function runEdit(auto: AutomationRecord, request: string) {
         tone: "amber",
         text: result.failSentence ?? "The edit didn't land.",
       });
+    } else if (target.builtItemId !== null) {
+      applyDraftEdit(target.builtItemId, result);
     } else {
-      push({ kind: "edit", autoId: auto.id, result, state: "fresh" });
+      push({
+        kind: "edit",
+        autoId: auto.id,
+        builtItemId: null,
+        result,
+        state: "fresh",
+      });
     }
   } catch (e) {
     replace(progress.id, null);
@@ -200,12 +325,43 @@ async function runEdit(auto: AutomationRecord, request: string) {
   }
 }
 
+// A draft edit mutates the built card in place (the Zapier/GPT-builder
+// pattern: one open draft, follow-ups change IT) and drops an already-kept
+// edit card as the visible change summary — Put it back reverses it.
+function applyDraftEdit(builtItemId: number, result: EditResult) {
+  const host = builtItem(builtItemId);
+  if (!host || !result.after) return;
+  result.after.origin = { kind: "edited", at: Date.now() };
+  const autos = host.result.automations.map((a) =>
+    a.id === result.after!.id ? result.after! : a
+  );
+  // A watched run stays earned through cosmetic patches; changing what the
+  // job actually DOES demands a fresh watched run before Save.
+  const execChanged = result.changed.some((c) =>
+    ["steps", "sources", "files", "inputs", "delivers"].includes(c.key)
+  );
+  patchBuilt(builtItemId, {
+    result: { ...host.result, automations: autos },
+    ...(host.state === "ran" && execChanged
+      ? { state: "fresh" as const, runId: host.runId }
+      : {}),
+  });
+  push({
+    kind: "edit",
+    autoId: result.after.id,
+    builtItemId,
+    result,
+    state: "kept",
+  });
+}
+
 // Keep it: the patched record becomes current (the old version is kept for
 // Put it back — last ~10).
 export async function keepEdit(itemId: number) {
   const item = items.find((i) => i.id === itemId);
   if (!item || item.kind !== "edit" || item.state !== "fresh" || !item.result.after)
     return;
+  item.result.after.origin = { kind: "edited", at: Date.now() };
   await saveAutomation(item.result.after);
   replace(itemId, { ...item, state: "kept" });
 }
@@ -213,12 +369,52 @@ export async function keepEdit(itemId: number) {
 export async function revertEdit(itemId: number) {
   const item = items.find((i) => i.id === itemId);
   if (!item || item.kind !== "edit" || item.state !== "kept") return;
-  await restoreVersion(item.autoId);
+  if (item.builtItemId !== null) {
+    // Draft edits never touched the store — put the before-record back into
+    // the built card.
+    const host = builtItem(item.builtItemId);
+    if (host) {
+      patchBuilt(item.builtItemId, {
+        result: {
+          ...host.result,
+          automations: host.result.automations.map((a) =>
+            a.id === item.autoId ? item.result.before : a
+          ),
+        },
+      });
+    }
+  } else {
+    await restoreVersion(item.autoId);
+  }
   replace(itemId, { ...item, state: "reverted" });
+}
+
+// A one-tap "Which one?" card — a delta with an ambiguous target never
+// guesses and never falls through to a fresh build.
+function askWhichOne(targets: EditTarget[], request: string) {
+  pendingEditRequest = request;
+  push({
+    kind: "question",
+    q: {
+      asking: "Which one?",
+      term: request,
+      kind: "automation",
+      options: targets.map((t) => ({
+        label: `${t.record.name}${t.builtItemId === null ? "" : " (unsaved draft)"}`,
+        value: t.record.name,
+      })),
+    },
+    answered: null,
+    runId: null,
+  });
 }
 
 export async function sendText(text: string) {
   if (busy || !text.trim()) return;
+  const saved = getState().automations.records;
+  // The digest is rendered BEFORE this message joins the thread — the
+  // request itself rides separately as userText.
+  const history = renderHistory(items, saved);
   push({ kind: "user", text });
 
   // An open question card? The typed text is its answer.
@@ -230,9 +426,7 @@ export async function sendText(text: string) {
 
   if (lastQuestion && pendingEditRequest) {
     replace(lastQuestion.id, { ...lastQuestion, answered: text });
-    const target = getState().automations.records.find(
-      (a) => a.name.toLowerCase() === text.trim().toLowerCase()
-    );
+    const target = findTargetNamed(text, items, saved);
     const request = pendingEditRequest;
     pendingEditRequest = null;
     if (target) {
@@ -248,7 +442,7 @@ export async function sendText(text: string) {
     await rememberAlias(lastQuestion.q.asking, text);
     await resolveQuestionRun(lastQuestion.runId, text);
     await runCompile({
-      userText: pending.userText,
+      ...pending,
       answers: [
         ...pending.answers,
         { asking: lastQuestion.q.asking, answer: text },
@@ -257,28 +451,53 @@ export async function sendText(text: string) {
     return;
   }
 
-  const targets = editTargets(text);
-  if (targets.length === 1) {
-    await runEdit(targets[0], text);
-    return;
-  }
-  if (targets.length > 1) {
-    pendingEditRequest = text;
-    push({
-      kind: "question",
-      q: {
-        asking: "Which one?",
-        term: text,
-        kind: "automation",
-        options: targets.map((a) => ({ label: a.name, value: a.name })),
-      },
-      answered: null,
-      runId: null,
-    });
+  // "…and another automation to check meta" = independent jobs. Split before
+  // drafting: one compile per job, each with the digest (so job 2 sees job
+  // 1's card and doesn't re-create it), chain null by construction.
+  const segments = splitCoordination(text);
+  if (segments.length > 1) {
+    for (const seg of segments) {
+      await runCompile({
+        userText: seg,
+        answers: [],
+        history: renderHistory(items, saved),
+      });
+    }
     return;
   }
 
-  await runCompile({ userText: text, answers: [] });
+  // A named automation — drafts on built cards are first-class targets, so
+  // "schedule the tech news one for 9am" patches the unsaved draft instead
+  // of re-building it.
+  const named = findTargetsByName(text, items, saved);
+  if (named.length === 1 && !NEW_TASK_RE.test(text)) {
+    await runEdit(named[0], text);
+    return;
+  }
+  if (named.length > 1 && !NEW_TASK_RE.test(text)) {
+    askWhichOne(named, text);
+    return;
+  }
+
+  // Deixis: "schedule this for 9am", "change the time" — the thread knows
+  // what "this" is; the model never sees the bare pronoun.
+  if (
+    !NEW_TASK_RE.test(text) &&
+    DELTA_VERB_RE.test(text) &&
+    (DEIXIS_RE.test(text) || TIMEY_RE.test(text))
+  ) {
+    const focus = focusTargets(items, saved);
+    if (focus.length === 1) {
+      await runEdit(focus[0], rewriteDeixis(text, focus[0].record.name));
+      return;
+    }
+    if (focus.length > 1) {
+      askWhichOne(focus, text);
+      return;
+    }
+  }
+
+  await runCompile({ userText: text, answers: [], history });
 }
 
 export async function pickOption(itemId: number, value: string) {
@@ -287,8 +506,10 @@ export async function pickOption(itemId: number, value: string) {
 
   if (pendingEditRequest) {
     replace(itemId, { ...item, answered: value });
-    const target = getState().automations.records.find(
-      (a) => a.name === value
+    const target = findTargetNamed(
+      value,
+      items,
+      getState().automations.records
     );
     const request = pendingEditRequest;
     pendingEditRequest = null;
@@ -301,7 +522,7 @@ export async function pickOption(itemId: number, value: string) {
   await rememberAlias(item.q.asking, value);
   await resolveQuestionRun(item.runId, value);
   await runCompile({
-    userText: pending.userText,
+    ...pending,
     answers: [...pending.answers, { asking: item.q.asking, answer: value }],
   });
 }
@@ -368,6 +589,298 @@ export function pushNote(tone: "gray" | "amber" | "red", text: string) {
   push({ kind: "note", tone, text });
 }
 
+// ---- Watch me: recording → consent strip → the same compile pipe ----
+import {
+  CaptureError,
+  DisplayFrameSource,
+  FixtureFrameSource,
+  FrameSource,
+  MicRecorder,
+} from "../watchme/capture";
+import { KeyframeStore } from "../watchme/keyframes";
+import { SttError, ensureModel, transcribe } from "../watchme/transcribe";
+import {
+  VisionUnavailable,
+  enrichFrames,
+  enrichmentEvidence,
+} from "../watchme/enrich";
+
+interface WatchSession {
+  itemId: number;
+  source: FrameSource;
+  mic: MicRecorder | null;
+  store: KeyframeStore;
+  narration: Blob | null;
+}
+
+let watchSession: WatchSession | null = null;
+
+function watchItem(itemId: number) {
+  const item = items.find((i) => i.id === itemId);
+  return item && item.kind === "watchme" ? item : null;
+}
+
+function patchWatch(
+  itemId: number,
+  patch: Partial<Extract<ChatItem, { kind: "watchme" }>>
+) {
+  const item = watchItem(itemId);
+  if (!item) return;
+  replace(itemId, { ...item, ...patch });
+}
+
+function syncThumbs(itemId: number, store: KeyframeStore) {
+  patchWatch(itemId, {
+    framesHeld: store.held,
+    thumbs: store.frames.map((f) => ({
+      tMs: f.tMs,
+      url: f.thumbUrl,
+      dropped: f.dropped,
+    })),
+  });
+}
+
+export function isWatching(): boolean {
+  return (
+    watchSession !== null &&
+    watchItem(watchSession.itemId)?.state === "recording"
+  );
+}
+
+export function hasNarration(itemId: number): boolean {
+  return (
+    watchSession?.itemId === itemId && watchSession.narration !== null
+  );
+}
+
+export async function startWatchMe(fixture?: {
+  frameUrls: string[];
+  narration: Blob | null;
+}): Promise<void> {
+  if (watchSession) return;
+  const item = push({
+    kind: "watchme",
+    state: "recording",
+    framesHeld: 0,
+    startedAt: Date.now(),
+    thumbs: [],
+    reason: null,
+    micOk: true,
+  });
+
+  const store = new KeyframeStore();
+  store.onChange = () => syncThumbs(item.id, store);
+  const source: FrameSource = fixture
+    ? new FixtureFrameSource(fixture.frameUrls)
+    : new DisplayFrameSource();
+  source.onEnded = () => void stopWatchMe();
+
+  let mic: MicRecorder | null = null;
+  let micOk = true;
+  let reason: string | null = null;
+
+  if (!fixture) {
+    mic = new MicRecorder();
+    try {
+      await mic.start();
+    } catch (e) {
+      micOk = false;
+      mic = null;
+      reason =
+        e instanceof CaptureError
+          ? e.sentence
+          : "The microphone wasn't allowed.";
+    }
+  }
+
+  watchSession = {
+    itemId: item.id,
+    source,
+    mic,
+    store,
+    narration: fixture?.narration ?? null,
+  };
+  patchWatch(item.id, { micOk, reason });
+
+  try {
+    await source.start((frame, tMs) => void store.offer(frame, tMs));
+  } catch (e) {
+    // Screen failed — the ladder degrades to words-only or plain typing.
+    const sentence =
+      e instanceof CaptureError ? e.sentence : `Couldn't record — ${String(e)}`;
+    if (mic || fixture) {
+      patchWatch(item.id, { reason: sentence });
+    } else {
+      // Nothing works: fall back to the composer, honestly.
+      watchSession = null;
+      replace(item.id, {
+        id: item.id,
+        kind: "note",
+        tone: "amber",
+        text: `${sentence} Type what you want done instead.`,
+      });
+      return;
+    }
+  }
+}
+
+export async function stopWatchMe(): Promise<void> {
+  const session = watchSession;
+  if (!session) return;
+  session.source.stop();
+  if (session.mic) {
+    session.narration = await session.mic.stop();
+  }
+  const state = watchItem(session.itemId);
+  if (state?.state === "recording") {
+    patchWatch(session.itemId, { state: "review" });
+    syncThumbs(session.itemId, session.store);
+  }
+}
+
+export function dropWatchFrame(itemId: number, tMs: number): void {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId) return;
+  session.store.drop(tMs);
+}
+
+export function discardWatchMe(itemId: number): void {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId) return;
+  session.source.stop();
+  session.mic?.discard();
+  session.store.burn();
+  syncThumbs(itemId, session.store);
+  watchSession = null;
+  replace(itemId, {
+    id: itemId,
+    kind: "note",
+    tone: "gray",
+    text: "Thrown away — every frame and the recording deleted. Nothing was kept.",
+  });
+}
+
+export async function compileFromDemo(
+  itemId: number,
+  wordsOnly: boolean
+): Promise<void> {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId || busy) return;
+
+  let transcriptText = "";
+  let segments: { fromMs: number; toMs: number; text: string }[] = [];
+  let reason: string | null = null;
+
+  // ---- listen back ----
+  if (session.narration) {
+    patchWatch(itemId, { state: "listening" });
+    try {
+      await ensureModel(() =>
+        patchWatch(itemId, { state: "listening" })
+      );
+      const t = await transcribe(session.narration);
+      transcriptText = t.text;
+      segments = t.segments;
+    } catch (e) {
+      reason =
+        e instanceof SttError
+          ? e.sentence
+          : `Listening back broke — ${String(e).slice(0, 80)}`;
+    }
+  } else {
+    reason = watchItem(itemId)?.micOk
+      ? "No narration was recorded."
+      : (watchItem(itemId)?.reason ?? "No narration was recorded.");
+  }
+
+  if (!transcriptText) {
+    // Rung 3: no words — frames alone are not enough to compile honestly.
+    patchWatch(itemId, { state: "failed", reason:
+      `${reason ?? "I couldn't hear you."} Type what you did instead — I'll use it with the frames.` });
+    return;
+  }
+
+  // ---- read the frames (enrichment) ----
+  let evidence: string | null = null;
+  const kept = session.store.kept();
+  if (!wordsOnly && kept.length > 0) {
+    patchWatch(itemId, { state: "reading" });
+    try {
+      const model = await activeLocalModel();
+      if (!model) throw new VisionUnavailable("No local model.");
+      const enrichment = await enrichFrames(model, kept, segments);
+      evidence = enrichmentEvidence(enrichment);
+    } catch (e) {
+      reason =
+        e instanceof VisionUnavailable
+          ? e.sentence
+          : "I couldn't watch the screen, so I compiled from your words alone.";
+    }
+  }
+
+  // ---- burn, then compile through the SAME pipe ----
+  const frameCount = kept.length;
+  session.store.burn();
+  session.mic?.discard();
+  watchSession = null;
+  replace(itemId, {
+    id: itemId,
+    kind: "note",
+    tone: "gray",
+    text: `Recording deleted — ${frameCount} frame${frameCount === 1 ? "" : "s"} and the narration are gone.${reason ? ` ${reason}` : ""}`,
+  });
+
+  await runCompile({
+    userText: "",
+    answers: [],
+    history: renderHistory(items, getState().automations.records),
+    demo: {
+      transcript: transcriptText,
+      evidence,
+      frames: evidence ? frameCount : 0,
+    },
+  });
+}
+
+// "type what you did instead" — the typed text takes the transcript's slot.
+export async function compileFromTypedDemo(
+  itemId: number,
+  typed: string
+): Promise<void> {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId || !typed.trim()) return;
+  session.narration = null;
+  const kept = session.store.kept();
+  let evidence: string | null = null;
+  if (kept.length > 0) {
+    patchWatch(itemId, { state: "reading" });
+    try {
+      const model = await activeLocalModel();
+      if (model) {
+        const enrichment = await enrichFrames(model, kept, []);
+        evidence = enrichmentEvidence(enrichment);
+      }
+    } catch {
+      // words alone
+    }
+  }
+  const frameCount = kept.length;
+  session.store.burn();
+  watchSession = null;
+  replace(itemId, {
+    id: itemId,
+    kind: "note",
+    tone: "gray",
+    text: `Recording deleted — ${frameCount} frame${frameCount === 1 ? "" : "s"} gone.`,
+  });
+  await runCompile({
+    userText: "",
+    answers: [],
+    history: renderHistory(items, getState().automations.records),
+    demo: { transcript: typed.trim(), evidence, frames: evidence ? frameCount : 0 },
+  });
+}
+
 // The sheet's Change link seeds the composer with the row quoted.
 let composerSeed: string | null = null;
 export function seedComposer(text: string) {
@@ -414,6 +927,10 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
       if (run.status === "broke") {
         patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
         push({ kind: "note", tone: "red", text: run.summary ?? "Broke." });
+      } else if (run.status === "held") {
+        // Nothing real happened — the watched run didn't earn Save.
+        patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
+        push({ kind: "note", tone: "amber", text: run.summary ?? "Held back." });
       } else {
         patchBuilt(itemId, { state: "ran", progress: null, runId: run.id });
       }
@@ -481,6 +998,22 @@ export function toggleDiffEntry(itemId: number, relPath: string, runId?: string)
   const entry = run?.diff?.entries.find((e) => e.relPath === relPath);
   if (!entry || run?.diff?.applied) return;
   entry.kept = !entry.kept;
+  emit();
+}
+
+// Parameterization: a demo-extracted fill-in can be pinned to its
+// demonstrated value ("Always use this") — the input disappears and the
+// steps get the literal. Reversible until Save.
+export function pinDemoValue(itemId: number, autoId: string, inputName: string) {
+  const item = builtItem(itemId);
+  if (!item || item.state === "saved") return;
+  const auto = item.result.automations.find((a) => a.id === autoId);
+  const input = auto?.inputs.find((i) => i.name === inputName);
+  if (!auto || !input) return;
+  auto.inputs = auto.inputs.filter((i) => i.name !== inputName);
+  auto.steps = auto.steps.map((s) =>
+    s.split(`{${inputName}}`).join(input.example)
+  );
   emit();
 }
 

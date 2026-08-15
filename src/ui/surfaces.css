@@ -699,27 +699,130 @@
   border-color: #33363e;
 }
 
+/* ---------- dictation mic ---------- */
+.mic-busy {
+  color: var(--blue);
+  border-color: rgba(91, 155, 248, 0.4);
+}
+
+.mic-live {
+  background: var(--red-tint);
+  border-color: rgba(226, 87, 76, 0.5);
+  color: var(--red);
+}
+
+.wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 14px;
+}
+
+.wave-bar {
+  width: 3px;
+  min-height: 3px;
+  border-radius: 2px;
+  background: var(--red);
+  transition: height 90ms linear;
+}
+
+/* ---------- watch me ---------- */
+.watchme-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rec-pulse {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.consent-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.consent-thumb {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  width: 128px;
+}
+
+.consent-thumb img {
+  display: block;
+  width: 100%;
+}
+
+.thumb-drop {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(11, 12, 14, 0.8);
+  color: var(--red);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.param-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.param-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  width: fit-content;
+}
+
 /* ---------- edit card ---------- */
 .edit-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
   font-size: 13px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .edit-from {
   color: var(--red);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .edit-arrow {
   color: var(--caption);
+  flex: none;
 }
 
 .edit-to {
   color: var(--green);
   font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 /* ---------- fill-ins ---------- */

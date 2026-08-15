@@ -19,6 +19,8 @@ export interface AppSettings {
     { lastValue: number | null; armed: boolean; askedAlreadyTrue: boolean }
   >;
   lastWatchTick?: Record<string, number>;
+  // One-time multi-image sanity probe result, per model tag.
+  visionProbe?: Record<string, boolean>;
 }
 
 const DEFAULTS: AppSettings = {

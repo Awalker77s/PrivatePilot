@@ -44,6 +44,7 @@ import {
   subscribeDictation,
 } from "../../watchme/dictation";
 import { isWatching } from "../chatStore";
+import { FormattedAnswer } from "../FormattedAnswer";
 
 function DictationTimer({ startedAt }: { startedAt: number }) {
   const [, tick] = useState(0);
@@ -647,20 +648,28 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
                 {run.status === "broke" ? (
                   <div className="run-answer" style={{ color: "var(--red)" }}>
                     <span className="dot dot-red" />
-                    {auto ? `${auto.name} — ` : ""}
-                    {run.summary}
+                    <FormattedAnswer
+                      compact
+                      text={`${auto ? `${auto.name} — ` : ""}${run.summary ?? "This run broke."}`}
+                    />
                   </div>
                 ) : run.status === "held" ? (
                   <div className="run-answer" style={{ color: "var(--muted)" }}>
                     <span className="dot dot-gray" />
-                    {auto ? `${auto.name} — ` : ""}
-                    {run.summary}
+                    <FormattedAnswer
+                      compact
+                      text={`${auto ? `${auto.name} — ` : ""}${run.summary ?? "Held back."}`}
+                    />
                   </div>
                 ) : (
                   <div className="run-answer">
                     <span className="dot dot-green" />
-                    {stepRuns.length > 1 && auto ? <b>{auto.name}&nbsp;— </b> : null}
-                    {run.answer ?? run.summary}
+                    <div className="run-answer-content">
+                      {stepRuns.length > 1 && auto ? (
+                        <div className="run-answer-name">{auto.name}</div>
+                      ) : null}
+                      <FormattedAnswer text={run.answer ?? run.summary ?? "Completed."} />
+                    </div>
                   </div>
                 )}
                 {run.baton && i < stepRuns.length - 1 && (

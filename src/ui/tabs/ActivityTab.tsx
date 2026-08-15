@@ -13,6 +13,7 @@ import { CategoryGlyph } from "../glyphs";
 import { StarterGallery } from "../StarterGallery";
 import { answerAlreadyTrue, isAlreadyTrueAsk } from "../../dispatcher/watchers";
 import { Sparkline, numberSeries } from "../Sparkline";
+import { FormattedAnswer } from "../FormattedAnswer";
 
 function headlineValue(run: RunRecord): string {
   const answer = run.answer ?? run.summary ?? "";
@@ -303,7 +304,9 @@ function OutcomeDetail({ runId }: { runId: string }) {
   const completedAt = run.finishedAt ?? run.startedAt;
   return (
     <div className="outcome-detail" data-testid="outcome-detail">
-      <div className="outcome-answer">{run.answer ?? run.summary ?? "Completed."}</div>
+      <div className="outcome-answer">
+        <FormattedAnswer text={run.answer ?? run.summary ?? "Completed."} />
+      </div>
       <div className="outcome-meta">
         <span>{new Date(completedAt).toLocaleString()}</span>
         {automation?.sources.length ? (

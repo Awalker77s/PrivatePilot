@@ -6,6 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
+import { keepRun, putBackRun, runAutomation } from "../runner/run";
+import { getRun, saveAutomation, saveChain } from "../storage/stores";
 
 export type ChatItem =
   | { id: number; kind: "user"; text: string }
@@ -27,6 +29,9 @@ export type ChatItem =
       kind: "built";
       result: CompileResult;
       state: "fresh" | "discarded" | "running" | "ran" | "saved";
+      runId: string | null; // the watched run — the card renders from its record
+      progress: string | null;
+      keepSentence: string | null;
     }
   | { id: number; kind: "note"; tone: "gray" | "amber" | "red"; text: string };
 
@@ -100,7 +105,14 @@ async function runCompile(context: DraftContext) {
       push({ kind: "question", q: result.question, answered: null });
       pending = context; // the next answer continues this compile
     } else {
-      push({ kind: "built", result, state: "fresh" });
+      push({
+        kind: "built",
+        result,
+        state: "fresh",
+        runId: null,
+        progress: null,
+        keepSentence: null,
+      });
       pending = null;
     }
   } catch (e) {
@@ -199,4 +211,79 @@ export function setBuiltState(
 
 export function pushNote(tone: "gray" | "amber" | "red", text: string) {
   push({ kind: "note", tone, text });
+}
+
+function builtItem(itemId: number) {
+  const item = items.find((i) => i.id === itemId);
+  return item && item.kind === "built" ? item : null;
+}
+
+function patchBuilt(
+  itemId: number,
+  patch: Partial<Extract<ChatItem, { kind: "built" }>>
+) {
+  const item = builtItem(itemId);
+  if (!item) return;
+  replace(itemId, { ...item, ...patch });
+}
+
+// Try it once: the watched run. Runs the drafted record in a sandbox; the
+// card then renders from the run record in runs.json — never model prose.
+export async function tryOnce(itemId: number) {
+  const item = builtItem(itemId);
+  if (!item || item.state === "running") return;
+  const auto = item.result.automations[0];
+  if (!auto || item.result.automations.length !== 1) return;
+  patchBuilt(itemId, { state: "running", progress: "Starting…" });
+  try {
+    const run = await runAutomation(auto, {
+      cause: "you pressed Try it once",
+      onProgress: (text) => patchBuilt(itemId, { progress: text }),
+    });
+    if (run.status === "broke") {
+      patchBuilt(itemId, { state: "fresh", progress: null, runId: run.id });
+      push({ kind: "note", tone: "red", text: run.summary ?? "Broke." });
+    } else {
+      patchBuilt(itemId, { state: "ran", progress: null, runId: run.id });
+    }
+  } catch (e) {
+    patchBuilt(itemId, { state: "fresh", progress: null });
+    push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+  }
+}
+
+export async function keepBuilt(itemId: number) {
+  const item = builtItem(itemId);
+  if (!item?.runId) return;
+  const sentence = await keepRun(item.runId);
+  patchBuilt(itemId, { keepSentence: sentence });
+}
+
+export async function putBackBuilt(itemId: number) {
+  const item = builtItem(itemId);
+  if (!item?.runId) return;
+  const sentence = await putBackRun(item.runId);
+  patchBuilt(itemId, { keepSentence: null });
+  push({ kind: "note", tone: "gray", text: sentence });
+}
+
+export function toggleDiffEntry(itemId: number, relPath: string) {
+  const item = builtItem(itemId);
+  if (!item?.runId) return;
+  const run = getRun(item.runId);
+  const entry = run?.diff?.entries.find((e) => e.relPath === relPath);
+  if (!entry || run?.diff?.applied) return;
+  entry.kept = !entry.kept;
+  emit();
+}
+
+// Save is earned: enabled only after the watched run completed.
+export async function saveBuilt(itemId: number) {
+  const item = builtItem(itemId);
+  if (!item || item.state !== "ran") return;
+  for (const auto of item.result.automations) {
+    await saveAutomation(auto);
+  }
+  if (item.result.chain) await saveChain(item.result.chain);
+  patchBuilt(itemId, { state: "saved" });
 }

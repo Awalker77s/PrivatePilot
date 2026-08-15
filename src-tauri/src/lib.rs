@@ -47,6 +47,88 @@ fn atomic_write(path: String, contents: String) -> Result<(), String> {
     })
 }
 
+/// Pre-flight walk: sum bytes + count files under a root, bailing early once
+/// past the caps. Policy (what the numbers mean) lives in TypeScript.
+#[tauri::command]
+fn walk_stats(path: String, max_files: u64, max_bytes: u64) -> Result<serde_json::Value, String> {
+    fn walk(
+        dir: &std::path::Path,
+        bytes: &mut u64,
+        files: &mut u64,
+        max_f: u64,
+        max_b: u64,
+    ) -> bool {
+        if let Ok(rd) = fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_symlink() {
+                    continue;
+                }
+                if p.is_dir() {
+                    if walk(&p, bytes, files, max_f, max_b) {
+                        return true;
+                    }
+                } else if let Ok(md) = e.metadata() {
+                    *bytes += md.len();
+                    *files += 1;
+                    if *files > max_f || *bytes > max_b {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    let root = PathBuf::from(&path);
+    let mut bytes: u64 = 0;
+    let mut files: u64 = 0;
+    let capped = if root.is_file() {
+        bytes = fs::metadata(&root).map(|m| m.len()).unwrap_or(0);
+        files = 1;
+        false
+    } else {
+        walk(&root, &mut bytes, &mut files, max_files, max_bytes)
+    };
+    Ok(serde_json::json!({ "bytes": bytes, "files": files, "capped": capped }))
+}
+
+/// Sandbox copy: real bytes, never hard links — a write through a hard link
+/// edits the user's real file instantly.
+#[tauri::command]
+fn copy_dir(src: String, dst: String) -> Result<u64, String> {
+    fn copy_rec(src: &std::path::Path, dst: &std::path::Path, n: &mut u64) -> Result<(), String> {
+        fs::create_dir_all(dst).map_err(|e| format!("{:?}:{}", e.kind(), e))?;
+        let rd = fs::read_dir(src).map_err(|e| format!("{:?}:{}", e.kind(), e))?;
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_symlink() {
+                continue;
+            }
+            let target = dst.join(e.file_name());
+            if p.is_dir() {
+                copy_rec(&p, &target, n)?;
+            } else {
+                fs::copy(&p, &target).map_err(|e| format!("{:?}:{}", e.kind(), e))?;
+                *n += 1;
+            }
+        }
+        Ok(())
+    }
+    let mut n: u64 = 0;
+    let s = PathBuf::from(&src);
+    let d = PathBuf::from(&dst);
+    if s.is_file() {
+        if let Some(parent) = d.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{:?}:{}", e.kind(), e))?;
+        }
+        fs::copy(&s, &d).map_err(|e| format!("{:?}:{}", e.kind(), e))?;
+        n = 1;
+    } else {
+        copy_rec(&s, &d, &mut n)?;
+    }
+    Ok(n)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -57,7 +139,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             allow_folder,
             allow_file,
-            atomic_write
+            atomic_write,
+            walk_stats,
+            copy_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

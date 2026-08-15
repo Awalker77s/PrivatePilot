@@ -246,6 +246,104 @@
   border-left-color: var(--red);
 }
 
+/* ---------- run result + diff card ---------- */
+.run-result {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+
+.run-answer {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.baton-line {
+  border-left: 2px solid var(--blue);
+  padding: 3px 10px;
+  color: var(--blue);
+  font-size: 12.5px;
+  background: var(--blue-tint);
+  border-radius: 0 6px 6px 0;
+}
+
+.diff-card {
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diff-headline {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.diff-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.diff-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.diff-file-row input[type="checkbox"] {
+  accent-color: var(--green);
+}
+
+.diff-file-name {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.diff-file-name:hover {
+  color: var(--green);
+}
+
+.diff-hunks {
+  margin: 4px 0 4px 22px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.hunk-add {
+  color: var(--green);
+}
+
+.hunk-del {
+  color: var(--red);
+}
+
+.hunk-ctx {
+  color: var(--caption);
+}
+
 /* ---------- activity ---------- */
 .activity {
   display: flex;

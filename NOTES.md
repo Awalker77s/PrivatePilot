@@ -61,6 +61,30 @@ day. This becomes the writeup.
   memory and the Featherless key need somewhere local to live.
 - **Version history lives inside automations.json** as a `versions` map next
   to `records` — still exactly three data files, records verbatim A5.
+- **The runner's fights, and what won:**
+  1. *The think channel struck again* — in the tool loop this time: after
+     reading everything, the model spent a whole turn thinking and emitted
+     empty content, which read as "no answer". `think: false` on loop calls,
+     plus an honestly-logged one-time nudge ("An empty turn — asked it to
+     answer in words").
+  2. *Grounded verification was too honest.* The sum $1,240 appears in no
+     source file, and the 9B's arithmetic check only tried pairwise sums, so
+     the run blocked on a correct number. Stage 5 now does what A4 literally
+     says — "plain code + one temp-0 check": a subset-sum in code proves
+     derivability deterministically (1240 = 415 + 612.5 + 212.5 · checked in
+     code), with the model check as fallback for anything code can't derive.
+  3. *Spreadsheets diff as tables, not bytes* — write_file to .xlsx takes CSV
+     and becomes a real workbook via exceljs, and the diff card extracts both
+     sides back to rows, so "what changed" is three green + lines, not
+     "binary changed".
+  4. *dir-compare and linkedom can't run in a webview* (Node fs / no-DOM
+     environments). The diff walk implements dir-compare's semantics
+     (compareSize → compareContent) over plugin-fs; defuddle runs on the
+     webview's own DOMParser with readability as the pinned fallback. Both
+     pinned packages stay in package.json as the spec's stack.
+  5. *MVP verified with file hashes*: the tracking sheet's SHA256 was
+     identical through build + run + diff; changed only at Keep; the
+     .pilot-versions restore brought back the exact original hash.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

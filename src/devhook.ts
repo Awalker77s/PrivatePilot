@@ -10,6 +10,10 @@ import * as settings from "./storage/settings";
 import * as catalog from "./pipeline/catalog";
 import * as session from "./pipeline/session";
 import * as chatStore from "./ui/chatStore";
+import * as runner from "./runner/run";
+import * as sandboxMod from "./runner/sandbox";
+import * as diffMod from "./runner/diff";
+import * as fetchMod from "./runner/fetchPage";
 
 declare global {
   interface Window {
@@ -28,5 +32,9 @@ export function installDevHook() {
     catalog,
     session,
     chatStore,
+    runner,
+    sandboxMod,
+    diffMod,
+    fetchMod,
   };
 }

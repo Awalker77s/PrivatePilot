@@ -204,6 +204,7 @@ export async function compile(
   let catalog: Catalog;
   try {
     catalog = catalogForRequest(await buildCatalog(), context.userText);
+    if (context.singleJob) catalog = { ...catalog, singleJob: true };
   } catch (e) {
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();
@@ -223,7 +224,7 @@ export async function compile(
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();
     draftLog.sentence = "No local model to draft with.";
-    return fail("No Qwen model is pulled yet — run: ollama pull qwen3.5:9b");
+    return fail("No local model is pulled yet — run: ollama pull qwen3.5:4b");
   }
   draftLog.lines.push({
     at: Date.now(),
@@ -377,7 +378,10 @@ export async function compile(
     assembleRecord(a, model, context)
   );
   let chain: ChainRecord | null = null;
-  if (draft.chain && draft.chain.links.length > 0) {
+  if (
+    draft.chain &&
+    (draft.chain.links.length > 0 || (draft.chain.steps?.length ?? 0) > 0)
+  ) {
     const nameToId = new Map(assembled.map((r) => [r.name, r.id]));
     chain = {
       id: newId("chain"),
@@ -388,6 +392,24 @@ export async function compile(
         map: Object.fromEntries(l.map.map((p) => [p.output, p.input])),
         onlyWhen: l.onlyWhen,
       })),
+      // Branching: the flat step list, automation names resolved to ids.
+      ...((draft.chain.steps?.length ?? 0) > 0
+        ? {
+            steps: draft.chain.steps!.map((s) => ({
+              id: s.id,
+              automationId: nameToId.get(s.automation) ?? s.automation,
+              after: s.after,
+              needs: s.needs,
+              when: s.when,
+              // "" is a constrained-decoding slip for "no condition" — every
+              // consumer is truthiness-guarded, so an empty string silently
+              // deletes the branch. Normalize to null (absent) here.
+              ifAnswerContains: s.if_answer_contains || null,
+              ifAnswerLacks: s.if_answer_lacks || null,
+              map: Object.fromEntries(s.map.map((p) => [p.output, p.input])),
+            })),
+          }
+        : {}),
       timeoutMinutes: 30,
       createdAt: Date.now(),
       components: assembled.map((record) => ({
@@ -442,6 +464,9 @@ function assembleRecord(
     files: a.files,
     formats,
     sources: a.sources,
+    apps: a.apps,
+    tools: a.tools,
+    knowledge: a.knowledge,
     delivers: a.delivers,
     schedule: a.schedule,
     model,

@@ -18,6 +18,17 @@ import * as sandboxMod from "./runner/sandbox";
 import * as diffMod from "./runner/diff";
 import * as fetchMod from "./runner/fetchPage";
 import * as renderMod from "./runner/renderPage";
+import { invoke } from "@tauri-apps/api/core";
+import * as connectors from "./connectors/registry";
+import * as spotifyMod from "./connectors/spotify";
+import * as computerMod from "./connectors/computer";
+import * as outlookMod from "./connectors/outlook";
+import * as gmailMod from "./connectors/gmail";
+import * as heavyReg from "./heavy/registry";
+import * as heavyRun from "./heavy/runTool";
+import * as ragIndex from "./rag/index";
+import * as ragAnswer from "./rag/answer";
+import * as ragStore from "./rag/store";
 import * as quickDraft from "./pipeline/quickDraft";
 
 declare global {
@@ -63,6 +74,17 @@ export function installDevHook() {
     diffMod,
     fetchMod,
     renderMod,
+    invoke,
+    connectors,
+    spotifyMod,
+    computerMod,
+    outlookMod,
+    gmailMod,
+    heavyReg,
+    heavyRun,
+    ragIndex,
+    ragAnswer,
+    ragStore,
     quickDraft,
   };
 }

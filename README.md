@@ -11,13 +11,15 @@ where compute happens.
 ## 60-second quickstart
 
 1. Install [Node 20+](https://nodejs.org) and [Ollama](https://ollama.com), then
-   pull a local model. Use 4B on a CPU-only computer; use 9B when you have a
-   capable GPU and want stronger drafts:
+   pull a local model. **Qwen 4B is the default** — fastest, and in a live
+   bench of this app's own pipeline it matched or beat every larger model at
+   building automations. Add **Gemma 12B** as a "Careful" option (Settings →
+   Local AI) if you want the best screen/image reading for Watch me:
 
 ```bash
 ollama pull qwen3.5:4b
-# or
-ollama pull qwen3.5:9b
+# optional, for screen-heavy jobs:
+ollama pull gemma4:12b
 ```
 
 2. Install and run:
@@ -99,6 +101,37 @@ provable "nothing left this computer."**
   reads the rendered text; if the answer only exists as pixels, the local
   vision model reads it twice at two scales and must agree. APIs stay
   preferred when one covers the goal.
+- **Looks into your apps — no sign-in, nothing leaves the computer**: say
+  "every morning tell me which unread emails need me first" and the
+  automation reads your **Outlook** inbox and calendar right on this PC
+  (classic Outlook's own object model), or "what's playing" and it asks
+  Windows what **Spotify** is doing (and can pause/skip), or "look at my
+  Discord window" and it reads what any open app shows through Windows'
+  accessibility tree — the same text a screen reader gets. Each app is one
+  **Allow** in Settings → Connected apps. Records carry an `apps` fence
+  next to `sources`; a run only sees the typed tools of the apps it lists.
+  **Gmail** works too — paste an app password once (no Google sign-in
+  screens, no developer setup); it reads over IMAP without marking anything
+  read and saves drafts into Gmail's Drafts. Reading is the default — the
+  only writes are a **draft** saved into your Outlook or Gmail Drafts folder
+  (you press Send there; the app never can) and a pause/skip you can undo.
+  If an app isn't allowed or open, the run stops
+  held-back with the sentence that says what to do — never an answer from
+  half-read data.
+- **Does real work on your files — safely**: allow "Heavy tasks" and an
+  automation can rename in bulk, pack archives, and **read scanned or
+  photographed documents (OCR)** into searchable PDFs + clean text. It's not a
+  terminal — the model fills validated blanks (which files, what format) and
+  the app builds the command; nothing is ever a shell string, everything runs
+  in a sandbox copy under a job object, and nothing touches real files until
+  you press Keep. (Full design + safety model in
+  [docs/heavy-tools-and-documents.md](docs/heavy-tools-and-documents.md).)
+- **Ask your documents**: "clean the scanned receipts in Downloads and file
+  them into a Receipts knowledge base", then "ask my Receipts what I spent" —
+  answered **only from your documents**, with citations to the exact receipt,
+  or an honest "I couldn't find that in your documents." Fully local: OCR via
+  Tesseract, embeddings via `nomic-embed-text`, a plain-file vector store, and
+  the same grounded-answer verification the rest of the app uses.
 - **Never silent**: every failure state is a designed sentence in one of
   three families — stopped on purpose (gray), needs you (amber), broke (red).
   A rate-limited API is "asked us to slow down", never a price of 0.
@@ -262,6 +295,14 @@ Engineering honesty, straight from [NOTES.md](NOTES.md):
 
 ## What's next
 
+- **Outlook from any device** — a Microsoft-account connection (OAuth PKCE
+  in a loopback listener, tokens DPAPI-sealed in Rust, the model never sees
+  them) behind the same five Outlook tools, so the new Outlook and phones
+  work too. Needs one Entra app registration; the recipe is in NOTES.md.
+- **More apps on the same ladder** — notifications ("what pinged me while I
+  was away"), Windows Search (`find_files`), Microsoft To Do, Google
+  Calendar, Notion, browser history — each a 2–5-tool manifest with its own
+  honest sentences.
 - **The .pilot file** — an automation record is already one strict-JSON
   document; sharing is a double-click, with a "what this touches" card before
   anything activates.

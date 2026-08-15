@@ -31,6 +31,27 @@ export function fenceAllows(sources: string[], url: string): boolean {
   return sources.some((s) => host === s || host.endsWith(`.${s}`));
 }
 
+// Is this token a real web address, or a bare phrase? A phrase ("google com
+// finance tsla") must never reach the network — URL parsing would punycode it
+// into gibberish. But a genuine URL may legally carry commas, brackets,
+// semicolons, and %-escapes (including %20) in its path and query — those are
+// NOT disqualifying. The test that actually matters: it parses to an http(s)
+// URL whose HOST has a dot (or is localhost) and contains no whitespace.
+export function looksLikeUrl(raw: string): boolean {
+  const s = raw.trim();
+  if (/\s/.test(s)) return false; // a real URL token never has a raw space
+  const full = s.startsWith("http") ? s : `https://${s}`;
+  let u: URL;
+  try {
+    u = new URL(full);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  if (/\s|%20/.test(u.hostname)) return false; // an escaped space in the HOST = a phrase
+  return u.hostname === "localhost" || u.hostname.includes(".");
+}
+
 const SEARCH_ENGINES = [
   "bing.com",
   "www.bing.com",
@@ -46,8 +67,9 @@ export async function fetchPage(
   sources: string[]
 ): Promise<FetchOutcome> {
   // A phrase is not an address: "google com finance tsla" must never reach
-  // the network (URL parsing would punycode it into gibberish).
-  if (/\s|%20/.test(url.trim()) || !/^[a-z0-9.:/?#&=_%+~-]+$/i.test(url.trim())) {
+  // the network (URL parsing would punycode it into gibberish). A real URL
+  // with commas/%20/brackets in its query is fine — only the host matters.
+  if (!looksLikeUrl(url)) {
     const sentence = `That isn't a web address — fetch_page needs a full URL like https://api.example.com/… (got "${url.slice(0, 60)}").`;
     return {
       ok: false,

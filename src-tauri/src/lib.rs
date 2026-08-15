@@ -22,7 +22,7 @@ async fn ollama_request(
     body: Option<String>,
     timeout_ms: u64,
 ) -> Result<LocalHttpResponse, String> {
-    const ALLOWED_PATHS: [&str; 4] = ["/api/tags", "/api/show", "/api/ps", "/api/chat"];
+    const ALLOWED_PATHS: [&str; 5] = ["/api/tags", "/api/show", "/api/ps", "/api/chat", "/api/embed"];
     if !ALLOWED_PATHS.contains(&path.as_str()) {
         return Err("Refused: unsupported Ollama endpoint".to_string());
     }
@@ -52,6 +52,17 @@ async fn ollama_request(
 
 #[cfg(windows)]
 mod render;
+#[cfg(windows)]
+mod apps;
+#[cfg(windows)]
+mod outlook_classic;
+#[cfg(windows)]
+mod secrets;
+#[cfg(windows)]
+mod gmail;
+#[cfg(windows)]
+mod heavy;
+mod ocr_raster;
 
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -290,7 +301,19 @@ pub fn run() {
             copy_dir,
             transcribe_wav,
             transcribe_wav_parakeet,
-            render::render_page
+            render::render_page,
+            apps::media_sessions,
+            apps::media_control,
+            apps::list_windows,
+            apps::read_window,
+            outlook_classic::outlook_classic,
+            secrets::secret_set,
+            secrets::secret_clear,
+            secrets::secret_has,
+            gmail::gmail_imap,
+            gmail::gmail_disconnect_pool,
+            heavy::run_tool,
+            ocr_raster::rasterize_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

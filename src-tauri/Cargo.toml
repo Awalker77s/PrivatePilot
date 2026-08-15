@@ -22,12 +22,40 @@ tauri-plugin-dialog = "2"
 tauri-plugin-http = "2"
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 base64 = "0.22"
+# gmail.rs — IMAP over TLS with an app password (SChannel via native-tls;
+# no OAuth client to register), MIME parsing for bodies and RFC2047 headers.
+imap = "2.4"
+native-tls = "0.2"
+mailparse = "0.16"
+chrono = "0.4"
+# ocr_raster.rs — rasterize scanned PDF pages to PNG for OCR. pdfium-render
+# binds pdfium.dll at runtime (libloading; no windows-crate conflict); png
+# encodes the frames. Both permissive-licensed.
+pdfium-render = "0.9"
+png = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 # Pinned to what wry already links — 0.39 pulls windows 0.62 and won't unify.
 webview2-com = "0.38"
+# =0.23.0 is the last uiautomation on windows 0.61 (0.23.1+ moved to 0.62 and
+# would drag a second copy of the windows crate into the build). Its `inputs`
+# module is imported unconditionally, so we supply the two windows features
+# it needs ourselves — Cargo unions features on the shared crate.
+uiautomation = { version = "=0.23.0", default-features = false, features = ["pattern", "input"] }
 windows = { version = "0.61", features = [
     "Win32_System_Com",
     "Win32_UI_Shell",
     "Win32_System_Com_StructuredStorage",
+    # apps.rs — Windows-local app access (media sessions, windows, UIA)
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Control",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    # secrets.rs — DPAPI
+    "Win32_Security_Cryptography",
+    # heavy.rs — job objects (kill-on-close, resource + timeout caps)
+    "Win32_System_JobObjects",
+    "Win32_System_IO",
 ] }

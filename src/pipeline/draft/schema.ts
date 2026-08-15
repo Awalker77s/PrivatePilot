@@ -5,6 +5,8 @@
 // Shape constraints beyond that live in refinements — validator-only.
 import { z } from "zod";
 import type { Catalog } from "../catalog";
+import { CONNECTOR_IDS, allConnectorToolNames, connectorOfTool } from "../../connectors/registry";
+import { HEAVY_TOOL_IDS, heavyToolNames } from "../../heavy/registry";
 
 export const CATEGORIES = [
   "Documents",
@@ -51,6 +53,15 @@ export function buildWireSchema(catalog: Catalog) {
       writes: z.array(pathEnum(catalog.writeTargets)),
     }),
     sources: z.array(z.string()),
+    // The apps fence — a closed enum, so an app that doesn't exist can't be
+    // sampled at all (same trick as file paths).
+    apps: z.array(z.enum(CONNECTOR_IDS)),
+    // The heavy-tools fence — same closed-enum trick.
+    tools: z.array(z.enum(HEAVY_TOOL_IDS)),
+    // Knowledge bases (named document collections) this job reads or fills.
+    // Free strings: the person creates KBs by name; the runner validates one
+    // exists at run time and refuses honestly otherwise.
+    knowledge: z.array(z.string()),
     delivers: z.enum(["answer", "files"]),
     schedule: z.union([
       z.strictObject({
@@ -87,6 +98,26 @@ export function buildWireSchema(catalog: Catalog) {
         ]),
       })
     ),
+    // Branching (use INSTEAD of links when the person's words route on
+    // results: "if…, otherwise…, depending on…"): a flat step list. Each step
+    // names the automations it runs after, the outcome that lets it fire, and
+    // an optional test on the earlier step's answer.
+    steps: z.array(
+      z.strictObject({
+        id: z.string(), // "s1", "s2", …
+        automation: z.string(), // a drafted automation's name
+        after: z.array(z.string()), // step ids; [] = the first step
+        needs: z.enum(["all", "any"]), // "any" = fire after whichever came through
+        // "failed" = the earlier step didn't work (held or broke) — use it for
+        // "if it fails / if it's down". "ran" = it succeeded.
+        when: z.enum(["ran", "held", "broke", "failed", "always"]),
+        if_answer_contains: z.union([z.string(), z.null()]),
+        if_answer_lacks: z.union([z.string(), z.null()]),
+        map: z.array(
+          z.strictObject({ output: z.string(), input: z.string() })
+        ),
+      })
+    ),
   });
 
   const questionDraft = z.strictObject({
@@ -119,6 +150,18 @@ export function buildWireSchema(catalog: Catalog) {
         });
       }
       const names = new Set(v.automations.map((a) => a.name));
+      // Two automations sharing a name collapse at assemble (nameToId is
+      // last-wins), so a chain runs one twice and orphans the other. Reject.
+      const lowerNames = v.automations.map((a) => a.name.trim().toLowerCase());
+      v.automations.forEach((a, i) => {
+        if (lowerNames.indexOf(a.name.trim().toLowerCase()) !== i) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["automations", i, "name"],
+            message: `Two automations are both named "${a.name}" — give each a distinct name.`,
+          });
+        }
+      });
       v.automations.forEach((a, i) => {
         const words = a.name.trim().split(/\s+/).length;
         if (words < 1 || words > 4) {
@@ -151,10 +194,210 @@ export function buildWireSchema(catalog: Catalog) {
             });
           }
         }
+        // App tools in the steps must belong to an app in the fence, and
+        // mail/music never travel through URLs when the app is listed.
+        const stepText = a.steps.join("\n");
+        for (const tool of allConnectorToolNames()) {
+          if (new RegExp(`\\b${tool}\\b`).test(stepText)) {
+            const owner = connectorOfTool(tool);
+            if (owner && !a.apps.includes(owner)) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["automations", i, "apps"],
+                message: `The steps call ${tool}, so apps must include "${owner}".`,
+              });
+            }
+          }
+        }
+        for (const s of a.sources) {
+          if (a.apps.includes("outlook") && /outlook|office|graph\.microsoft/i.test(s)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "sources"],
+              message: `Outlook is read through its app tools, not ${s} — remove it from sources.`,
+            });
+          }
+          if (a.apps.includes("gmail") && /gmail|googleapis|google\.com/i.test(s)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "sources"],
+              message: `Gmail is read through its app tools, not ${s} — remove it from sources.`,
+            });
+          }
+          if (a.apps.includes("spotify") && /spotify/i.test(s)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "sources"],
+              message: `Spotify is read through its app tools, not ${s} — remove it from sources.`,
+            });
+          }
+        }
+        // Heavy tools: named in a step ⇒ must be in the tools fence; a job
+        // with heavy tools acts on files, so it needs a files fence; and a
+        // watcher may NEVER run a heavy tool.
+        for (const tool of heavyToolNames()) {
+          if (new RegExp(`\\b${tool}\\b`).test(stepText) && !a.tools.includes(tool as (typeof HEAVY_TOOL_IDS)[number])) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "tools"],
+              message: `The steps use ${tool}, so tools must include "${tool}".`,
+            });
+          }
+        }
+        if (a.tools.length > 0) {
+          if (a.files.reads.length === 0 && a.files.writes.length === 0) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "files"],
+              message: "A job that uses heavy tools must name the folders it works on in files.",
+            });
+          }
+          if (a.schedule.trigger === "watch") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["automations", i, "schedule"],
+              message: "Watchers check values — they never run heavy tools. Make it daily, or run it yourself.",
+            });
+          }
+        }
       });
+      // A coordination-split segment is ONE job by construction — a draft
+      // with siblings is the model mimicking history, not the request.
+      if (catalog.singleJob && v.automations.length > 1) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["automations"],
+          message: `This request is ONE job — draft exactly one automation (you drafted ${v.automations.length}). Remove the others; do not invent companions from the conversation history.`,
+        });
+      }
+      // The person's words routed on a result ("if…, otherwise…, depending
+      // on…") — several jobs with no chain.steps is the drafter missing the
+      // routing, not a choice. Insist, with the shape spelled out.
+      // Branching must be expressed as steps. Plain links run BOTH branches
+      // unconditionally every time — so branch-intent with no steps is wrong
+      // whether links are empty or not.
+      if (
+        catalog.branchIntent &&
+        v.automations.length > 1 &&
+        (v.chain === null || v.chain.steps.length === 0)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["chain"],
+          message:
+            'The person said the next automation depends on an earlier RESULT ("if…, otherwise…"). Express this with chain.steps (links MUST be []): the first job {"id": "s1", "after": [], …}; each branch after it with if_answer_contains or if_answer_lacks naming the word the result is tested for. Plain links would run every branch every time.',
+        });
+      }
       // Independent automations are fine unchained — a chain is only for
       // hand-offs the person actually asked for.
       if (v.chain) {
+        if (v.chain.links.length > 0 && v.chain.steps.length > 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["chain"],
+            message: "Use links (a straight line) OR steps (branching) — never both.",
+          });
+        }
+        if (v.chain.steps.length > 0) {
+          const steps = v.chain.steps;
+          if (steps.length > 8) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "Branching chains cap at 8 steps.",
+            });
+          }
+          const stepIds = new Set(steps.map((s) => s.id));
+          if (stepIds.size !== steps.length) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "Two steps share an id — give every step its own (s1, s2, …).",
+            });
+          }
+          if (!steps.some((s) => s.after.length === 0)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "One step must have after: [] — the chain needs a first step.",
+            });
+          }
+          steps.forEach((s, i) => {
+            if (!names.has(s.automation)) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["chain", "steps", i, "automation"],
+                message: `"${s.automation}" is not one of the drafted automation names.`,
+              });
+            }
+            for (const dep of s.after) {
+              if (!stepIds.has(dep)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "after"],
+                  message: `Step ${s.id} waits for "${dep}", which isn't a step id in this chain.`,
+                });
+              }
+              if (dep === s.id) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "after"],
+                  message: `Step ${s.id} can't wait for itself.`,
+                });
+              }
+            }
+            // Map pairs must reference REAL names — an output on the dep this
+            // step draws from, an input on this step's own automation. A
+            // misnamed output silently arrives empty at run time otherwise.
+            const stepAuto = v.automations.find((a) => a.name === s.automation);
+            const depStep = steps.find((x) => x.id === s.after[0]);
+            const depAuto = depStep && v.automations.find((a) => a.name === depStep.automation);
+            for (const pair of s.map) {
+              if (depAuto && !depAuto.outputs.some((o) => o.name === pair.output)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "map"],
+                  message: `"${pair.output}" is not an output of "${depStep!.automation}" (step ${s.after[0]}).`,
+                });
+              }
+              if (stepAuto && !stepAuto.inputs.some((inp) => inp.name === pair.input)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["chain", "steps", i, "map"],
+                  message: `"${pair.input}" is not an input of "${s.automation}".`,
+                });
+              }
+            }
+            if (s.after.length === 0 && (s.if_answer_contains || s.if_answer_lacks)) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["chain", "steps", i],
+                message: "A first step has no earlier result to test — drop the if_answer condition or add after.",
+              });
+            }
+          });
+          // Kahn's on the draft shape — a circle is refused with names.
+          const indeg = new Map(steps.map((s) => [s.id, s.after.filter((d) => stepIds.has(d)).length]));
+          const queue = steps.filter((s) => (indeg.get(s.id) ?? 0) === 0).map((s) => s.id);
+          let settled = 0;
+          while (queue.length) {
+            const id = queue.shift()!;
+            settled++;
+            for (const s of steps) {
+              if (!s.after.includes(id)) continue;
+              const d = (indeg.get(s.id) ?? 0) - 1;
+              indeg.set(s.id, d);
+              if (d === 0) queue.push(s.id);
+            }
+          }
+          if (settled !== steps.length) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["chain", "steps"],
+              message: "These steps circle back on each other — chains flow one way.",
+            });
+          }
+        }
         if (v.chain.links.length > 3) {
           ctx.addIssue({
             code: "custom",
@@ -229,9 +472,26 @@ export function lintAutomation(a: {
   steps: string[];
   sources: string[];
   inputs: { name: string }[];
+  apps?: string[];
 }): string[] {
   const issues: string[] = [];
   const stepText = a.steps.join("\n");
+  // Every app tool named in a step must belong to an app in the fence.
+  const apps = a.apps ?? [];
+  for (const tool of allConnectorToolNames()) {
+    if (new RegExp(`\\b${tool}\\b`).test(stepText)) {
+      const owner = connectorOfTool(tool);
+      if (owner && !apps.includes(owner)) {
+        issues.push(
+          `The steps call ${tool}, but "${owner}" isn't in apps — add it to the fence or take the step out.`
+        );
+      }
+    }
+  }
+  // Mail and music never travel through URLs when an app is listed.
+  if (apps.includes("outlook") && /https?:\/\/[^\s]*(outlook|office|graph\.microsoft)/i.test(stepText)) {
+    issues.push("Outlook is read through its app tools, not through a URL — drop the outlook/graph URL from the steps.");
+  }
   // Every hostname fetched in a step must be inside the fence.
   for (const m of stepText.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) {
     const host = m[1].toLowerCase();
@@ -251,14 +511,10 @@ export function lintAutomation(a: {
       issues.push(`Steps reference {${t}} but there is no fill-in named "${t}".`);
     }
   }
-  for (const inp of a.inputs) {
-    if (!tokens.includes(inp.name) && a.steps.length > 0) {
-      // unused fill-ins are a smell, not a failure — surfaced softly
-      issues.push(
-        `The fill-in "${inp.name}" is never used in the steps — reference it as {${inp.name}} or remove it.`
-      );
-    }
-  }
+  // NOTE: an input NOT referenced by a {token} is intentionally allowed — a
+  // chain-fed automation receives its inputs through the chain map by name
+  // (the prompt's own receipts example does this). Flagging it as an error
+  // permanently blocked every edit of such an automation, so it's dropped.
   return issues;
 }
 
@@ -275,6 +531,9 @@ export function validateEditedAutomation(
     outputs: { name: string }[];
     files: { reads: string[]; writes: string[] };
     sources: string[];
+    apps?: string[];
+    tools?: string[];
+    knowledge?: string[];
     delivers: string;
     schedule: unknown;
     effort: string;
@@ -294,6 +553,9 @@ export function validateEditedAutomation(
         outputs: record.outputs,
         files: record.files,
         sources: record.sources,
+        apps: record.apps ?? [],
+        tools: record.tools ?? [],
+        knowledge: record.knowledge ?? [],
         delivers: record.delivers,
         schedule: record.schedule,
         effort: record.effort,

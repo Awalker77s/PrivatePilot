@@ -35,6 +35,14 @@ export interface VerifyResult {
   checkedLines: string[]; // "1,240 — sum of 415 + 612.50 + 212.50, checked"
 }
 
+// The number must appear as a WHOLE figure in the source, not as digits buried
+// inside a longer run: "150" is not confirmed by "23150" or "150.75". A
+// boundary is anything that isn't a digit or a decimal point.
+function appearsAsWholeNumber(n: string, flatCorpus: string): boolean {
+  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\d.])${esc}(?![\\d.])`).test(flatCorpus);
+}
+
 function extractNumbers(answer: string): string[] {
   const matches = answer.match(/\$?\d[\d,]*(?:\.\d+)?%?/g) ?? [];
   const out = new Set<string>();
@@ -104,7 +112,11 @@ export async function verifyNumbers(
   const checkedLines: string[] = [];
 
   for (const n of numbers) {
-    if (flatCorpus.includes(n)) continue; // verbatim in the source — verified
+    // Verbatim in the source — but at a DIGIT boundary, so a fabricated "150"
+    // is not "confirmed" by the "150" buried inside "Invoice #23150". The
+    // number must not be flanked by another digit (or a decimal point that
+    // makes it part of a longer figure).
+    if (appearsAsWholeNumber(n, flatCorpus)) continue;
 
     // A model saying "-0.78%" for a source value of -0.7789 is honest
     // rounding, not invention: accept when a source number rounds to the
@@ -171,13 +183,16 @@ export function parseOutputs(answer: string): {
   const baton: Record<string, string | number> = {};
   for (const pair of m[1].split(";")) {
     const [k, ...rest] = pair.split("=");
-    const v = rest.join("=").trim();
+    // Models sometimes quote values with spaces — the quotes aren't data.
+    const v = rest.join("=").trim().replace(/^["']|["']$/g, "");
     if (!k.trim() || !v) continue;
     const num = Number(v.replace(/[$,]/g, ""));
     baton[k.trim()] = Number.isNaN(num) || v.match(/[A-Za-z]{2,}/) ? v : num;
   }
   return {
-    cleanAnswer: answer.replace(/^OUTPUTS:.*$/m, "").trim(),
+    // The OUTPUTS line may sit mid-line after the last sentence — strip it
+    // wherever it is, never leave it in the delivered answer.
+    cleanAnswer: stripped,
     baton: Object.keys(baton).length ? baton : null,
   };
 }

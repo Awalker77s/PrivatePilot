@@ -8,6 +8,8 @@ import type { Catalog } from "../catalog";
 import { wireJsonSchema } from "./schema";
 import { getSettings } from "../../storage/settings";
 import { COIN_ALIASES, endpointMenu } from "../endpoints";
+import { connectorMenu } from "../../connectors/registry";
+import { heavyMenu } from "../../heavy/registry";
 
 export interface DraftContext {
   userText: string;
@@ -15,6 +17,10 @@ export interface DraftContext {
   // A condensed transcript of the conversation so far — follow-ups like
   // "make one for meta too" only make sense with it.
   history?: string;
+  // Set by the coordination splitter: this text is ONE job by construction —
+  // the validator refuses a draft with more than one automation (the 4B
+  // mimics history patterns and invents themed siblings otherwise).
+  singleJob?: boolean;
   // Watch-me: the recording is an input adapter, not a second pipeline.
   demo?: {
     transcript: string;
@@ -50,12 +56,32 @@ export function draftSystemPrompt(catalog: Catalog): string {
       .map(([k, v]) => `${k}→${v}`)
       .join(", ")}`,
     "",
+    "Apps on this computer an automation can look into (typed tools — write the exact call in the step, e.g. \"outlook_mail_recent since_hours=24 unread_only=true\"):",
+    connectorMenu(catalog.apps),
+    "- An automation that uses an app MUST list that app's id in apps (the fence). Mail, calendar, and music NEVER travel through URLs — no outlook.com, graph, or spotify.com in sources when the app is listed.",
+    "- 'my Outlook / my calendar / my meetings' → apps [\"outlook\"] with outlook_* steps. 'my Gmail / my Google mail' → apps [\"gmail\"] with gmail_* steps. Plain 'my email / my inbox' → whichever of outlook/gmail is marked ready above (outlook if both). 'what's playing / pause / skip / Spotify' → apps [\"spotify\"]. Any other desktop app the person names (Discord, Teams, Notepad, a game…) or 'what's on my screen / what does X show' → apps [\"computer\"] with a read_app step naming the app.",
+    "- Drafting an email or reply when Outlook or Gmail is listed = an outlook_draft / gmail_draft STEP inside the SAME automation (read → decide → draft is one job; the person presses Send). Reply through the app the message came from — never mix outlook and gmail in one automation, and never use outlook_draft for Gmail mail. Only 'then email/text ME a summary' with no app listed is a separate message-drafting job. Listing limits are ≤25.",
+    "- Watchers on Outlook are fine every 5+ minutes; watchers on read_app should stay daily.",
+    "",
+    "Heavy tools an automation can run on files in its folders (real work — the app builds the command, the model only fills the blanks):",
+    heavyMenu(),
+    "- An automation that does real file work MUST list the heavy tool in tools (the fence) AND name the folders in files. Heavy tools never touch the web, and a watcher may NEVER run one.",
+    "- 'rename/convert/zip/unzip/read a scanned or photographed document (OCR)' = a heavy tool + files fence + delivers files. Everything runs in a copy; the person keeps the results.",
+    "",
+    catalog.knowledgeBases.length > 0
+      ? `Knowledge bases (searchable document collections) the person has built: ${catalog.knowledgeBases.join(", ")}.`
+      : "Knowledge bases: none yet — one is created the first time documents are filed into a named base.",
+    "- 'clean/scan/file documents INTO a <name> knowledge base' = tools [\"ocr_pdf\"] + files fence + knowledge [\"<name>\"] + delivers files. The cleaned text is indexed when the person presses Keep.",
+    "- 'ask my <name> …' / 'what does my <name> say about …' / any question ABOUT filed documents = knowledge [\"<name>\"], NO tools, delivers answer, a step 'rag_ask the question'. The question the person will ask each time is an input named 'question'.",
+    "",
     "- One automation unless the person's words name two distinct jobs (shortest chain wins).",
-    "- Two SEPARATE jobs with no hand-off ('and another automation that…', 'also make one that…', 'and then one to check…') = draft BOTH automations and leave chain null. Only set chain.links when one job's outputs actually feed the next — a link whose map is empty and whose onlyWhen is null is invalid.",
+    "- Two SEPARATE jobs with no hand-off ('and another automation that…', 'also make one that…', 'and then one to check…') = draft BOTH automations and leave chain null. Only set chain.links when one job's outputs actually feed the next — a link whose map is empty and whose onlyWhen is null is invalid. EXCEPTION: 'if the result…, otherwise…' / 'depending on what it finds…' is NEVER independent jobs — that is ONE chain with steps (see BRANCHING below).",
     "- The conversation context may list automations already built this session. NEVER re-create an automation named there — modifications to those are handled elsewhere; draft only genuinely new jobs.",
     "- 'then email me…', 'then text me…', 'then message me a summary' is ALWAYS its own second automation (the message-drafting job), chained after the data job — set chain.links mapping the first job's outputs to the second job's inputs by name.",
     '- "when it drops below N" / "when it crosses above N" / "alert me if…" is ALWAYS two automations: the first watches (trigger watch) and outputs the value; the second acts; the link between them carries onlyWhen {"field": <that output name>, "op": "crosses_below" or "crosses_above", "value": N}. Never fold the condition into the sentence alone.',
     "- Otherwise, fetching data and reporting the values is ONE job. Split only where one job's finished outputs feed a different kind of job ('then …').",
+    '- BRANCHING ("if the result says X do A, otherwise do B", "depending on what it finds…", "if it fails then…"): use chain.steps INSTEAD of links (links stays []). Each step: {"id": "s1", "automation": <drafted name>, "after": [step ids it waits for, [] for the first], "needs": "all" (or "any" when it should fire after WHICHEVER branch came through), "when": "ran" (or "held"/"broke"/"failed"/"always"), "if_answer_contains": <word the earlier answer must mention, else null>, "if_answer_lacks": <word it must NOT mention, else null>, "map": [...outputs→inputs like links]}. Opposite branches are two steps after the same step: one if_answer_contains "X", the sibling if_answer_lacks "X". A step after a branch that may not run joins with needs "any".',
+    '- OUTCOME branches (not about the answer TEXT but whether the earlier step WORKED): "if it fails / if the source is down / if it can\'t / if that breaks" = when "failed"; "if it works / once it succeeds" = when "ran". Use "failed" (not "broke") for "if it fails" — a step that can\'t reach its data stops as held, which "failed" covers and "broke" does not.',
     "- 'Email me X' or 'send me X' means the automation drafts the message and delivers it as answer — the person presses Send themselves. Nothing sends itself.",
     '- If the person names a file, folder, or thing you cannot find in the catalog below, set question and leave automations empty. Never guess a path. question.asking is a short question a person can answer ("Which tracking sheet?"); question.term is their exact words for the thing.',
     "- When the person names a particular document (my tracking sheet, the budget file), writes must point at that exact file from the catalog — a bare folder is not specific enough. If no catalog file clearly matches, ask.",
@@ -78,7 +104,11 @@ export function draftSystemPrompt(catalog: Catalog): string {
     `\nExisting automations: ${existing}`,
     "",
     'Example: "check the top tech news and another automation to check the meta stock price" is TWO independent automations that share nothing: {"automations": [{...the news job...}, {...the stock job...}], "chain": null, "question": null}.',
-    'Example: "each week read new receipts in Downloads, add the totals to my ledger, then text me a recap" is TWO jobs — reading receipts AND writing their totals into the ledger is one job; the recap is the second. So: {"automations": [{"name": "Receipt totals", "files": {"reads": ["~/Downloads"], "writes": ["~/Documents/ledger.xlsx"]}, "outputs": [{"name": "vendor"}, {"name": "amount"}, {"name": "how_many"}], "delivers": "files", ...}, {"name": "Weekly recap", "inputs": [{"name": "amount", "label": "Total amount", "example": "1240"}, {"name": "how_many", "label": "How many receipts", "example": "3"}], "outputs": [], "files": {"reads": [], "writes": []}, "delivers": "answer", ...}], "chain": {"name": "Receipts then recap", "links": [{"from": "Receipt totals", "to": "Weekly recap", "map": [{"output": "amount", "input": "amount"}, {"output": "how_many", "input": "how_many"}], "onlyWhen": null}]}, "question": null}',
+    'Example: "every morning tell me which unread emails need me first" = {"automations": [{"name": "Morning inbox triage", "category": "Email", "steps": ["outlook_mail_recent since_hours=24 unread_only=true limit=20", "outlook_mail_read the two or three that look urgent", "answer with the ones that need a reply first"], "sources": [], "apps": ["outlook"], "files": {"reads": [], "writes": []}, "delivers": "answer", "schedule": {"trigger": "daily", "hour": 8}, "outputs": [{"name": "how_many"}], "inputs": [], ...}], "chain": null, "question": null}',
+    'Example: "summarize my unread gmail and save a draft reply to the most urgent one" = ONE automation: "apps": ["gmail"], "steps": ["gmail_recent since_hours=24 unread_only=true limit=25", "gmail_read the ones that look urgent", "gmail_draft reply_to=<the most urgent id> body=<a short, polite reply>", "answer with the summary and say the draft is saved"], "category": "Email", "delivers": "answer" — the draft is a step, never a second automation.',
+    'Example: "what is spotify playing right now" = one automation, "apps": ["spotify"], steps ["spotify_now_playing", "answer with the track and artist"], "sources": [], delivers answer, schedule manual. "what does my Discord window show" = "apps": ["computer"], steps ["read_app Discord", "answer with a short summary"].',
+    'Example: "each week read new receipts in Downloads, add the totals to my ledger, then text me a recap" is TWO jobs — reading receipts AND writing their totals into the ledger is one job; the recap is the second. So: {"automations": [{"name": "Receipt totals", "files": {"reads": ["~/Downloads"], "writes": ["~/Documents/ledger.xlsx"]}, "outputs": [{"name": "vendor"}, {"name": "amount"}, {"name": "how_many"}], "delivers": "files", ...}, {"name": "Weekly recap", "inputs": [{"name": "amount", "label": "Total amount", "example": "1240"}, {"name": "how_many", "label": "How many receipts", "example": "3"}], "outputs": [], "files": {"reads": [], "writes": []}, "delivers": "answer", ...}], "chain": {"name": "Receipts then recap", "links": [{"from": "Receipt totals", "to": "Weekly recap", "map": [{"output": "amount", "input": "amount"}, {"output": "how_many", "input": "how_many"}], "onlyWhen": null}], "steps": []}, "question": null}',
+    'Example (branching): "check my unread email each morning; if anything is urgent draft a reply and also summarize my calendar, otherwise just give me the headlines" = THREE automations (Inbox check, Urgent reply + calendar, Headlines) and: "chain": {"name": "Morning triage", "links": [], "steps": [{"id": "s1", "automation": "Inbox check", "after": [], "needs": "all", "when": "ran", "if_answer_contains": null, "if_answer_lacks": null, "map": []}, {"id": "s2", "automation": "Urgent reply and calendar", "after": ["s1"], "needs": "all", "when": "ran", "if_answer_contains": "urgent", "if_answer_lacks": null, "map": []}, {"id": "s3", "automation": "Headlines", "after": ["s1"], "needs": "all", "when": "ran", "if_answer_contains": null, "if_answer_lacks": "urgent", "map": []}]} — opposite branches test the same word, one contains, one lacks.',
   ].join("\n");
 }
 

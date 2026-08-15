@@ -4,17 +4,23 @@ import { invoke } from "@tauri-apps/api/core";
 import { XIcon } from "./icons";
 import { runStorageSelfTest, SelfTestResult } from "../storage/selftest";
 import { useStore } from "../storage/useStore";
-import { DoctorReport, runModelDoctor } from "../providers/ollama";
+import {
+  DoctorReport,
+  RECOMMENDED_MODELS,
+  friendlyName,
+  runModelDoctor,
+} from "../providers/ollama";
 import { localModels, NUM_CTX_DRAFT, ollama } from "../providers";
 import type { ModelInfo } from "../providers/types";
 import {
   CLOUD_MODELS,
-  fetchPlan,
   onCloudMeter,
   prewarm,
+  verifyKey,
 } from "../providers/featherless";
 import { getSettings, updateSettings } from "../storage/settings";
 import { ensureParakeet, parakeetReady } from "../watchme/transcribe";
+import { ConnectedAppsCard, HeavyTasksCard } from "./ConnectedAppsCard";
 import {
   permissionCounts,
   revokeAllRevisionApprovals,
@@ -134,41 +140,28 @@ export function SettingsSheet({ close }: { close: () => void }) {
               {doctor.visionCapable ? " Can look at screenshots." : ""}
             </div>
           )}
-          {localChoices.length > 1 && (
-            <>
-              <select
-                className="run-search"
-                style={{ width: "100%" }}
-                value={localChoice}
-                onChange={async (e) => {
-                  const value = e.target.value;
-                  setLocalChoice(value);
-                  await updateSettings((settings) => {
-                    settings.localModel = value || null;
-                  });
-                  setDoctor(await runModelDoctor());
-                }}
-                data-testid="local-model"
-              >
-                <option value="">Automatic — prefer Qwen 4B</option>
-                {localChoices.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-              <div className="caption">
-                Automatic uses Qwen 4B to keep local tasks responsive. Choose
-                Qwen 9B when draft quality matters more than speed.
-              </div>
-            </>
-          )}
+          <ModelChooser
+            installed={localChoices}
+            active={doctor?.installedTag ?? null}
+            choice={localChoice}
+            onChoose={async (value) => {
+              setLocalChoice(value);
+              await updateSettings((settings) => {
+                settings.localModel = value || null;
+              });
+              setDoctor(await runModelDoctor());
+            }}
+          />
           {wakeLine && (
             <div className="caption" data-testid="wake-line">
               {wakeLine}
             </div>
           )}
         </div>
+
+        <ConnectedAppsCard />
+
+        <HeavyTasksCard />
 
         <ListeningCard />
 
@@ -222,6 +215,113 @@ export function SettingsSheet({ close }: { close: () => void }) {
         <div style={{ flex: 1 }} />
         <div className="caption">Private Pilot 0.1.0</div>
       </div>
+    </div>
+  );
+}
+
+// The brain picker: role cards from the bench (Fast default, Careful for
+// screen-reading), each installed one selectable, plus an Automatic option.
+// A recommended model that isn't downloaded shows how to get it — the app
+// never pulls a multi-GB model behind the person's back.
+function ModelChooser({
+  installed,
+  active,
+  choice,
+  onChoose,
+}: {
+  installed: ModelInfo[];
+  active: string | null;
+  choice: string;
+  onChoose: (value: string) => void | Promise<void>;
+}) {
+  const installedTags = new Set(installed.map((m) => m.id));
+  // Recommended first (in role order), then any other installed CHAT models
+  // (embedding models like nomic-embed can't draft — never offer them).
+  const known = new Set(RECOMMENDED_MODELS.map((r) => r.tag));
+  const extras = installed.filter(
+    (m) => !known.has(m.id) && !/embed/i.test(m.id)
+  );
+  if (installed.length === 0) return null;
+
+  const Row = ({
+    value,
+    title,
+    sub,
+    disabled,
+    tail,
+  }: {
+    value: string;
+    title: string;
+    sub: string;
+    disabled?: boolean;
+    tail?: string;
+  }) => {
+    const selected = !disabled && choice === value;
+    const isActive = !disabled && active === value && (choice === value || (choice === "" && value === active));
+    return (
+      <button
+        className="model-row"
+        data-testid={`model-${value || "auto"}`}
+        disabled={disabled}
+        onClick={() => !disabled && void onChoose(value)}
+        style={{
+          display: "flex",
+          gap: 10,
+          alignItems: "flex-start",
+          width: "100%",
+          textAlign: "left",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: `1px solid ${selected ? "var(--accent, #4a8)" : "var(--line)"}`,
+          background: selected ? "var(--accent-weak, rgba(74,136,136,0.12))" : "transparent",
+          color: disabled ? "var(--muted)" : "var(--text)",
+          cursor: disabled ? "default" : "pointer",
+          marginTop: 6,
+        }}
+      >
+        <span style={{ marginTop: 2, width: 14, flexShrink: 0, color: "var(--accent, #4a8)" }}>
+          {selected ? "●" : "○"}
+        </span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ fontWeight: 600 }}>
+            {title}
+            {isActive && <span className="caption" style={{ marginLeft: 6, color: "var(--green)" }}>· in use</span>}
+            {tail && <span className="caption" style={{ marginLeft: 6 }}>{tail}</span>}
+          </span>
+          <span className="caption" style={{ display: "block" }}>{sub}</span>
+        </span>
+      </button>
+    );
+  };
+
+  return (
+    <div style={{ marginTop: 6 }} data-testid="model-chooser">
+      <Row
+        value=""
+        title="Automatic"
+        sub={`Picks the best you have — right now ${active ? friendlyName(active) : "none installed"}.`}
+      />
+      {RECOMMENDED_MODELS.map((r) =>
+        installedTags.has(r.tag) ? (
+          <Row
+            key={r.tag}
+            value={r.tag}
+            title={`${r.name} · ${r.role}`}
+            sub={r.blurb}
+          />
+        ) : (
+          <Row
+            key={r.tag}
+            value={r.tag}
+            title={`${r.name} · ${r.role}`}
+            sub={`Not downloaded. Get it with:  ollama pull ${r.tag}  (${r.downloadGB} GB)`}
+            disabled
+          />
+        )
+      )}
+      {extras.map((m) => (
+        <Row key={m.id} value={m.id} title={friendlyName(m.id)} sub="Also installed on this computer." />
+      ))}
     </div>
   );
 }
@@ -437,13 +537,26 @@ function BorrowCloudCard() {
   const [, force] = useState(0);
   const f = getSettings().featherless;
   const [keyDraft, setKeyDraft] = useState(f.key ?? "");
-  const [planLine, setPlanLine] = useState<string | null>(null);
+  // The key's last-checked truth: null = never checked, "checking", or the
+  // verdict. A dead key looked identical to a good one before — the person
+  // pasted a key, a run 401'd a day later, and the card never said a word.
+  const [keyState, setKeyState] = useState<
+    { kind: "checking" | "good" | "bad"; line: string } | null
+  >(null);
   const [meter, setMeter] = useState(0);
 
   useEffect(() => onCloudMeter(setMeter), []);
   useEffect(() => {
-    if (f.key) fetchPlan(f.key).then((p) => setPlanLine(p.line));
-  }, [f.key]);
+    // On open with a stored key: re-verify quietly so the card is honest
+    // about TODAY, not about the day the key was pasted.
+    if (f.key) {
+      setKeyState({ kind: "checking", line: "Checking the saved key…" });
+      verifyKey(f.key, getSettings().featherless.model).then((v) =>
+        setKeyState({ kind: v.ok ? "good" : "bad", line: v.line })
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function toggle() {
     if (!f.enabled && !f.key) return;
@@ -464,7 +577,14 @@ function BorrowCloudCard() {
     });
     force((n) => n + 1);
     const key = getSettings().featherless.key;
-    if (key) setPlanLine((await fetchPlan(key)).line);
+    if (!key) {
+      setKeyState(null);
+      return;
+    }
+    // Verify with a REAL test call, not just the plan endpoint — and say so.
+    setKeyState({ kind: "checking", line: "Checking the key with a real test call…" });
+    const v = await verifyKey(key, getSettings().featherless.model);
+    setKeyState({ kind: v.ok ? "good" : "bad", line: v.line });
   }
 
   return (
@@ -501,7 +621,22 @@ function BorrowCloudCard() {
           Save key
         </button>
       </div>
-      {planLine && <div className="caption">Your plan: {planLine}</div>}
+      {keyState && (
+        <div
+          className="status-line"
+          data-testid="cloud-key-state"
+          style={{
+            color:
+              keyState.kind === "good"
+                ? "var(--green)"
+                : keyState.kind === "bad"
+                  ? "var(--red)"
+                  : "var(--text-dim)",
+          }}
+        >
+          {keyState.line}
+        </div>
+      )}
       <select
         className="run-search"
         style={{ width: "100%" }}

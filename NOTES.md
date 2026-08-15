@@ -298,3 +298,159 @@ day. This becomes the writeup.
   named-draft edit lands without a re-compile; the thread survives reload
   with edits intact; Put it back works on a rehydrated card; "change the
   time to 10am" finds its focus after restart.
+- **Look into my apps (Aug 15, branch app-connectors).** The question was
+  how far automations can reach into the apps people actually use, and the
+  best way to do it. Research fleet: six lenses (demand data, integration
+  mechanisms, how competitors do it, local-first auth in Tauri, Windows-
+  local zero-auth access, what a 9B can reliably do with tools), an
+  architect grounded in this codebase, and an adversarial critic that
+  live-verified the risky claims. Findings that decided the design:
+  Zapier/Power Automate/IFTTT/Raycast agree on email + calendar + files +
+  spreadsheet-as-log as the core, Spotify as the one entertainment app with
+  real pull, and reads outnumbering writes ~2:1 (so "nothing sends itself"
+  aligns with demand); every serious product converges on the same reach
+  ladder (typed API tools > structured UI tree > pixels); 7-9B GUI agents
+  finish only 21-42% of desktop tasks and one wrong click can send, so the
+  model never drives a screen; small models pick well from <=10 typed tools
+  and badly from 30, so tools are BOUND PER RECORD; the Spotify Web API is
+  closed to strangers' computers in 2026 (5 allow-listed users, Premium
+  owner) so it was cut, not deferred; classic Outlook COM works with zero
+  registration but the new Outlook has no object model, so Microsoft Graph
+  is the "any device" upgrade behind the same tools; keyring+AES was
+  replaced by DPAPI in the Graph plan (no visible credential, no 2,560-byte
+  cap). Local probes on this machine before building: Windows media
+  session returned Spotify's now-playing with no prompt; classic Outlook
+  COM answered with 2 accounts / 826 inbox items; Discord's UIA tree was
+  rich (375 nodes in 210 ms) while Spotify's Store build exposes almost
+  nothing (so read_app needs the same text->fallback ladder as read_page).
+  What shipped: a new record field `apps` (a closed enum in the wire
+  schema, so a nonexistent app is unsampleable; a validator rule ties every
+  app tool in the steps to its app and bans outlook/spotify URLs when the
+  app is listed); three connectors as small manifests of typed, zod-
+  validated tools with designed sentences - **outlook** (mail_recent,
+  mail_search, mail_read, calendar, draft; classic COM through a hidden
+  PowerShell that attaches to a running Outlook first, 60 s hard timeout,
+  short m1..mN handles so the model never copies a 140-char EntryID, drafts
+  only to addresses the run actually read from or the person's own
+  account, never .Send()), **spotify** (now_playing filtered to the Spotify
+  session so the "Looks into: Spotify" chip is literally true; control
+  play/pause/next/previous), **computer** (list_apps, read_app via
+  Windows UI Automation on its own MTA thread with a 20 s timeout, Chromium
+  lazy-tree retries, echo-line suppression, a deny list for password
+  managers; now_playing across all media apps). Runner: per-record tool
+  binding; a connector needs_you/broke aborts the run held-back so the
+  model never answers from partial app data; app reads count toward the
+  "read nothing -> held" rule; handoffs (the saved draft) render as an
+  "Open the draft in Outlook" button with recipient + subject; a first log
+  line names the apps and, with cloud compute on, says the text leaves.
+  Settings gained a Connected apps card - one Allow per app, no sign-in.
+  Verified live in the running app: "what is spotify playing right now"
+  compiled to apps ["spotify"] and answered "Better in the Dark" by Jordana
+  in 2 turns; "look at my Discord window..." compiled to apps ["computer"]
+  and listed the servers with unread/mentions from a 0.1 s UIA read;
+  "every morning at 8 look at my outlook inbox..." compiled to apps
+  ["outlook"], daily 8am, and read all 5 unread messages and ranked them in
+  8 turns (the model's first call had limit=50, zod bounced it, it retried
+  with 25 - the hardening the critic asked for); a self-addressed test
+  draft landed in Drafts with Sent=False and a working handoff; with Allow
+  off the same run stopped needs_you with the sentence; the old web path
+  still fetched Solana at $75.46. Not done, by design: the Microsoft Graph
+  backend (needs an Entra app registration only Alexander can create -
+  recipe: entra.microsoft.com > App registrations > New > "Personal
+  Microsoft accounts and any org" > platform Mobile and desktop >
+  redirect http://localhost/callback > Allow public client flows: Yes >
+  ship the client_id; scopes offline_access User.Read Mail.ReadWrite
+  Calendars.Read; PKCE loopback in Rust, tokens DPAPI-sealed, the model
+  never sees them) and the PrintWindow+vision fallback for skeletal
+  windows (Chromium surfaces often hand PrintWindow a black frame, so it
+  needs Graphics.Capture - a real half-day, not a stretch item).
+- **Gmail connector (Aug 15).** Alexander asked whether it can read Gmail,
+  summarize, and draft. Three routes were weighed: Gmail API OAuth (needs a
+  Google Cloud project; Gmail's restricted scopes keep an unverified app in
+  Testing mode - 100 users, tokens expire every 7 days), classic Outlook
+  with a Gmail account added (works today via the Outlook connector), and
+  IMAP with a Google app password (still issued for personal accounts with
+  2-Step Verification; Workspace dropped them May 2025). Built the third:
+  no developer registration, the person pastes the app password once. Rust
+  `secrets.rs` seals it with DPAPI (per-user, no visible credential, no
+  size cap) into secrets.json; TS can set/clear/has, only Rust ever unseals
+  - to log in - and the value never crosses IPC. Rust `gmail.rs` speaks
+  IMAP over TLS (imap 2.4 + native-tls/SChannel + mailparse): recent
+  (SINCE/UNSEEN/FROM, day-granular IMAP dates trimmed to the hour in code),
+  search via Gmail's own syntax (X-GM-RAW), read (BODY.PEEK - never marks
+  read; text/plain preferred, HTML de-tagged; 6k cap), draft (APPEND to
+  [Gmail]/Drafts with \Draft, In-Reply-To/References for replies; never a
+  SEND). Four typed tools mirror Outlook's with g1..gN handles and the same
+  draft-recipient rule (seen this run, yourself, or a fill-in). Settings row:
+  address + password -> one live IMAP login proves it, the field empties,
+  a failed login leaves no half-connection; Disconnect deletes the secret
+  and says Google still lists the password until removed there. Verified
+  live: not-connected sentence; DPAPI seal (blob on disk, zero plaintext);
+  Rust unsealed a fake credential and did a real TLS+IMAP login to
+  imap.gmail.com - Google refused in 317 ms and the app produced the
+  designed "Google didn't accept the app password" sentence; the drafter
+  compiled "read my gmail from the last two days ... then save a draft
+  reply to the most urgent one" to ONE automation gmail_recent ->
+  gmail_read -> gmail_draft reply_to -> answer (after two prompt fixes: a
+  draft is a step, never a second automation; never mix outlook/gmail);
+  running it unconnected stopped needs_you with the sentence and Save not
+  earned. The real read/summarize/draft against a live mailbox needs
+  Alexander's own app password pasted in Settings - the one step only he
+  can do; the code path up to Google's LOGIN reply is proven.
+- **Gmail speed fix (Aug 15).** First real-mailbox run failed: it read the
+  inbox then opened 15 messages one at a time and hit the 15-turn cap. Root
+  cause was two-fold. (1) This machine's network path to imap.gmail.com is
+  slow/lossy - raw TCP connect measured 11 s (TLS 124 ms, greeting 20 ms
+  after), a single command round-trip ~5-9 s - and the connector reconnected
+  and re-logged-in (login ~30 s) on EVERY tool call, so a multi-read run
+  piled up past the IO timeout ("Couldn't reach imap.gmail.com"). Fixed with
+  a Rust session pool: one authenticated IMAP session per account is kept in
+  a static Mutex and reused across the run's tool calls (NOOP liveness check,
+  skipped when used < 45 s ago to save a round-trip; 4-min TTL); the pool is
+  closed on run-finish (registerRunFinishedHook path for apps incl. gmail)
+  and on Disconnect. Also prefer the resolved IPv4 (IPv6 was part of the slow
+  connect), set TCP_NODELAY, raise CONNECT/IO timeouts to 20 s/90 s, and trim
+  gmail_recent's over-fetch from limit*2 to limit+4. read 119 s -> 19 s. (2)
+  The model over-read because it triaged by opening everything. Added an
+  INBOX TRIAGE rule to the runner prompt (judge from sender+subject, open
+  <=3 only what you'll act on, never newsletters/promos/alerts) and a higher
+  turn cap for app runs (MAX_TURNS_APPS 22). Re-run against the live mailbox:
+  150 s, status ok - read 25 unread, opened only the 2 GitHub PR messages,
+  skipped the newsletters, drafted a reply, and the draft was verified
+  sitting in Gmail Drafts (in:drafts search). End to end works; the residual
+  ~2-3 min is this network's latency to Gmail, not the code (a normal network
+  is sub-second per op).
+- **Heavy tools + OCR + local RAG (Aug 15, branch local-models).** Built the
+  terminal Tier-1 "fourth fence" (typed heavy tools, argv built by our code,
+  never a shell string) then OCR and a local RAG layer on top, per the
+  research fleets (3-lens OCR/RAG/usecases + architect + adversarial critic).
+  run_tool (Rust): job object kill-on-close + active-process/4GB/timeout caps,
+  output caps, .exe-only, every path arg re-checked inside the sandbox; env
+  field for TESSDATA_PREFIX. Heavy tools: bulk_rename (pure TS, renames in the
+  sandbox copy), zip/unzip (7za), ocr_pdf (Tesseract 5.4.0 -> searchable PDF +
+  clean text; v1 images only, scanned-PDF rasterization via pdfium is the
+  documented next slice). tools fence = closed enum in the wire schema;
+  validators tie each tool in the steps to the fence, require a files fence,
+  and BAN watchers from heavy tools. RAG (src/rag/): embed via Ollama
+  /api/embed + nomic-embed-text with the required search_document:/search_query:
+  prefixes and num_ctx 8192 (both classic local-RAG bugs), L2-normalized;
+  recursive chunker with page metadata; per-KB store (kb.json manifest +
+  base64 Float32 vectors); dedup on content SHA-256; plain-TS cosine (top-6
+  dense + keyword); grounded answer that cites [n] and refuses out-of-context
+  in code (a citation-free answer becomes "I couldn't find that in your
+  documents"). Wired into the chat: a knowledge fence, a rag_ask tool bound
+  when a KB is named, keep-time indexing (RunRecord.indexInto so an unsaved
+  automation still indexes on Keep). Critic-caught fixes: /api/embed added to
+  the Rust allowlist AND given the long timeout (the 20s ceiling would break
+  indexing); catalog FILE_INTENT + image extensions so "clean the scanned
+  receipts" grounds; picked sub-folders display ~/Downloads/x not ~/…/x (a
+  small model read the ellipsis as out-of-scope and refused). Verified live
+  end-to-end over CDP with 3 real 150-DPI SROIE receipt scans: run_tool guards
+  (path-escape, non-exe), bulk_rename/zip in the sandbox, OCR recovered the
+  text, "clean into a Groceries KB" -> 9 staged outputs -> Keep applied +
+  "Indexed 3 documents", "what was each total?" -> "Yongfatt RM 80.91 [1],
+  Indah Gift RM 65.90 [3], Book Tak RM 9.60 [2]" cited, "capital of France?"
+  refused. Binaries dev-installed to %APPDATA%/tools (7za, tesseract/); the
+  installer will bundle them from resources/binaries like whisper-cli. Full
+  usage + safety model in docs/heavy-tools-and-documents.md; the terminal plan
+  and its critic in docs/terminal-access-plan.md.

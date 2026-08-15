@@ -10,6 +10,7 @@ import {
   chooseFile,
   compileFromDemo,
   compileFromTypedDemo,
+  hasNarration,
   consumeComposerSeed,
   discardBuilt,
   discardWatchMe,
@@ -33,14 +34,59 @@ import { getRun } from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
 import { DiffCard } from "../DiffCard";
 import { SendDraftButton } from "../RunDetail";
+import {
+  DictationHandle,
+  cancelDictation,
+  dictationState,
+  startDictation,
+  stopDictation,
+  subscribeDictation,
+} from "../../watchme/dictation";
+import { isWatching } from "../chatStore";
+
+function DictationTimer({ startedAt }: { startedAt: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Math.floor((Date.now() - startedAt) / 1000);
+  return (
+    <span className="caption">
+      {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
+    </span>
+  );
+}
 
 export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   useSyncExternalStore(subscribeChat, chatVersion);
   const [draft, setDraft] = useState("");
   const [modelLabel, setModelLabel] = useState("…");
+  const [dict, setDict] = useState<DictationHandle>({
+    state: "idle",
+    level: 0,
+    startedAt: 0,
+    hint: null,
+    error: null,
+  });
   const threadRef = useRef<HTMLDivElement>(null);
+  const micHeldAt = useRef(0);
   const items = chatItems();
   const busy = chatBusy();
+  const watching = isWatching();
+
+  useEffect(() => subscribeDictation(setDict), []);
+
+  async function toggleDictation() {
+    if (dictationState().state === "listening") {
+      const text = await stopDictation();
+      if (text) {
+        setDraft((d) => (d.trim() ? `${d.trim()} ${text}` : text));
+      }
+    } else if (dictationState().state === "idle") {
+      await startDictation();
+    }
+  }
 
   useEffect(() => {
     activeModelLabel()
@@ -89,26 +135,105 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
         />
         <div className="composer-row">
           <div className="composer-left">
+            {/* Watch me: a labeled SESSION control, nothing like the mic. */}
             <button
-              className="btn btn-sm btn-ghost"
-              title="Watch me — Do it once. It learns by watching. No video is kept."
-              onClick={() => startWatchMe()}
+              className={`btn btn-sm ${watching ? "mic-live" : "btn-ghost"}`}
+              title={
+                watching
+                  ? "Stop watching"
+                  : "Watch me — Do it once. It learns by watching. No video is kept."
+              }
+              onClick={() => (watching ? stopWatchMe() : startWatchMe())}
               data-testid="watch-me-start"
             >
-              <MicIcon size={13} />
-              &nbsp;Watch me
+              <span
+                className={`dot dot-red${watching ? " rec-pulse" : ""}`}
+                style={{ width: 8, height: 8 }}
+              />
+              &nbsp;{watching ? "Stop" : "Watch me"}
             </button>
+            {dict.error && <span className="caption">{dict.error}</span>}
+            {dict.hint && <span className="caption">{dict.hint}</span>}
           </div>
           <div className="composer-right">
-            <span className="chip chip-gray">{modelLabel}</span>
-            <button
-              className="btn btn-primary btn-sm"
-              disabled={busy || !draft.trim()}
-              onClick={submit}
-              data-testid="send"
-            >
-              Send
-            </button>
+            {dict.state === "listening" ? (
+              /* The listening contract replaces the right rail in place:
+                 waveform · elapsed · ✕ · ✓ — your words land in the box. */
+              <>
+                <span className="wave" data-testid="dictate-wave">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <span
+                      key={i}
+                      className="wave-bar"
+                      style={{
+                        height: `${3 + dict.level * 11 * ((i % 3) + 1)}px`,
+                      }}
+                    />
+                  ))}
+                </span>
+                <DictationTimer startedAt={dict.startedAt} />
+                <button
+                  className="btn btn-sm btn-ghost"
+                  title="Throw the audio away"
+                  onClick={() => cancelDictation()}
+                  data-testid="dictate-cancel"
+                >
+                  ✕
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  title="Done — put my words in the box"
+                  onClick={toggleDictation}
+                  data-testid="dictate-confirm"
+                >
+                  ✓
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="chip chip-gray">{modelLabel}</span>
+                <button
+                  className={`btn btn-sm btn-ghost${dict.state === "transcribing" ? " mic-busy" : ""}`}
+                  title="Speak instead of typing — tap, or hold to talk"
+                  onPointerDown={() => {
+                    micHeldAt.current = Date.now();
+                    if (dict.state === "idle") void startDictation();
+                  }}
+                  onPointerUp={() => {
+                    // Hold >300ms = push-to-talk: release is the confirm.
+                    if (
+                      dict.state === "listening" &&
+                      Date.now() - micHeldAt.current > 300
+                    ) {
+                      void toggleDictation();
+                    }
+                  }}
+                  disabled={dict.state === "transcribing"}
+                  data-testid="mic-dictate"
+                >
+                  {dict.state === "transcribing" ? (
+                    <span
+                      className="spinner"
+                      style={{
+                        width: 11,
+                        height: 11,
+                        borderTopColor: "var(--blue)",
+                      }}
+                    />
+                  ) : (
+                    <MicIcon size={13} />
+                  )}
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={busy || !draft.trim()}
+                  onClick={submit}
+                  data-testid="send"
+                >
+                  Send
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -259,12 +384,22 @@ function WatchMeCard({ item }: { item: ChatItem & { kind: "watchme" } }) {
     );
   }
 
-  // failed: no narration — type what you did; the frames still help.
+  // failed: the session survives — retry listening, or type what you did;
+  // never lose an expensive recording to a processing error.
   return (
     <div className="built-card card" data-testid="watchme-failed">
       <div className="status-line" style={{ color: "var(--amber)" }}>
         {item.reason}
       </div>
+      {hasNarration(item.id) && (
+        <button
+          className="btn btn-sm"
+          onClick={() => compileFromDemo(item.id, false)}
+          data-testid="retry-listen"
+        >
+          Listen again
+        </button>
+      )}
       <textarea
         className="composer-input"
         style={{

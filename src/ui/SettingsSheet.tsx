@@ -11,6 +11,7 @@ import {
   prewarm,
 } from "../providers/featherless";
 import { getSettings, updateSettings } from "../storage/settings";
+import { ensureParakeet, parakeetReady } from "../watchme/transcribe";
 
 export function SettingsSheet({ close }: { close: () => void }) {
   const { loadError } = useStore();
@@ -118,6 +119,8 @@ export function SettingsSheet({ close }: { close: () => void }) {
           )}
         </div>
 
+        <ListeningCard />
+
         <BorrowCloudCard />
 
         <div className="settings-card">
@@ -163,6 +166,64 @@ export function SettingsSheet({ close }: { close: () => void }) {
         <div style={{ flex: 1 }} />
         <div className="caption">Private Pilot 0.1.0</div>
       </div>
+    </div>
+  );
+}
+
+// The listening engine behind the mic and Watch me — all local. Parakeet
+// (NVIDIA, CC-BY-4.0) halves the word errors of the starter model.
+function ListeningCard() {
+  const [ready, setReady] = useState<boolean | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [line, setLine] = useState<string | null>(null);
+
+  useEffect(() => {
+    parakeetReady().then(setReady);
+  }, []);
+
+  async function download() {
+    setDownloading(true);
+    setLine("Downloading — 638 MB, one time…");
+    try {
+      await ensureParakeet(() => {});
+      setReady(true);
+      setLine(null);
+    } catch (e) {
+      setLine(
+        e instanceof Error ? e.message : "The download broke — try again."
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className="settings-card" data-testid="listening-card">
+      <div className="settings-card-title">
+        Listening
+        {ready === false && (
+          <button
+            className="btn btn-sm"
+            onClick={download}
+            disabled={downloading}
+          >
+            {downloading ? "Downloading…" : "Upgrade it"}
+          </button>
+        )}
+      </div>
+      <div className="status-line">
+        {ready === null
+          ? "Checking…"
+          : ready
+            ? "High-accuracy listening — NVIDIA Parakeet, on this computer."
+            : "Starter listening — Whisper base, on this computer."}
+      </div>
+      <div className="caption">
+        {ready
+          ? "Speech recognition: NVIDIA Parakeet TDT 0.6b v3 (CC-BY-4.0) via whisper.cpp."
+          : "The upgrade halves listening mistakes (638 MB download, still fully local)."}
+      </div>
+      {line && <div className="caption">{line}</div>}
     </div>
   );
 }

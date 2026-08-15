@@ -430,6 +430,19 @@ function syncThumbs(itemId: number, store: KeyframeStore) {
   });
 }
 
+export function isWatching(): boolean {
+  return (
+    watchSession !== null &&
+    watchItem(watchSession.itemId)?.state === "recording"
+  );
+}
+
+export function hasNarration(itemId: number): boolean {
+  return (
+    watchSession?.itemId === itemId && watchSession.narration !== null
+  );
+}
+
 export async function startWatchMe(fixture?: {
   frameUrls: string[];
   narration: Blob | null;

@@ -11,6 +11,12 @@ const MODEL_FILE = "ggml-base.en-q5_1.bin";
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_FILE}`;
 const MODEL_BYTES = 59_721_011;
 
+// High-accuracy listening: NVIDIA Parakeet TDT 0.6b v3 (CC-BY-4.0) on the
+// same whisper.cpp runtime — roughly half the word errors of base.en at
+// equal-or-better CPU speed. 638 MB, downloaded once, opt-in.
+const PARAKEET_FILE = "ggml-parakeet-tdt-0.6b-v3-q8_0.bin";
+const PARAKEET_URL = `https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/${PARAKEET_FILE}`;
+
 export interface TranscriptSegment {
   fromMs: number;
   toMs: number;
@@ -39,10 +45,40 @@ export async function modelReady(): Promise<boolean> {
   return exists(await modelPath());
 }
 
+export async function parakeetPath(): Promise<string> {
+  return join(await appDataDir(), "models", PARAKEET_FILE);
+}
+
+export async function parakeetReady(): Promise<boolean> {
+  return exists(await parakeetPath());
+}
+
+export async function ensureParakeet(
+  onProgress: (pct: number) => void
+): Promise<void> {
+  if (await parakeetReady()) return;
+  const dir = await join(await appDataDir(), "models");
+  await mkdir(dir, { recursive: true });
+  const res = await pluginFetch(PARAKEET_URL, {
+    signal: AbortSignal.timeout(1_800_000),
+  });
+  if (!res.ok) {
+    throw new SttError(
+      "no_model",
+      `Couldn't download the high-accuracy model (${res.status}) — try again when you're online.`
+    );
+  }
+  onProgress(50);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  await writeFile(await parakeetPath(), buf);
+  onProgress(100);
+}
+
 // First-use download with visible progress — 60 MB once, then never again.
 export async function ensureModel(
   onProgress: (pct: number) => void
 ): Promise<void> {
+  if (await parakeetReady()) return; // the high-accuracy model covers everything
   if (await modelReady()) return;
   const dir = await join(await appDataDir(), "models");
   await mkdir(dir, { recursive: true });
@@ -78,6 +114,22 @@ export async function transcribe(narration: Blob): Promise<Transcript> {
   await writeFile(wavPath, wav);
 
   try {
+    // High-accuracy path: Parakeet whenever it's downloaded (word-error rate
+    // roughly half of base.en at better speed). Plain text out, no
+    // timestamps — one synthetic segment keeps downstream unchanged.
+    if (await parakeetReady()) {
+      try {
+        const text = ((await invoke("transcribe_wav_parakeet", {
+          wavPath,
+          modelPath: await parakeetPath(),
+        })) as string).trim();
+        if (text) {
+          return { text, segments: [{ fromMs: 0, toMs: 0, text }] };
+        }
+      } catch {
+        // fall through to whisper — never lose a recording to the upgrade
+      }
+    }
     const json = (await invoke("transcribe_wav", {
       wavPath,
       modelPath: await modelPath(),

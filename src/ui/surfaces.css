@@ -699,6 +699,33 @@
   border-color: #33363e;
 }
 
+/* ---------- dictation mic ---------- */
+.mic-busy {
+  color: var(--blue);
+  border-color: rgba(91, 155, 248, 0.4);
+}
+
+.mic-live {
+  background: var(--red-tint);
+  border-color: rgba(226, 87, 76, 0.5);
+  color: var(--red);
+}
+
+.wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 14px;
+}
+
+.wave-bar {
+  width: 3px;
+  min-height: 3px;
+  border-radius: 2px;
+  background: var(--red);
+  transition: height 90ms linear;
+}
+
 /* ---------- watch me ---------- */
 .watchme-bar {
   display: flex;
@@ -773,21 +800,29 @@
   align-items: baseline;
   gap: 8px;
   font-size: 13px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .edit-from {
   color: var(--red);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .edit-arrow {
   color: var(--caption);
+  flex: none;
 }
 
 .edit-to {
   color: var(--green);
   font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 /* ---------- fill-ins ---------- */

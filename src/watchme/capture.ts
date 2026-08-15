@@ -128,6 +128,10 @@ export class MicRecorder {
   private recorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
 
+  get mediaStream(): MediaStream | null {
+    return this.stream;
+  }
+
   async start(): Promise<void> {
     if (!navigator.mediaDevices || !("getUserMedia" in navigator.mediaDevices)) {
       throw new CaptureError(

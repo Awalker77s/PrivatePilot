@@ -166,6 +166,23 @@ day. This becomes the writeup.
   fill-ins flagged) — a consistent fence change sails through with the
   before/after card as consent; an inconsistent one is refused with the
   exact sentence naming the fix.
+- **Voice round two (owner feedback): mic ≠ Watch me, and "nanospark" =
+  NVIDIA Parakeet.** A second research pass (Grok/ChatGPT/Wispr/superwhisper
+  teardowns + the Open ASR leaderboard) set the grammar: the mic is an
+  icon-only DICTATION control in the composer's right rail — tap and you're
+  live instantly (optimistic start), the rail becomes waveform · elapsed ·
+  ✕ · ✓, hold >300ms is push-to-talk, silence never auto-stops (Windows
+  voice typing's most-hated move — we hint instead), and the transcript
+  lands IN THE BOX, editable, never auto-sent. Watch me is the labeled
+  SESSION control that toggles to Stop while live — Grok's one-tap-you're-
+  already-recording feel. STT upgraded to Parakeet TDT 0.6b v3 (the
+  leaderboard's speed/accuracy sweet spot, CC-BY-4.0) on the SAME
+  whisper.cpp runtime we already ship (parakeet-cli was in the zip all
+  along): word-perfect on the fixture in 2.8-3.5s where base.en took ~8s
+  with one error. Auto-used when downloaded; base.en stays the 60 MB
+  instant default; a failed session keeps its narration for "Listen again"
+  — never lose a recording to a processing error (the #1 documented flaw
+  in competing dictation flows).
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

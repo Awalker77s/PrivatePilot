@@ -174,6 +174,45 @@ fn transcribe_wav(
     Ok(json)
 }
 
+/// High-accuracy transcription via NVIDIA Parakeet on the same whisper.cpp
+/// runtime. parakeet-cli has no JSON output — the transcript arrives as
+/// plain stdout text.
+#[tauri::command]
+fn transcribe_wav_parakeet(
+    app: tauri::AppHandle,
+    wav_path: String,
+    model_path: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    #[cfg(debug_assertions)]
+    let exe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/parakeet-cli.exe");
+    #[cfg(not(debug_assertions))]
+    let exe = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("binaries/parakeet-cli.exe");
+    if !exe.exists() {
+        return Err(format!("NoSidecar:parakeet-cli not found at {}", exe.display()));
+    }
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["-m", &model_path, "-f", &wav_path, "-t", "4", "-np"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output().map_err(|e| format!("Spawn:{e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ParakeetFailed:{}:{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -187,7 +226,8 @@ pub fn run() {
             atomic_write,
             walk_stats,
             copy_dir,
-            transcribe_wav
+            transcribe_wav,
+            transcribe_wav_parakeet
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

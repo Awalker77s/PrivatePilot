@@ -63,6 +63,14 @@ provable "nothing left this computer."**
   opens your own mail app; nothing sends itself.
 - **Starter gallery**: the empty state is eight curated automations — one
   click and your first result appears in seconds, zero setup, zero keys.
+- **Watch me**: do the task once while saying what you're doing — Private
+  Pilot listens (whisper.cpp, fully local) and looks (the same local vision
+  model), then compiles the same kind of readable skill. No video is ever
+  kept: a live "frames held" counter, a consent strip where you can drop any
+  frame, and a visible "Recording deleted" moment. Demonstrated values
+  become fill-ins ("Ask me each time" or "Always this"), and the skill's
+  sheet says where it came from: "Compiled from a recording on Aug 14 —
+  2 frames + your words. Frames deleted."
 - **Chains**: named outputs map to named inputs — the baton values are shown
   crossing every hand-off, for real.
 - **Watchers**: "email me when it drops below $75" is a latched crossing

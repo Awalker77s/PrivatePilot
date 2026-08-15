@@ -23,8 +23,26 @@ declare global {
   }
 }
 
+// Fixture path: the full Watch-me pipeline (frames → transcript → enrich →
+// compile) with no human at the mic — real STT, real vision, real compile.
+async function watchMeFixture(): Promise<void> {
+  const narration = await (
+    await fetch("/fixtures/watchme-narration.wav")
+  ).blob();
+  await chatStore.startWatchMe({
+    frameUrls: [
+      "/fixtures/frame1.png",
+      "/fixtures/frame2.png",
+      "/fixtures/frame3.png",
+    ],
+    narration,
+  });
+  await chatStore.stopWatchMe();
+}
+
 export function installDevHook() {
   window.__pp = {
+    watchMeFixture,
     pluginFetch,
     providers,
     ollama,

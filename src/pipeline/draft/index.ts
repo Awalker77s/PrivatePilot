@@ -12,6 +12,12 @@ import { COIN_ALIASES, endpointMenu } from "../endpoints";
 export interface DraftContext {
   userText: string;
   answers: { asking: string; answer: string }[]; // question-card answers, newest last
+  // Watch-me: the recording is an input adapter, not a second pipeline.
+  demo?: {
+    transcript: string;
+    evidence: string | null; // condensed vision enrichment, or null (words alone)
+    frames: number;
+  };
 }
 
 export function draftSystemPrompt(catalog: Catalog): string {
@@ -56,6 +62,8 @@ export function draftSystemPrompt(catalog: Catalog): string {
     "- delivers: answer = a number/summary shown in the app (the usual case); files = it writes or edits files.",
     "- schedule: what the person asked for; manual if they didn't say.",
     "- effort: thorough only if the person wants care over speed.",
+    "- When the request comes from a recorded demonstration: the narration is the authority for WHAT the job is; the screen evidence only supplies exact URLs, filenames, and values. Never invent beyond either.",
+    "- Any concrete demonstrated value the person would likely vary next time (a month, a name, a search term, an amount) becomes an inputs[] entry whose example is the demonstrated value — and steps reference it as {input_name}.",
     "",
     `Folders in the catalog (only for jobs that name files): ${folders}`,
     aliases ? `\nRemembered answers:\n${aliases}` : "",
@@ -69,9 +77,27 @@ export function draftMessages(
   catalog: Catalog,
   context: DraftContext
 ): ChatMessage[] {
+  let userContent = context.userText;
+  if (context.demo) {
+    userContent = [
+      "I recorded myself doing this task once while explaining it out loud.",
+      "WHAT I SAID (this is the authority on what the job is):",
+      context.demo.transcript,
+      ...(context.demo.evidence
+        ? [
+            "",
+            "WHAT WAS ON MY SCREEN (evidence for exact URLs, files, and values — never invent beyond it):",
+            context.demo.evidence,
+          ]
+        : []),
+      ...(context.userText.trim()
+        ? ["", "MY NOTE:", context.userText.trim()]
+        : []),
+    ].join("\n");
+  }
   const messages: ChatMessage[] = [
     { role: "system", content: draftSystemPrompt(catalog) },
-    { role: "user", content: context.userText },
+    { role: "user", content: userContent },
   ];
   for (const a of context.answers) {
     messages.push({

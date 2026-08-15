@@ -137,6 +137,35 @@ day. This becomes the writeup.
   endpoint from the research catalog (10k/hr where CoinGecko is ~10/min).
   Every failure along the way surfaced as its designed sentence — the
   honesty system debugged its own product.
+- **Watch me (branch watch-me), research-first and narration-first.** A
+  five-agent research pass settled every layer before code: getDisplayMedia/
+  getUserMedia work in WebView2 (the in-window picker IS the consent moment;
+  window must be ≥800×600 or the picker crops); whisper.cpp v1.9.2 prebuilt
+  whisper-cli + ggml-base.en-q5_1 (59.7 MB — the spec's "74MB base.en" was
+  actually 148 MB full) runs as a resource-dir binary behind one Rust
+  command; audio goes MediaRecorder webm/opus → decodeAudioData →
+  OfflineAudioContext 16k mono → hand-rolled WAV, deleted in finally.
+  Two vision traps dodged by design: Ollama silently fuses consecutive
+  same-size images into "video frames" (every keyframe gets an interleaved
+  text label), and some VL stacks return empty on multi-image (a one-time
+  two-square probe gates enrichment). Keyframes: dHash dedupe ≥8 hamming,
+  cap 10 with smallest-transition eviction, 1280px JPEG.
+  Watch-me is an input adapter, not a second pipeline: transcript (the
+  authority) + condensed screen evidence feed the SAME stage-1 compile;
+  demo values become fill-ins with the demoed value as example; provenance
+  (origin: watched · frames · words) is app-written after validation, never
+  sampled. Verified end-to-end with a TTS fixture: 3 frames → consent strip
+  → dropped one → real whisper transcript → real vision read → visible burn
+  ("Recording deleted — 2 frames and the narration are gone") → "Solana
+  Morning Check" compiled with the exact CoinGecko URL, fenced, daily@8 —
+  and its watched run fetched a live $75.47 answer. The no-narration rung
+  honestly degrades to "type what you did instead" and still compiles.
+- **Chat edits now re-validate.** The research pass found the hole: a merge
+  patch applied without grounding. Edits now re-run the compiler's schema +
+  referential lints (step hostnames ⊆ sources, {tokens} ⊆ inputs, unused
+  fill-ins flagged) — a consistent fence change sails through with the
+  before/after card as consent; an inconsistent one is refused with the
+  exact sentence naming the fix.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

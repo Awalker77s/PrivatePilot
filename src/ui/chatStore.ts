@@ -52,6 +52,16 @@ export type ChatItem =
       autoId: string;
       result: EditResult;
       state: "fresh" | "kept" | "reverted";
+    }
+  | {
+      id: number;
+      kind: "watchme";
+      state: "recording" | "review" | "listening" | "reading" | "failed";
+      framesHeld: number;
+      startedAt: number;
+      thumbs: { tMs: number; url: string; dropped: boolean }[];
+      reason: string | null; // the designed sentence when a rung degrades
+      micOk: boolean;
     };
 
 let items: ChatItem[] = [];
@@ -206,6 +216,7 @@ export async function keepEdit(itemId: number) {
   const item = items.find((i) => i.id === itemId);
   if (!item || item.kind !== "edit" || item.state !== "fresh" || !item.result.after)
     return;
+  item.result.after.origin = { kind: "edited", at: Date.now() };
   await saveAutomation(item.result.after);
   replace(itemId, { ...item, state: "kept" });
 }
@@ -368,6 +379,283 @@ export function pushNote(tone: "gray" | "amber" | "red", text: string) {
   push({ kind: "note", tone, text });
 }
 
+// ---- Watch me: recording → consent strip → the same compile pipe ----
+import {
+  CaptureError,
+  DisplayFrameSource,
+  FixtureFrameSource,
+  FrameSource,
+  MicRecorder,
+} from "../watchme/capture";
+import { KeyframeStore } from "../watchme/keyframes";
+import { SttError, ensureModel, transcribe } from "../watchme/transcribe";
+import {
+  VisionUnavailable,
+  enrichFrames,
+  enrichmentEvidence,
+} from "../watchme/enrich";
+
+interface WatchSession {
+  itemId: number;
+  source: FrameSource;
+  mic: MicRecorder | null;
+  store: KeyframeStore;
+  narration: Blob | null;
+}
+
+let watchSession: WatchSession | null = null;
+
+function watchItem(itemId: number) {
+  const item = items.find((i) => i.id === itemId);
+  return item && item.kind === "watchme" ? item : null;
+}
+
+function patchWatch(
+  itemId: number,
+  patch: Partial<Extract<ChatItem, { kind: "watchme" }>>
+) {
+  const item = watchItem(itemId);
+  if (!item) return;
+  replace(itemId, { ...item, ...patch });
+}
+
+function syncThumbs(itemId: number, store: KeyframeStore) {
+  patchWatch(itemId, {
+    framesHeld: store.held,
+    thumbs: store.frames.map((f) => ({
+      tMs: f.tMs,
+      url: f.thumbUrl,
+      dropped: f.dropped,
+    })),
+  });
+}
+
+export async function startWatchMe(fixture?: {
+  frameUrls: string[];
+  narration: Blob | null;
+}): Promise<void> {
+  if (watchSession) return;
+  const item = push({
+    kind: "watchme",
+    state: "recording",
+    framesHeld: 0,
+    startedAt: Date.now(),
+    thumbs: [],
+    reason: null,
+    micOk: true,
+  });
+
+  const store = new KeyframeStore();
+  store.onChange = () => syncThumbs(item.id, store);
+  const source: FrameSource = fixture
+    ? new FixtureFrameSource(fixture.frameUrls)
+    : new DisplayFrameSource();
+  source.onEnded = () => void stopWatchMe();
+
+  let mic: MicRecorder | null = null;
+  let micOk = true;
+  let reason: string | null = null;
+
+  if (!fixture) {
+    mic = new MicRecorder();
+    try {
+      await mic.start();
+    } catch (e) {
+      micOk = false;
+      mic = null;
+      reason =
+        e instanceof CaptureError
+          ? e.sentence
+          : "The microphone wasn't allowed.";
+    }
+  }
+
+  watchSession = {
+    itemId: item.id,
+    source,
+    mic,
+    store,
+    narration: fixture?.narration ?? null,
+  };
+  patchWatch(item.id, { micOk, reason });
+
+  try {
+    await source.start((frame, tMs) => void store.offer(frame, tMs));
+  } catch (e) {
+    // Screen failed — the ladder degrades to words-only or plain typing.
+    const sentence =
+      e instanceof CaptureError ? e.sentence : `Couldn't record — ${String(e)}`;
+    if (mic || fixture) {
+      patchWatch(item.id, { reason: sentence });
+    } else {
+      // Nothing works: fall back to the composer, honestly.
+      watchSession = null;
+      replace(item.id, {
+        id: item.id,
+        kind: "note",
+        tone: "amber",
+        text: `${sentence} Type what you want done instead.`,
+      });
+      return;
+    }
+  }
+}
+
+export async function stopWatchMe(): Promise<void> {
+  const session = watchSession;
+  if (!session) return;
+  session.source.stop();
+  if (session.mic) {
+    session.narration = await session.mic.stop();
+  }
+  const state = watchItem(session.itemId);
+  if (state?.state === "recording") {
+    patchWatch(session.itemId, { state: "review" });
+    syncThumbs(session.itemId, session.store);
+  }
+}
+
+export function dropWatchFrame(itemId: number, tMs: number): void {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId) return;
+  session.store.drop(tMs);
+}
+
+export function discardWatchMe(itemId: number): void {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId) return;
+  session.source.stop();
+  session.mic?.discard();
+  session.store.burn();
+  syncThumbs(itemId, session.store);
+  watchSession = null;
+  replace(itemId, {
+    id: itemId,
+    kind: "note",
+    tone: "gray",
+    text: "Thrown away — every frame and the recording deleted. Nothing was kept.",
+  });
+}
+
+export async function compileFromDemo(
+  itemId: number,
+  wordsOnly: boolean
+): Promise<void> {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId || busy) return;
+
+  let transcriptText = "";
+  let segments: { fromMs: number; toMs: number; text: string }[] = [];
+  let reason: string | null = null;
+
+  // ---- listen back ----
+  if (session.narration) {
+    patchWatch(itemId, { state: "listening" });
+    try {
+      await ensureModel(() =>
+        patchWatch(itemId, { state: "listening" })
+      );
+      const t = await transcribe(session.narration);
+      transcriptText = t.text;
+      segments = t.segments;
+    } catch (e) {
+      reason =
+        e instanceof SttError
+          ? e.sentence
+          : `Listening back broke — ${String(e).slice(0, 80)}`;
+    }
+  } else {
+    reason = watchItem(itemId)?.micOk
+      ? "No narration was recorded."
+      : (watchItem(itemId)?.reason ?? "No narration was recorded.");
+  }
+
+  if (!transcriptText) {
+    // Rung 3: no words — frames alone are not enough to compile honestly.
+    patchWatch(itemId, { state: "failed", reason:
+      `${reason ?? "I couldn't hear you."} Type what you did instead — I'll use it with the frames.` });
+    return;
+  }
+
+  // ---- read the frames (enrichment) ----
+  let evidence: string | null = null;
+  const kept = session.store.kept();
+  if (!wordsOnly && kept.length > 0) {
+    patchWatch(itemId, { state: "reading" });
+    try {
+      const model = await activeLocalModel();
+      if (!model) throw new VisionUnavailable("No local model.");
+      const enrichment = await enrichFrames(model, kept, segments);
+      evidence = enrichmentEvidence(enrichment);
+    } catch (e) {
+      reason =
+        e instanceof VisionUnavailable
+          ? e.sentence
+          : "I couldn't watch the screen, so I compiled from your words alone.";
+    }
+  }
+
+  // ---- burn, then compile through the SAME pipe ----
+  const frameCount = kept.length;
+  session.store.burn();
+  session.mic?.discard();
+  watchSession = null;
+  replace(itemId, {
+    id: itemId,
+    kind: "note",
+    tone: "gray",
+    text: `Recording deleted — ${frameCount} frame${frameCount === 1 ? "" : "s"} and the narration are gone.${reason ? ` ${reason}` : ""}`,
+  });
+
+  await runCompile({
+    userText: "",
+    answers: [],
+    demo: {
+      transcript: transcriptText,
+      evidence,
+      frames: evidence ? frameCount : 0,
+    },
+  });
+}
+
+// "type what you did instead" — the typed text takes the transcript's slot.
+export async function compileFromTypedDemo(
+  itemId: number,
+  typed: string
+): Promise<void> {
+  const session = watchSession;
+  if (!session || session.itemId !== itemId || !typed.trim()) return;
+  session.narration = null;
+  const kept = session.store.kept();
+  let evidence: string | null = null;
+  if (kept.length > 0) {
+    patchWatch(itemId, { state: "reading" });
+    try {
+      const model = await activeLocalModel();
+      if (model) {
+        const enrichment = await enrichFrames(model, kept, []);
+        evidence = enrichmentEvidence(enrichment);
+      }
+    } catch {
+      // words alone
+    }
+  }
+  const frameCount = kept.length;
+  session.store.burn();
+  watchSession = null;
+  replace(itemId, {
+    id: itemId,
+    kind: "note",
+    tone: "gray",
+    text: `Recording deleted — ${frameCount} frame${frameCount === 1 ? "" : "s"} gone.`,
+  });
+  await runCompile({
+    userText: "",
+    answers: [],
+    demo: { transcript: typed.trim(), evidence, frames: evidence ? frameCount : 0 },
+  });
+}
+
 // The sheet's Change link seeds the composer with the row quoted.
 let composerSeed: string | null = null;
 export function seedComposer(text: string) {
@@ -481,6 +769,22 @@ export function toggleDiffEntry(itemId: number, relPath: string, runId?: string)
   const entry = run?.diff?.entries.find((e) => e.relPath === relPath);
   if (!entry || run?.diff?.applied) return;
   entry.kept = !entry.kept;
+  emit();
+}
+
+// Parameterization: a demo-extracted fill-in can be pinned to its
+// demonstrated value ("Always use this") — the input disappears and the
+// steps get the literal. Reversible until Save.
+export function pinDemoValue(itemId: number, autoId: string, inputName: string) {
+  const item = builtItem(itemId);
+  if (!item || item.state === "saved") return;
+  const auto = item.result.automations.find((a) => a.id === autoId);
+  const input = auto?.inputs.find((i) => i.name === inputName);
+  if (!auto || !input) return;
+  auto.inputs = auto.inputs.filter((i) => i.name !== inputName);
+  auto.steps = auto.steps.map((s) =>
+    s.split(`{${inputName}}`).join(input.example)
+  );
   emit();
 }
 

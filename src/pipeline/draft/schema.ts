@@ -235,6 +235,95 @@ export function buildWireSchema(catalog: Catalog) {
 export type WireDraft = z.infer<ReturnType<typeof buildWireSchema>>;
 export type WireAutomation = WireDraft["automations"][number];
 
+// ---- referential-integrity lints (validator-only, shared by the compile
+// loop and chat edits — the wire grammar never grows) ----
+export function lintAutomation(a: {
+  steps: string[];
+  sources: string[];
+  inputs: { name: string }[];
+}): string[] {
+  const issues: string[] = [];
+  const stepText = a.steps.join("\n");
+  // Every hostname fetched in a step must be inside the fence.
+  for (const m of stepText.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) {
+    const host = m[1].toLowerCase();
+    const fenced = a.sources.some(
+      (s) => host === s.toLowerCase() || host.endsWith(`.${s.toLowerCase()}`)
+    );
+    if (!fenced) {
+      issues.push(
+        `The steps fetch ${host}, but it isn't in sources — add it to the fence or take the step out.`
+      );
+    }
+  }
+  // Every {token} in steps must be a declared input, and inputs must be used.
+  const tokens = [...stepText.matchAll(/\{([a-z0-9_]+)\}/gi)].map((m) => m[1]);
+  for (const t of tokens) {
+    if (!a.inputs.some((i) => i.name === t)) {
+      issues.push(`Steps reference {${t}} but there is no fill-in named "${t}".`);
+    }
+  }
+  for (const inp of a.inputs) {
+    if (!tokens.includes(inp.name) && a.steps.length > 0) {
+      // unused fill-ins are a smell, not a failure — surfaced softly
+      issues.push(
+        `The fill-in "${inp.name}" is never used in the steps — reference it as {${inp.name}} or remove it.`
+      );
+    }
+  }
+  return issues;
+}
+
+// Re-validate a record after a chat edit's merge patch: the same shape and
+// catalog grounding the compiler enforces, so an edit can't smuggle in an
+// unfenced host or an uncataloged path.
+export function validateEditedAutomation(
+  record: {
+    name: string;
+    sentence: string;
+    category: string;
+    steps: string[];
+    inputs: { name: string; label: string; example: string }[];
+    outputs: { name: string }[];
+    files: { reads: string[]; writes: string[] };
+    sources: string[];
+    delivers: string;
+    schedule: unknown;
+    effort: string;
+  },
+  catalog: Catalog
+): { ok: boolean; issues: string[] } {
+  const issues: string[] = [];
+  const single = buildWireSchema(catalog);
+  const probe = {
+    automations: [
+      {
+        name: record.name,
+        sentence: record.sentence,
+        category: record.category,
+        steps: record.steps,
+        inputs: record.inputs,
+        outputs: record.outputs,
+        files: record.files,
+        sources: record.sources,
+        delivers: record.delivers,
+        schedule: record.schedule,
+        effort: record.effort,
+      },
+    ],
+    chain: null,
+    question: null,
+  };
+  const result = single.safeParse(probe);
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      issues.push(issue.message);
+    }
+  }
+  issues.push(...lintAutomation(record));
+  return { ok: issues.length === 0, issues };
+}
+
 export function wireJsonSchema(catalog: Catalog): Record<string, unknown> {
   // The same schema goes on the wire (format:) and into the prompt — grammar
   // guarantees shape, the prompt copy improves content.

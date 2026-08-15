@@ -178,6 +178,15 @@ export function AutomationSheet({
           <div className="auto-sheet-title">
             <div className="auto-sheet-name">{auto.name}</div>
             <div className="auto-sheet-sentence">{auto.sentence}</div>
+            {auto.origin && (
+              <div className="caption" data-testid="origin-line">
+                {auto.origin.kind === "watched"
+                  ? `Compiled from a recording on ${new Date(auto.origin.at).toLocaleDateString(undefined, { month: "short", day: "numeric" })} — ${auto.origin.frames ? `${auto.origin.frames} frames + ` : ""}your words. Frames deleted.`
+                  : auto.origin.kind === "edited"
+                    ? `Last edited ${new Date(auto.origin.at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}.`
+                    : null}
+              </div>
+            )}
           </div>
           <span
             className={`chip ${cloud ? "chip-blue" : "chip-green"}`}

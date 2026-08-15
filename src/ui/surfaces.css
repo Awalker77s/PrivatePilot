@@ -699,6 +699,74 @@
   border-color: #33363e;
 }
 
+/* ---------- watch me ---------- */
+.watchme-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rec-pulse {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.consent-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.consent-thumb {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  width: 128px;
+}
+
+.consent-thumb img {
+  display: block;
+  width: 100%;
+}
+
+.thumb-drop {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(11, 12, 14, 0.8);
+  color: var(--red);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.param-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.param-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  width: fit-content;
+}
+
 /* ---------- edit card ---------- */
 .edit-row {
   display: flex;

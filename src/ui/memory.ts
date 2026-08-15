@@ -19,9 +19,22 @@ export const DEIXIS_RE =
   /\b(this|that|it|that one|the (first|second|last) one|them|both)\b/i;
 export const TIMEY_RE =
   /\b(time|schedule|daily|hourly|every (day|morning|evening|night|hour|week)|at \d{1,2}(:\d{2})?\s*(am|pm)?|\d{1,2}\s*(am|pm))\b/i;
+// A reference to an existing SCHEDULE FIELD (not a new object) — this is what
+// lets a bare "change the time to 9am" edit the focus, while "set up a daily
+// backup of my Documents folder" (a new deliverable, no field reference) does
+// not hijack it. Without this gate, TIMEY alone turned any schedule-flavored
+// NEW request into an edit of the last card.
+export const SCHEDULE_FIELD_RE =
+  /\b(the |its )?(time|schedule|hour|day|frequency|cadence)\b/i;
 // Words that mean "something new", which must never be hijacked into an edit.
 export const NEW_TASK_RE =
-  /\b(another automation|a new automation|an automation (that|to|which)|a second automation|one more automation|make me (an|a new)|create (an|a new)|build (me )?(an|a))\b/i;
+  /\b(another automation|a new automation|an automation (that|to|which)|a second automation|one more automation|make me (an|a new)|create (an|a new)|build (me )?(an|a)|a copy of|a version of|duplicate)\b/i;
+// "Make a VARIANT of an existing automation" — meaningful only when a real
+// automation name is also present (otherwise "a second batch of scans" is just
+// an object). Used to send "create a second Morning Brief" to a fresh compile
+// instead of editing the original.
+export const COPY_INTENT_RE =
+  /\b(a second|another|a separate|a copy of|a version of|duplicate|for the weekend|for weekends)\b/i;
 
 // A question ABOUT an automation ("what can this do?", "when does it run?",
 // "why did it fail?") — answered from the record, never sent to the patcher.
@@ -38,8 +51,13 @@ export function isQuestionAbout(text: string): boolean {
 
 // "…and another automation to check meta" names two independent jobs — split
 // before drafting so the model only ever sees one job per call.
+// A coordinator only when a genuine second JOB follows: "automation" (a
+// connector after it is optional), or the pronoun "one" REQUIRING a connector
+// ("another one THAT checks…"). Bare "a new one" — "merge the old log and a
+// new one into an archive" — is an ordinary object, not a second job, so it
+// must not split.
 const SPLIT_RE =
-  /(?:,\s*)?\b(?:and then|and|plus|also|then)\s+(?:make\s+|create\s+|build\s+)?(?:another|a second|one more|a new)\s+(?:automation|one)\s*(?:to|that|which|for)?\s+/i;
+  /(?:,\s*)?\b(?:and then|and|plus|also|then)\s+(?:make\s+|create\s+|build\s+)?(?:another|a second|one more|a new)\s+(?:automation(?:\s+(?:to|that|which|for))?|one\s+(?:to|that|which|for))\s+/i;
 
 export function splitCoordination(text: string): string[] {
   const parts = text
@@ -88,7 +106,21 @@ export function findTargetsByName(
     );
     if (named.length > 0) return dedupeByName(named);
   }
-  return dedupeByName(all.filter((x) => t.includes(x.record.name.toLowerCase())));
+  // Whole-word match, not bare substring: an automation named "Log" must not
+  // match inside "blog" or "logged", and "Morning Brief" matches "the morning
+  // brief" but the word boundary keeps it from firing on unrelated prose.
+  return dedupeByName(
+    all.filter((x) => nameAppears(x.record.name, t))
+  );
+}
+
+function nameAppears(name: string, lowerText: string): boolean {
+  const n = name.trim().toLowerCase();
+  if (!n) return false;
+  const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // \b around the whole phrase; tolerate internal whitespace runs.
+  const re = new RegExp(`\\b${escaped.replace(/\s+/g, "\\s+")}\\b`, "i");
+  return re.test(lowerText);
 }
 
 export function findTargetNamed(

@@ -5,10 +5,12 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { readChatFile, writeChatFile } from "../storage/chat";
 import {
+  COPY_INTENT_RE,
   DEIXIS_RE,
   DELTA_VERB_RE,
   EditTarget,
   NEW_TASK_RE,
+  SCHEDULE_FIELD_RE,
   TIMEY_RE,
   findTargetNamed,
   findTargetsByName,
@@ -659,13 +661,38 @@ export async function sendText(text: string) {
   // 1's card and doesn't re-create it), chain null by construction.
   const segments = splitCoordination(text);
   if (segments.length > 1) {
-    for (const seg of segments) {
-      await runCompile({
-        userText: seg,
-        answers: [],
-        history: renderHistory(scopedItems(), saved),
-        singleJob: true, // a split segment is one job by construction
-      });
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      // Each segment routes on its own: a segment that names a saved/drafted
+      // automation to CHANGE it patches that record (a duplicate compile would
+      // otherwise leave the real one untouched); everything else compiles as
+      // one job.
+      const segNamed = findTargetsByName(seg, scopedItems(), saved);
+      if (
+        segNamed.length === 1 &&
+        DELTA_VERB_RE.test(seg) &&
+        !NEW_TASK_RE.test(seg)
+      ) {
+        await runEdit(segNamed[0], seg);
+      } else {
+        await runCompile({
+          userText: seg,
+          answers: [],
+          history: renderHistory(scopedItems(), saved),
+          singleJob: true, // a split segment is one job by construction
+        });
+      }
+      // A segment that opened a question owns the conversation now — running
+      // the next segment would clobber its pending context and orphan the
+      // card. Stop and say what's left rather than silently dropping it.
+      if (pending && i < segments.length - 1) {
+        push({
+          kind: "note",
+          tone: "gray",
+          text: "Answer the question above first — then send me the rest of that request.",
+        });
+        break;
+      }
     }
     return;
   }
@@ -677,10 +704,14 @@ export async function sendText(text: string) {
   if (named.length === 1 && !NEW_TASK_RE.test(text)) {
     if (isQuestionAbout(text)) {
       await runExplain(named[0].record, text, history);
-    } else {
-      await runEdit(named[0], text);
+      return;
     }
-    return;
+    // "a second Morning Brief for the weekend" names an automation only to ask
+    // for a VARIANT — compile it fresh, don't patch the original.
+    if (!COPY_INTENT_RE.test(text)) {
+      await runEdit(named[0], text);
+      return;
+    }
   }
   if (named.length > 1 && !NEW_TASK_RE.test(text)) {
     askWhichOne(named, text);
@@ -692,7 +723,10 @@ export async function sendText(text: string) {
   if (
     !NEW_TASK_RE.test(text) &&
     DELTA_VERB_RE.test(text) &&
-    (DEIXIS_RE.test(text) || TIMEY_RE.test(text))
+    // A real pronoun aimed at the focus, OR a schedule tweak that names an
+    // existing FIELD ("change the time to 9am"). TIMEY alone is not enough —
+    // "set up a daily backup of my Documents folder" is a new job, not an edit.
+    (DEIXIS_RE.test(text) || (TIMEY_RE.test(text) && SCHEDULE_FIELD_RE.test(text)))
   ) {
     const focus = focusTargets(thread, saved);
     if (focus.length === 1) {
@@ -1153,6 +1187,11 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
   if (!item || item.state === "running") return;
   const autos = item.result.automations;
   if (autos.length === 0) return;
+  // Hold the conversation while the watched run executes — otherwise an edit
+  // typed mid-run patches the draft the run isn't executing, and when the run
+  // finishes the untested edit gets stamped "tested" and Save unlocks.
+  busy = true;
+  emit();
   patchBuilt(itemId, { state: "running", progress: "Starting…" });
   try {
     if (autos.length === 1 || !item.result.chain) {
@@ -1197,6 +1236,9 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
   } catch (e) {
     patchBuilt(itemId, { state: "fresh", progress: null });
     push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+  } finally {
+    busy = false;
+    emit();
   }
 }
 

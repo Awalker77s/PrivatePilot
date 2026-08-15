@@ -3,7 +3,7 @@
 import { OllamaProvider, friendlyName, localModelCandidates } from "./ollama";
 import { FeatherlessProvider } from "./featherless";
 import type { ChatRequest, ChatResponse, ModelInfo, ModelProvider } from "./types";
-import { getSettings } from "../storage/settings";
+import { getSettings, updateSettings } from "../storage/settings";
 
 export const ollama = new OllamaProvider();
 export const featherless = new FeatherlessProvider();
@@ -31,6 +31,25 @@ export async function activeLocalModel(): Promise<string | null> {
   return localModelCandidates(getSettings().localModel).find((t) =>
     names.includes(t)
   ) ?? null;
+}
+
+// ONE brain at a time, and picking it is the only way to switch. Borrowing is
+// not a separate switch that can sit on behind a local choice: choosing a
+// local model turns it off, choosing a cloud model turns it on. Every surface
+// (composer picker, Settings model list, Settings cloud card) calls these, so
+// "cloud is on" always means exactly "a Featherless model is the brain".
+export async function useLocalBrain(tag: string): Promise<void> {
+  await updateSettings((s) => {
+    s.localModel = tag || null;
+    s.featherless.enabled = false;
+  });
+}
+
+export async function useCloudBrain(model: string): Promise<void> {
+  await updateSettings((s) => {
+    s.featherless.model = model;
+    s.featherless.enabled = true;
+  });
 }
 
 // The toggle decides where compute happens — and the UI never lies about it.

@@ -99,6 +99,60 @@ function requestedCount(text: string, fallback = 10): number {
   return match ? Math.max(3, Math.min(20, Number(match[1]))) : fallback;
 }
 
+// Every word a template can actually express: request plumbing, schedule
+// words, and its own trigger vocabulary. Anything outside this — a topic, an
+// extra deliverable ("with summaries"), a filter, a place — means the template
+// would answer a DIFFERENT question than the one asked.
+const TEMPLATE_VOCAB = new Set(
+  `a an the this that these those there here it its i me my mine you your we us
+   one ones some any thing things something please can could would will want
+   wants need needs like lets let make makes making build create creates set
+   setup give gives show shows tell tells get gets fetch fetches find finds
+   check checks checking see know watch watches watching track tracks tracking
+   monitor monitors report reports automation automations job task alert alerts
+   notify update updates and or for of to on in at with from about into is are
+   was be do does what whats how when much many current currently live latest
+   new newest right now today todays up top first best main again just only also
+   still per out specifically exactly really actually maybe instead else
+   more other another next last sure ok okay thanks please regarding
+   covering over across around related world
+   every each daily day days morning mornings evening night hour hours hourly
+   minute minutes week weekly am pm oclock time schedule
+   price prices worth quote quotes cost value stock stocks share shares market
+   news headline headlines story stories hacker tech technology sports
+   status outage outages operational working down`
+    .split(/\s+/)
+    .filter(Boolean)
+);
+
+// The words a template consumed (its entity aliases, its topic) — plus the
+// vocabulary above — must account for the whole message, or we hand the
+// request to the model instead of serving a canned automation.
+function uncoveredWords(text: string, consumed: string[]): string[] {
+  const covered = new Set(
+    consumed
+      .flatMap((c) => c.toLowerCase().split(/[^a-z0-9]+/))
+      .filter(Boolean)
+  );
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .filter(
+      (word) =>
+        !/^\d+$/.test(word) && !TEMPLATE_VOCAB.has(word) && !covered.has(word)
+    );
+}
+
+function aliasKeysWhere<T>(
+  aliases: Record<string, T>,
+  match: (value: T) => boolean
+): string[] {
+  return Object.entries(aliases)
+    .filter(([, value]) => match(value))
+    .map(([key]) => key);
+}
+
 function aliasesIn<T>(text: string, aliases: Record<string, T>): T[] {
   const found: T[] = [];
   const seen = new Set<T>();
@@ -172,6 +226,9 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
 
   const automations: WireAutomation[] = [];
   const matched: string[] = [];
+  // Words this template path actually accounted for — checked at the end so a
+  // canned automation never stands in for a request it only half-matched.
+  const consumed: string[] = [];
 
   const wantsNews = /\b(news|headlines?|stories)\b/i.test(text);
   const wantsTech = wantsNews && /\b(tech|technology|hacker news)\b/i.test(text);
@@ -180,7 +237,7 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
   // never be dropped — serving the generic template for a specific ask is the
   // fast path answering a different question than the person asked.
   const aboutMatch = text.match(
-    /\b(?:news|headlines?|stories)\s+(?:\w+\s+){0,2}?(?:about|on|for|regarding|covering)\s+(.+?)(?=\s+every\b|\s+daily\b|\s+each\b|\s+at\s+\d|$)/i
+    /\b(?:news|headlines?|stories)\s+(?:\w+\s+){0,2}?(?:about|on|regarding|covering)\s+(.+?)(?=\s+every\b|\s+daily\b|\s+each\b|\s+at\s+\d|$)/i
   );
   const aboutTopic = aboutMatch?.[1]?.trim().replace(/[.!?]+$/, "");
   if (wantsTech) {
@@ -202,6 +259,7 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
         })
       );
       matched.push(`${aboutTopic} tech headlines`);
+      consumed.push(aboutTopic);
     } else {
       automations.push(
         automation(text, {
@@ -228,6 +286,7 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
     const label = topic === "top stories" ? "Top" : topic.replace(/\b\w/g, (c) => c.toUpperCase());
     automations.push(newsAutomation(text, topic, label));
     matched.push(`${topic} headlines`);
+    consumed.push(topic);
   }
 
   const wantsStock = /\b(stock|share price|market price|stock price|quote)\b/i.test(text);
@@ -264,6 +323,11 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
         })
       );
       matched.push(`${stock.symbol} stock price`);
+      consumed.push(
+        stock.label,
+        stock.symbol,
+        ...aliasKeysWhere(STOCKS, (v) => v.symbol === stock.symbol)
+      );
     }
   }
 
@@ -284,6 +348,11 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
         })
       );
       matched.push(`${coin.label} price`);
+      consumed.push(
+        coin.label,
+        coin.id,
+        ...aliasKeysWhere(COINS, (v) => v.id === coin.id)
+      );
     }
   }
 
@@ -304,6 +373,10 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
         })
       );
       matched.push(`${service.label} status`);
+      consumed.push(
+        service.label,
+        ...aliasKeysWhere(SERVICES, (v) => v.host === service.host)
+      );
     }
   }
 
@@ -315,6 +388,12 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
       ) === index
   );
   if (unique.length === 0) return null;
+  // A canned automation may only answer a request it fully covers. Leftover
+  // words mean the person asked for something this template cannot express
+  // ("...with summaries", "...about quantum", "...for my team") — hand the
+  // whole request to the model instead of serving a near-miss.
+  const leftover = uncoveredWords(text, consumed);
+  if (leftover.length > 0) return null;
   return {
     kind: "draft",
     matched,

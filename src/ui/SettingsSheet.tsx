@@ -10,7 +10,14 @@ import {
   friendlyName,
   runModelDoctor,
 } from "../providers/ollama";
-import { localModels, NUM_CTX_DRAFT, ollama } from "../providers";
+import {
+  localModels,
+  NUM_CTX_DRAFT,
+  ollama,
+  cloudActive,
+  useCloudBrain,
+  useLocalBrain,
+} from "../providers";
 import type { ModelInfo } from "../providers/types";
 import {
   CLOUD_MODELS,
@@ -140,15 +147,21 @@ export function SettingsSheet({ close }: { close: () => void }) {
               {doctor.visionCapable ? " Can look at screenshots." : ""}
             </div>
           )}
+          {cloudActive() && (
+            <div className="status-line" style={{ color: "var(--blue)" }}>
+              Borrowed cloud is the brain right now — picking one here switches
+              back to this computer.
+            </div>
+          )}
           <ModelChooser
             installed={localChoices}
             active={doctor?.installedTag ?? null}
             choice={localChoice}
             onChoose={async (value) => {
               setLocalChoice(value);
-              await updateSettings((settings) => {
-                settings.localModel = value || null;
-              });
+              // Picking a local brain means local — it also stops borrowing,
+              // so the app can't quietly keep sending work to the cloud.
+              await useLocalBrain(value);
               setDoctor(await runModelDoctor());
             }}
           />
@@ -560,14 +573,16 @@ function BorrowCloudCard() {
 
   async function toggle() {
     if (!f.enabled && !f.key) return;
-    await updateSettings((s) => {
-      s.featherless.enabled = !s.featherless.enabled;
-    });
-    force((n) => n + 1);
-    if (getSettings().featherless.enabled) {
-      // warming up the borrowed computer — cold models add seconds
-      void prewarm(getSettings().featherless.model);
+    if (f.enabled) {
+      await updateSettings((s) => {
+        s.featherless.enabled = false;
+      });
+    } else {
+      // Turning borrowing on IS choosing the cloud model as the brain.
+      await useCloudBrain(f.model);
+      void prewarm(getSettings().featherless.model); // cold models add seconds
     }
+    force((n) => n + 1);
   }
 
   async function saveKey() {

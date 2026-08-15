@@ -22,6 +22,12 @@ import { draftCall, draftMessages, DraftContext } from "./draft";
 import type { WireAutomation } from "./draft/schema";
 import { validateLoop } from "./validate";
 import { tryQuickCompile } from "./quickDraft";
+import {
+  draftRevisionFor,
+  mergePermissionManifests,
+  normalizeAutomation,
+  permissionManifestFor,
+} from "../storage/revisions";
 
 export interface QuestionOption {
   label: string; // "invoices-2026.xlsx — in Documents"
@@ -383,6 +389,13 @@ export async function compile(
         onlyWhen: l.onlyWhen,
       })),
       timeoutMinutes: 30,
+      createdAt: Date.now(),
+      components: assembled.map((record) => ({
+        automationId: record.id,
+        revisionId: record.revision!.id,
+        revisionNumber: record.revision!.number,
+      })),
+      permissions: mergePermissionManifests(assembled),
     };
   }
 
@@ -418,7 +431,7 @@ function assembleRecord(
   for (const p of [...a.files.reads, ...a.files.writes]) {
     formats[p] = formatForPath(p);
   }
-  return {
+  const record: AutomationRecord = {
     id: newId("auto"),
     name: a.name,
     sentence: a.sentence,
@@ -434,6 +447,7 @@ function assembleRecord(
     model,
     effort: a.effort,
     compiledBy: model,
+    permissions: permissionManifestFor(a),
     origin: context.demo
       ? {
           kind: "watched",
@@ -443,5 +457,9 @@ function assembleRecord(
         }
       : { kind: "told", at: Date.now() },
     lastRun: null,
+  };
+  return {
+    ...normalizeAutomation(record),
+    revision: draftRevisionFor(record),
   };
 }

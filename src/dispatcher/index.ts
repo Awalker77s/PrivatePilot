@@ -225,9 +225,18 @@ export function evalCondition(
   }
 }
 
-function previousBatonOf(automationId: string): Record<string, string | number> | null {
+// The baton from the automation's PRIOR run — what "moves_more_than_pct" and
+// "changed_at_all" compare against. `excludeRunId` is the CURRENT firing's run
+// (already appended to runs.json before the dispatch hook fires): without
+// skipping it, previousBaton === current baton, so every % move computes 0.0%
+// and "changed_at_all" always reports "hasn't changed" — the conditions die.
+function previousBatonOf(
+  automationId: string,
+  excludeRunId?: string
+): Record<string, string | number> | null {
   const runs = getState().runs.records;
   for (let i = runs.length - 1; i >= 0; i--) {
+    if (runs[i].id === excludeRunId) continue;
     if (runs[i].automationId === automationId && runs[i].baton) {
       return runs[i].baton;
     }
@@ -288,7 +297,11 @@ function stepVerdict(
       return { fire: false, sentence: `Held back — ${who} ${verb}.` };
     }
   }
-  const first = deps.find(({ st }) => st?.run)?.st;
+  // The answer predicate reads the dep that actually RAN — never a skipped
+  // sibling's "Held back —" summary (a join after exclusive branches has both
+  // a ran dep and a skipped one; the ran one carries the real answer).
+  const first =
+    (deps.find(({ st }) => st?.kind === "ran") ?? deps.find(({ st }) => st?.run))?.st;
   const answer = (first?.run?.answer ?? first?.run?.summary ?? "").toLowerCase();
   if (s.ifAnswerContains && !answer.includes(s.ifAnswerContains.toLowerCase())) {
     return {
@@ -318,6 +331,11 @@ export async function runChainSteps(
     onProgress?: (p: ChainProgress) => void;
     resume?: boolean;
     preset?: Map<string, RunRecord>;
+    // Dispatch-triggered: only these root step ids are live entry points. A
+    // sibling root (an independent first-step) must NOT fire just because it
+    // shares this chain — running one automation can't silently run another.
+    // Omitted (a full-chain run) means every root is live.
+    rootsActive?: Set<string>;
   }
 ): Promise<RunRecord[]> {
   const steps = chain.steps ?? [];
@@ -363,6 +381,20 @@ export async function runChainSteps(
     }
 
     const preset = opts.preset?.get(s.id);
+
+    // A sibling root that wasn't the trigger of this dispatch: skip silently
+    // (no run, no record) so downstream `needs: any` joins still work off the
+    // triggered branch, but its side-effecting automation never fires.
+    if (
+      opts.rootsActive &&
+      s.after.length === 0 &&
+      !preset &&
+      !opts.rootsActive.has(s.id)
+    ) {
+      state.set(s.id, { kind: "skipped", run: null, sentence: null });
+      continue;
+    }
+
     const already = preset ?? completed.get(index);
     if (already) {
       state.set(s.id, {
@@ -400,9 +432,12 @@ export async function runChainSteps(
       continue;
     }
 
-    // Inputs from the first settled dep's baton, mapped by name.
+    // Inputs from the dep that actually RAN — a skipped dep's baton is null,
+    // so mapping from it would silently drop the ran dep's hand-off values.
     const inputValues: Record<string, string> = {};
-    const firstDep = s.after.map((id) => state.get(id)).find((st) => st?.run);
+    const settled = s.after.map((id) => state.get(id));
+    const firstDep =
+      settled.find((st) => st?.kind === "ran") ?? settled.find((st) => st?.run);
     for (const [output, input] of Object.entries(s.map)) {
       const v = firstDep?.run?.baton?.[output];
       if (v !== undefined) inputValues[input] = String(v);
@@ -484,10 +519,15 @@ export async function runChain(
     const link = chain.links.find((l) => l.to === auto.id);
     const inputValues: Record<string, string> = {};
     if (link && i > 0) {
+      // Exclude this execution's run of link.from so a crossing/change
+      // condition compares against the PRIOR value, not the one just produced.
+      const fromRunId = results
+        .filter((r) => r.automationId === link.from)
+        .slice(-1)[0]?.id;
       const verdict = evalCondition(
         link.onlyWhen,
         baton,
-        previousBatonOf(link.from)
+        previousBatonOf(link.from, fromRunId)
       );
       if (!verdict.fire) {
         // A purposeful stop is not a failure — a held record says why.
@@ -590,6 +630,9 @@ export async function dispatchAfterRun(run: RunRecord): Promise<void> {
     await runChainSteps(chain, [], {
       cause: `${chain.name} handed off`,
       preset,
+      // Only the triggered root(s) are live — a sibling root must not fire
+      // just because one of this chain's entry points ran.
+      rootsActive: new Set(roots.map((s) => s.id)),
     });
   }
 
@@ -617,7 +660,9 @@ export async function dispatchAfterRun(run: RunRecord): Promise<void> {
       const verdict = evalCondition(
         link.onlyWhen,
         baton,
-        previousBatonOf(link.from)
+        // Exclude the firing run so a crossing/change condition compares
+        // against the PRIOR value, not the value that just triggered this.
+        previousBatonOf(link.from, i === startIdx ? run.id : undefined)
       );
       if (!verdict.fire) {
         await appendRun(

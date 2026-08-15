@@ -336,6 +336,8 @@ export async function runToolLoop(
   const boundNames = bound.defs.map((d) => d.function.name).join(", ");
   const maxTurns =
     bound.specs.length > 0 || bound.heavy.length > 0 ? MAX_TURNS_APPS : MAX_TURNS;
+  // A run that writes files needs room to emit whole-file content in one call.
+  const writesFiles = (record.files?.writes?.length ?? 0) > 0;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
     if (Date.now() - startedAt > STALL_MS) {
@@ -370,7 +372,10 @@ export async function runToolLoop(
         temperature: 0.6,
         top_p: 0.95,
         top_k: 20,
-        max_tokens: 512,
+        // A file-writing run must emit the COMPLETE new content (e.g. a whole
+        // CSV) in one tool call — 512 tokens truncates a ~40-row table into
+        // garbage. Answer-only runs stay tight for speed.
+        max_tokens: writesFiles ? 4096 : 1024,
       },
       think: false, // thinking models otherwise spend whole turns saying nothing
     });

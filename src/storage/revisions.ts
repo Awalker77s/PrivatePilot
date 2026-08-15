@@ -122,6 +122,11 @@ export function automationContentHash(record: AutomationRecord): string {
     files: record.files,
     formats: record.formats,
     sources: record.sources,
+    // What the automation may TOUCH — widening any of these is a new
+    // capability that must re-earn approval, so they belong in the hash.
+    apps: record.apps ?? [],
+    tools: record.tools ?? [],
+    knowledge: record.knowledge ?? [],
     delivers: record.delivers,
     schedule: record.schedule,
     model: record.model,

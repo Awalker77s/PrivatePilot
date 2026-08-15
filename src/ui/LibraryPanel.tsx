@@ -55,6 +55,9 @@ export function LibraryPanel() {
     Record<string, ChainCondition | null>
   >({});
   const [savedLine, setSavedLine] = useState<string | null>(null);
+  // A branching workflow can't be opened in the linear sequence editor — this
+  // banner says why, shown in the list (not the editor pane).
+  const [blockNote, setBlockNote] = useState<string | null>(null);
   const [editingWorkflowId, setEditingWorkflowId] = useState<string | null>(null);
   const [, refreshPermissions] = useState(0);
   const { automations, chains } = getState();
@@ -130,6 +133,17 @@ export function LibraryPanel() {
   }
 
   function beginEditWorkflow(workflow: ChainRecord) {
+    // The sequence editor is linear — it has no notion of branches. Opening a
+    // steps (branching) chain here and re-publishing would silently flatten it
+    // into an unconditional chain where every branch runs. Refuse, and point
+    // to where it CAN be edited: talking to it in chat.
+    if (workflow.steps?.length) {
+      setBlockNote(
+        `"${workflow.name}" branches on results, so it can't be edited in this linear editor. Open it from the chat and tell it what to change.`
+      );
+      return;
+    }
+    setBlockNote(null);
     const normalized = normalizeWorkflow(workflow);
     const ids = normalized.components?.map((component) => component.automationId) ??
       chainOrder(normalized);
@@ -541,6 +555,11 @@ export function LibraryPanel() {
         </div>
       )}
 
+      {blockNote && (
+        <div className="note-card note-amber" style={{ margin: "0 0 8px" }}>
+          {blockNote}
+        </div>
+      )}
       <div className="library-list">
         {kind !== "sequences" &&
           records.map((record) => (

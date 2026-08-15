@@ -7,10 +7,24 @@
 import { chat } from "../providers";
 import type { RagSource } from "./ask";
 
-const TOTAL_INTENT = /\b(total|totals|sum|summed|altogether|combined|in all|how much (did|have) .*(spend|spent|cost|pay|paid)|grand total)\b/i;
+// A request to ADD UP MONEY — not any question that happens to contain
+// "total". "What's the total number of receipts?" and "which vendor appears in
+// all my receipts?" are counts/lookups, not sums, and must not trigger the
+// money-summing machinery (which would bolt an irrelevant currency total onto
+// the answer and pass number-verification because it's in the corpus).
+const SUM_MONEY =
+  /\b(grand total|total (spend|spent|cost|amount|price|paid|bill|of \$?\d)|sum (of|up)|summed|altogether|combined total|total \$|add(ed|ing)? up (the |all )?(total|totals|amount|amounts|receipts|invoices|bills|spend)|how much (did|have) .*(spend|spent|cost|pay|paid)|what('?s| is| was) the total (spend|spent|cost|amount|paid|price|bill))\b/i;
+// A bare "total …" only counts as a money sum when money words are near it.
+const MONEY_NEARBY = /\b(spend|spent|cost|costs|paid|pay|price|prices|amount|amounts|\$|usd|eur|gbp|rm|dollars?|euros?|pounds?)\b/i;
 
 export function asksForTotal(question: string): boolean {
-  return TOTAL_INTENT.test(question);
+  if (SUM_MONEY.test(question)) return true;
+  // "add up the totals", "the total of my receipts" — "total" + money context,
+  // but NOT "total number of", "in total how many".
+  if (/\btotals?\b/i.test(question) && MONEY_NEARBY.test(question)) {
+    return !/\btotal (number|count|amount of (receipts|files|documents|items|invoices))\b/i.test(question);
+  }
+  return false;
 }
 
 interface Extracted {

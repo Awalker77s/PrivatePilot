@@ -78,6 +78,11 @@ async function run(
   const s = sep(folderSb);
   const pad = String(targets.length).length;
   const renames: string[] = [];
+  // EVERY current filename is occupied — a rename onto one would clobber it
+  // (fs::rename replaces silently), and Keep would apply the data loss to the
+  // real file. A target that lands on an occupied name is bumped, never
+  // overwritten. `occupied` shrinks as files vacate their old names.
+  const occupied = new Set(entries.map((e) => e.name.toLowerCase()));
   const seen = new Set<string>();
   let n = 0;
   for (const e of targets.sort((x, y) => x.name.localeCompare(y.name))) {
@@ -90,13 +95,26 @@ async function run(
       .replace(/\{name\}/g, base)
       .replace(/\{ext\}/g, dotExt);
     if (regex) out = e.name.replace(regex, a.replace_with.replace(/\{n\}/g, String(n).padStart(pad, "0")));
-    // Never let a rename escape the folder or collide.
+    // Never let a rename escape the folder.
     out = out.replace(/[\\/:*?"<>|]/g, "_").trim();
     if (!out || /^(con|nul|prn|aux|com[1-9]|lpt[1-9])$/i.test(out.split(".")[0])) out = `file-${n}${dotExt}`;
-    if (seen.has(out.toLowerCase()) || out === e.name) {
-      if (out === e.name) continue; // no-op rename, skip silently
-      out = `${base}-${n}${dotExt}`;
+    const selfLower = e.name.toLowerCase();
+    if (out.toLowerCase() === selfLower) continue; // true no-op — file keeps its name
+    // Bump until the target is free: not produced this run, and not an
+    // untouched file already in the folder.
+    const oDot = out.lastIndexOf(".");
+    const oBase = oDot > 0 ? out.slice(0, oDot) : out;
+    const oExt = oDot > 0 ? out.slice(oDot) : "";
+    let bump = 1;
+    while (
+      seen.has(out.toLowerCase()) ||
+      (occupied.has(out.toLowerCase()) && out.toLowerCase() !== selfLower)
+    ) {
+      out = `${oBase}-${n}${bump > 1 ? `-${bump}` : ""}${oExt}`;
+      if (++bump > 50) break;
     }
+    occupied.delete(selfLower); // this file vacates its old name
+    occupied.add(out.toLowerCase());
     seen.add(out.toLowerCase());
     try {
       await rename(`${folderSb}${s}${e.name}`, `${folderSb}${s}${out}`);

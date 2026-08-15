@@ -36,6 +36,11 @@ pub struct HeavyPlan {
     pub allowed_roots: Vec<String>,
     pub timeout_ms: u64,
     pub max_output_bytes: usize,
+    /// Extra env vars a tool needs (e.g. TESSDATA_PREFIX). Applied on top of
+    /// the scrubbed base env — the caller (our TS) controls these, not the
+    /// model. Absent for most tools.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Serialize)]
@@ -130,6 +135,10 @@ pub fn run_tool(plan: HeavyPlan) -> Result<ToolRunReport, String> {
         .env("SystemRoot", std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()))
         .env("TEMP", &plan.cwd)
         .env("TMP", &plan.cwd);
+    // Tool-declared extras (our code, never the model) — e.g. TESSDATA_PREFIX.
+    for (k, v) in &plan.env {
+        cmd.env(k, v);
+    }
 
     let started = Instant::now();
     let child = cmd.spawn().map_err(|e| format!("Heavy:Spawn:{e}"))?;

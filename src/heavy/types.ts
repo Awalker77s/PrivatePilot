@@ -21,6 +21,8 @@ export interface HeavyPlan {
   allowed_roots: string[];
   timeout_ms: number;
   max_output_bytes: number;
+  // Tool-declared env (our code, never the model) — e.g. TESSDATA_PREFIX.
+  env?: [string, string][];
 }
 
 export interface HeavyResult {

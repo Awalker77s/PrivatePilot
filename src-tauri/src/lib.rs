@@ -22,7 +22,7 @@ async fn ollama_request(
     body: Option<String>,
     timeout_ms: u64,
 ) -> Result<LocalHttpResponse, String> {
-    const ALLOWED_PATHS: [&str; 4] = ["/api/tags", "/api/show", "/api/ps", "/api/chat"];
+    const ALLOWED_PATHS: [&str; 5] = ["/api/tags", "/api/show", "/api/ps", "/api/chat", "/api/embed"];
     if !ALLOWED_PATHS.contains(&path.as_str()) {
         return Err("Refused: unsupported Ollama endpoint".to_string());
     }

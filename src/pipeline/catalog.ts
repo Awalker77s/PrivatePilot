@@ -43,7 +43,7 @@ export interface Catalog {
 // Keeping those enums out makes local CPU drafting materially faster while
 // preserving the closed catalog whenever the person actually mentions files.
 const FILE_INTENT =
-  /\b(file|folder|document|documents|pdf|spreadsheet|sheet|excel|csv|xlsx|docx|invoice|invoices|receipt|receipts|ledger|downloads?|desktop|directory|directories)\b/i;
+  /\b(file|folder|document|documents|pdf|spreadsheet|sheet|excel|csv|xlsx|docx|invoice|invoices|receipt|receipts|ledger|downloads?|desktop|directory|directories|scan|scanned|scans|image|images|photo|photos|picture|pictures|jpe?g|png|tiff?|ocr|searchable|rename|zip|archive|convert)\b/i;
 
 export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
   if (FILE_INTENT.test(userText)) return catalog;
@@ -78,6 +78,14 @@ const FORMAT_BY_EXT: Record<string, string> = {
   html: "text",
   htm: "text",
 };
+
+// Images can't be READ as text (readAnyFile refuses them) but they ARE valid
+// targets for the OCR heavy tool, so the catalog must be able to name them.
+const OCR_EXTS = new Set(["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"]);
+
+export function isOcrImage(display: string): boolean {
+  return OCR_EXTS.has(display.split(".").pop()?.toLowerCase() ?? "");
+}
 
 export function formatForPath(display: string): string {
   const ext = display.split(".").pop()?.toLowerCase() ?? "";
@@ -128,10 +136,10 @@ export async function buildCatalog(): Promise<Catalog> {
       for (const e of entries) {
         if (!e.isFile) continue;
         if (e.name.startsWith(".") || e.name.startsWith("~$")) continue;
-        // Only formats the runner can actually read — images and binaries
-        // would bloat the closed enum without being automatable targets.
+        // Text formats the runner can read, PLUS image formats the OCR tool
+        // can turn into searchable text — both are automatable targets.
         const ext = e.name.split(".").pop()?.toLowerCase() ?? "";
-        if (!(ext in FORMAT_BY_EXT)) continue;
+        if (!(ext in FORMAT_BY_EXT) && !OCR_EXTS.has(ext)) continue;
         if (bucket.length >= MAX_FILES_PER_FOLDER) break;
         const display = `${spec.display}/${e.name}`;
         const real = await join(spec.real, e.name);

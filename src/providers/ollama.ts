@@ -103,7 +103,10 @@ async function ollamaFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  const timeoutMs = path === "/api/chat" ? 300_000 : 20_000;
+  // Embedding a document batch on CPU can take minutes — it gets the long
+  // ceiling like chat, not the 20s one meant for tags/show/ps.
+  const timeoutMs =
+    path === "/api/chat" || path === "/api/embed" ? 300_000 : 20_000;
   const signal = AbortSignal.timeout(timeoutMs);
   try {
     // A wedged request must become a designed sentence, never a forever-hang
@@ -166,6 +169,32 @@ export class OllamaProvider implements ModelProvider {
       label: friendlyName(m.name),
       sizeBytes: m.size ?? null,
     }));
+  }
+
+  // Embed a batch of strings → one 768-vector each. num_ctx 8192 stops long
+  // chunks silently truncating at Ollama's 2048 default. The caller adds the
+  // nomic task prefixes (search_document:/search_query:) — Ollama does not.
+  async embed(model: string, inputs: string[]): Promise<number[][]> {
+    const res = await ollamaFetch("/api/embed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        input: inputs,
+        truncate: true,
+        options: { num_ctx: 8192 },
+      }),
+    });
+    if (!res.ok)
+      throw new ProviderError(OLLAMA_DOWN_SENTENCE, `POST /api/embed ${res.status}`);
+    const body = (await res.json()) as { embeddings?: number[][] };
+    if (!body.embeddings || body.embeddings.length !== inputs.length) {
+      throw new ProviderError(
+        "The embedding model didn't answer — is nomic-embed-text pulled?",
+        `embed returned ${body.embeddings?.length ?? 0} of ${inputs.length}`
+      );
+    }
+    return body.embeddings;
   }
 
   async chat(req: ChatRequest): Promise<ChatResponse> {

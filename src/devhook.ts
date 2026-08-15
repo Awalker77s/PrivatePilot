@@ -26,6 +26,9 @@ import * as outlookMod from "./connectors/outlook";
 import * as gmailMod from "./connectors/gmail";
 import * as heavyReg from "./heavy/registry";
 import * as heavyRun from "./heavy/runTool";
+import * as ragIndex from "./rag/index";
+import * as ragAnswer from "./rag/answer";
+import * as ragStore from "./rag/store";
 
 declare global {
   interface Window {
@@ -78,5 +81,8 @@ export function installDevHook() {
     gmailMod,
     heavyReg,
     heavyRun,
+    ragIndex,
+    ragAnswer,
+    ragStore,
   };
 }

@@ -4,7 +4,7 @@
 // The fence governs where the automation may STEER — every off-fence
 // navigation (including redirects) is cancelled and said out loud.
 import { invoke } from "@tauri-apps/api/core";
-import { fenceAllows, hostnameOf, FetchOutcome } from "./fetchPage";
+import { fenceAllows, hostnameOf, looksLikeUrl, FetchOutcome } from "./fetchPage";
 import { visionReadPage } from "./visionRead";
 
 const TEXT_CAP = 24_000;
@@ -49,7 +49,7 @@ export async function readRenderedPage(
     finalUrl: null,
   });
 
-  if (/\s|%20/.test(url.trim())) {
+  if (!looksLikeUrl(url)) {
     return fail(
       `That isn't a web address — read_page needs a full URL (got "${url.slice(0, 60)}").`
     );

@@ -247,6 +247,15 @@ export function buildWireSchema(catalog: Catalog) {
           }
         }
       });
+      // A coordination-split segment is ONE job by construction — a draft
+      // with siblings is the model mimicking history, not the request.
+      if (catalog.singleJob && v.automations.length > 1) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["automations"],
+          message: `This request is ONE job — draft exactly one automation (you drafted ${v.automations.length}). Remove the others; do not invent companions from the conversation history.`,
+        });
+      }
       // The person's words routed on a result ("if…, otherwise…, depending
       // on…") — several jobs with no chain.steps is the drafter missing the
       // routing, not a choice. Insist, with the shape spelled out.

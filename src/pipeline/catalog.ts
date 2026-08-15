@@ -42,6 +42,9 @@ export interface Catalog {
   // The person's words route on a result ("if…, otherwise…") — the validator
   // insists on chain.steps when multiple jobs arrive unchained.
   branchIntent?: boolean;
+  // This request is ONE job by construction (a coordination-split segment) —
+  // the validator refuses drafts with more than one automation.
+  singleJob?: boolean;
 }
 
 // Online requests do not need 150 real paths embedded into the JSON grammar.

@@ -17,6 +17,10 @@ export interface DraftContext {
   // A condensed transcript of the conversation so far — follow-ups like
   // "make one for meta too" only make sense with it.
   history?: string;
+  // Set by the coordination splitter: this text is ONE job by construction —
+  // the validator refuses a draft with more than one automation (the 4B
+  // mimics history patterns and invents themed siblings otherwise).
+  singleJob?: boolean;
   // Watch-me: the recording is an input adapter, not a second pipeline.
   demo?: {
     transcript: string;

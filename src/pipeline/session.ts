@@ -121,6 +121,7 @@ export async function compile(
   let catalog: Catalog;
   try {
     catalog = catalogForRequest(await buildCatalog(), context.userText);
+    if (context.singleJob) catalog = { ...catalog, singleJob: true };
   } catch (e) {
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();

@@ -596,16 +596,17 @@ export async function sendText(text: string) {
     | undefined;
 
   if (lastQuestion && pendingEditRequest) {
-    replace(lastQuestion.id, { ...lastQuestion, answered: text });
     const target = findTargetNamed(text, thread, saved);
-    const request = pendingEditRequest;
-    pendingEditRequest = null;
     if (target) {
+      replace(lastQuestion.id, { ...lastQuestion, answered: text });
+      const request = pendingEditRequest;
+      pendingEditRequest = null;
       await runEdit(target, request);
-    } else {
-      push({ kind: "note", tone: "amber", text: `No automation is named "${text.trim()}".` });
+      return;
     }
-    return;
+    // Not a name — a correction or a new thought ("actually make it 8am").
+    // The which-one question stays open; the message routes normally instead
+    // of dead-ending on an amber "No automation is named that".
   }
 
   if (lastQuestion && pending) {
@@ -623,8 +624,9 @@ export async function sendText(text: string) {
   }
 
   // An Automation Studio is an explicit scope for THIS record: a question
-  // answers from it, any instruction edits it. No name/pronoun heuristics.
-  if (activeAutomationId) {
+  // answers from it, an instruction edits it — but "make me a NEW automation"
+  // is never an edit of this one; it falls through to a fresh compile.
+  if (activeAutomationId && !NEW_TASK_RE.test(text)) {
     const record = saved.find((candidate) => candidate.id === activeAutomationId);
     if (record) {
       if (isQuestionAbout(text)) {
@@ -662,6 +664,7 @@ export async function sendText(text: string) {
         userText: seg,
         answers: [],
         history: renderHistory(scopedItems(), saved),
+        singleJob: true, // a split segment is one job by construction
       });
     }
     return;

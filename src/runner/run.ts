@@ -105,6 +105,11 @@ export async function runAutomation(
     return result;
   } finally {
     releaseHold();
+    // Don't leave an authenticated Gmail socket open past the run.
+    if ((auto.apps ?? []).includes("gmail")) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      void invoke("gmail_disconnect_pool").catch(() => {});
+    }
   }
 }
 

@@ -262,7 +262,8 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_clear,
             secrets::secret_has,
-            gmail::gmail_imap
+            gmail::gmail_imap,
+            gmail::gmail_disconnect_pool
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

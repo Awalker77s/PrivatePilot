@@ -14,6 +14,9 @@ import type { ToolContext, ToolSpec } from "../connectors/types";
 import type { RunHandoff } from "../storage/types";
 
 const MAX_TURNS = 15;
+// App connectors take one turn per read, and a mailbox has many — give
+// those runs more room before the loop gives up.
+const MAX_TURNS_APPS = 22;
 const STALL_MS = 30 * 60 * 1000;
 const CTX_GUARD = 0.85;
 
@@ -158,6 +161,9 @@ function systemPrompt(record: AutomationRecord, inputValues: Record<string, stri
     specs.length > 0
       ? "App tools return rows of real data from this computer — quote them; never fetch mail or music through URLs. Ids like m1 come from a listing in THIS run — never make one up, and in your final answer name messages by sender and subject, never by id. A draft is saved for the person to send; you never send."
       : "",
+    specs.some((s) => /mail_recent|mail_search/.test(s.def.function.name))
+      ? "INBOX TRIAGE: after ONE listing, judge urgency from each message's sender and subject alone. Open a message (…_read) ONLY if you will act on it — draft a reply or describe its details. NEVER open newsletters, promotions, receipts, social or security-alert emails — you already know from the subject that they need no reply. Open at most 3 messages total, then answer. Reading everything wastes the run."
+      : "",
     "You are in a loop and can make multiple tool calls before answering. Call exactly one tool per turn.",
     "If the job is to draft, send, or email a message: your final answer IS the message — a subject line, then the body, nothing else. The app shows a Send button; you never send anything yourself and must not say so.",
     "If a fetch is refused, empty, or rate-limited: NEVER invent or guess a value, never output 0 as a stand-in. Say you couldn't read it and end with OUTPUTS: (none).",
@@ -261,8 +267,9 @@ export async function runToolLoop(
   };
   const specByName = new Map(bound.specs.map((s) => [s.def.function.name, s]));
   const boundNames = bound.defs.map((d) => d.function.name).join(", ");
+  const maxTurns = bound.specs.length > 0 ? MAX_TURNS_APPS : MAX_TURNS;
 
-  for (let turn = 1; turn <= MAX_TURNS; turn++) {
+  for (let turn = 1; turn <= maxTurns; turn++) {
     if (Date.now() - startedAt > STALL_MS) {
       outcome.stalled = true;
       outcome.answer = "";
@@ -308,7 +315,7 @@ export async function runToolLoop(
 
     if (calls.length === 0) {
       const answer = res.content.trim();
-      if (answer.length === 0 && turn < MAX_TURNS) {
+      if (answer.length === 0 && turn < maxTurns) {
         // An empty turn is never an answer — nudge once, honestly logged.
         outcome.logLines.push("An empty turn — asked it to answer in words.");
         messages.push({

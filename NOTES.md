@@ -397,3 +397,26 @@ day. This becomes the writeup.
   earned. The real read/summarize/draft against a live mailbox needs
   Alexander's own app password pasted in Settings - the one step only he
   can do; the code path up to Google's LOGIN reply is proven.
+- **Gmail speed fix (Aug 15).** First real-mailbox run failed: it read the
+  inbox then opened 15 messages one at a time and hit the 15-turn cap. Root
+  cause was two-fold. (1) This machine's network path to imap.gmail.com is
+  slow/lossy - raw TCP connect measured 11 s (TLS 124 ms, greeting 20 ms
+  after), a single command round-trip ~5-9 s - and the connector reconnected
+  and re-logged-in (login ~30 s) on EVERY tool call, so a multi-read run
+  piled up past the IO timeout ("Couldn't reach imap.gmail.com"). Fixed with
+  a Rust session pool: one authenticated IMAP session per account is kept in
+  a static Mutex and reused across the run's tool calls (NOOP liveness check,
+  skipped when used < 45 s ago to save a round-trip; 4-min TTL); the pool is
+  closed on run-finish (registerRunFinishedHook path for apps incl. gmail)
+  and on Disconnect. Also prefer the resolved IPv4 (IPv6 was part of the slow
+  connect), set TCP_NODELAY, raise CONNECT/IO timeouts to 20 s/90 s, and trim
+  gmail_recent's over-fetch from limit*2 to limit+4. read 119 s -> 19 s. (2)
+  The model over-read because it triaged by opening everything. Added an
+  INBOX TRIAGE rule to the runner prompt (judge from sender+subject, open
+  <=3 only what you'll act on, never newsletters/promos/alerts) and a higher
+  turn cap for app runs (MAX_TURNS_APPS 22). Re-run against the live mailbox:
+  150 s, status ok - read 25 unread, opened only the 2 GitHub PR messages,
+  skipped the newsletters, drafted a reply, and the draft was verified
+  sitting in Gmail Drafts (in:drafts search). End to end works; the residual
+  ~2-3 min is this network's latency to Gmail, not the code (a normal network
+  is sub-second per op).

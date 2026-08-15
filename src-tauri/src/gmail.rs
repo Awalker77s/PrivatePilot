@@ -9,14 +9,32 @@ use mailparse::{parse_headers, parse_mail, MailHeaderMap, ParsedMail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const HOST: &str = "imap.gmail.com";
 const PORT: u16 = 993;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const IO_TIMEOUT: Duration = Duration::from_secs(45);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const IO_TIMEOUT: Duration = Duration::from_secs(90);
 const BODY_CAP: usize = 6000;
 pub const SECRET_NAME: &str = "gmail.app_password";
+
+// Gmail's IMAP login costs 25-45s each time and it throttles rapid re-logins,
+// so a run that lists then reads several messages would pile up into minutes
+// and trip the IO timeout. Keep ONE authenticated session alive and reuse it
+// across the run's tool calls; a NOOP proves it's still good, and it's
+// dropped when it goes stale. One account is connected at a time, which
+// matches reality. The Mutex also serializes Gmail ops process-wide (correct
+// — one IMAP conversation at a time).
+static POOL: Mutex<Option<Pooled>> = Mutex::new(None);
+const SESSION_TTL: Duration = Duration::from_secs(4 * 60);
+const NOOP_SKIP: Duration = Duration::from_secs(45);
+
+struct Pooled {
+    account: String,
+    session: Session,
+    last_used: Instant,
+}
 
 #[derive(Deserialize, Default)]
 struct Args {
@@ -46,14 +64,17 @@ struct Row {
 type Session = imap::Session<native_tls::TlsStream<TcpStream>>;
 
 fn connect(account: &str, password: &str) -> Result<Session, String> {
+    // Prefer the resolved IPv4 — some networks stall on Gmail's IPv6 for
+    // tens of seconds before falling back, which is most of the "slow login".
     let addr = (HOST, PORT)
         .to_socket_addrs()
         .map_err(|e| format!("Gmail:Dns:{e}"))?
-        .next()
+        .min_by_key(|a| if a.is_ipv4() { 0 } else { 1 })
         .ok_or_else(|| "Gmail:Dns:no address".to_string())?;
     let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| format!("Gmail:Connect:{e}"))?;
     tcp.set_read_timeout(Some(IO_TIMEOUT)).ok();
     tcp.set_write_timeout(Some(IO_TIMEOUT)).ok();
+    tcp.set_nodelay(true).ok();
     let tls = native_tls::TlsConnector::new().map_err(|e| format!("Gmail:Tls:{e}"))?;
     let stream = tls.connect(HOST, tcp).map_err(|e| format!("Gmail:Tls:{e}"))?;
     let client = imap::Client::new(stream);
@@ -62,6 +83,42 @@ fn connect(account: &str, password: &str) -> Result<Session, String> {
     match client.login(account, password) {
         Ok(session) => Ok(session),
         Err((e, _)) => Err(format!("Gmail:Login:{e}")),
+    }
+}
+
+// Hand back a live session for this account: reuse the pooled one (proven
+// with a NOOP) or log in fresh. The caller runs its op, then returns the
+// session with `put_back`.
+fn take_session(account: &str, password: &str) -> Result<Session, String> {
+    {
+        let mut pool = POOL.lock().map_err(|_| "Gmail:Lock".to_string())?;
+        if let Some(p) = pool.take() {
+            let age = p.last_used.elapsed();
+            if p.account == account && age < SESSION_TTL {
+                let mut s = p.session;
+                // Within a run, calls are seconds apart — the session is
+                // certainly alive, so skip the NOOP liveness round-trip (a
+                // full ~5-9s on this network). Only pay for it after a lull.
+                if age < NOOP_SKIP || s.noop().is_ok() {
+                    return Ok(s);
+                }
+                let _ = s.logout(); // stale — drop and reconnect
+            } else {
+                let mut s = p.session;
+                let _ = s.logout();
+            }
+        }
+    }
+    connect(account, password)
+}
+
+fn put_back(account: &str, session: Session) {
+    if let Ok(mut pool) = POOL.lock() {
+        *pool = Some(Pooled {
+            account: account.to_string(),
+            session,
+            last_used: Instant::now(),
+        });
     }
 }
 
@@ -199,8 +256,9 @@ fn op_recent(session: &mut Session, a: &Args) -> Result<serde_json::Value, Strin
     let limit = a.limit.unwrap_or(15).clamp(1, 25);
     let cutoff = chrono::Local::now() - chrono::Duration::seconds((hours * 3600.0) as i64);
     let cutoff_s = cutoff.format("%Y-%m-%dT%H:%M").to_string();
-    // Fetch a little more than the limit so the hour trim still fills it.
-    let take: Vec<u32> = list.into_iter().take(limit * 2).collect();
+    // Fetch a little more than the limit so the hour trim still fills it —
+    // but only a little (every extra header is a slow byte on this network).
+    let take: Vec<u32> = list.into_iter().take(limit + 4).collect();
     let rows: Vec<Row> = rows_for(session, &take)?
         .into_iter()
         .filter(|r| r.when >= cutoff_s)
@@ -336,16 +394,37 @@ pub fn gmail_imap(app: tauri::AppHandle, account: String, op: String, args: Stri
         return Err("Gmail:NoAccount".to_string());
     }
     let a: Args = serde_json::from_str(&args).unwrap_or_default();
-    let mut session = connect(account.trim(), &password)?;
+    let acct = account.trim().to_string();
+    let mut session = take_session(&acct, &password)?;
     drop(password);
     let result = match op.as_str() {
-        "status" => Ok(json!({ "ok": true, "account": account.trim() })),
+        "status" => Ok(json!({ "ok": true, "account": acct })),
         "recent" => op_recent(&mut session, &a),
         "search" => op_search(&mut session, &a),
         "read" => op_read(&mut session, &a),
-        "draft" => op_draft(&mut session, account.trim(), &a),
+        "draft" => op_draft(&mut session, &acct, &a),
         other => Err(format!("Gmail:UnknownOp:{other}")),
     };
-    let _ = session.logout();
+    // A broken op may have poisoned the connection — only pool it back when
+    // the op succeeded; otherwise log out so the next call reconnects clean.
+    match &result {
+        Ok(_) => put_back(&acct, session),
+        Err(_) => {
+            let _ = session.logout();
+        }
+    }
     result.map(|v| v.to_string())
+}
+
+/// Close and forget any pooled Gmail session — called when a run finishes and
+/// when the account is disconnected, so nothing lingers authenticated.
+#[tauri::command]
+pub fn gmail_disconnect_pool() -> Result<(), String> {
+    if let Ok(mut pool) = POOL.lock() {
+        if let Some(p) = pool.take() {
+            let mut s = p.session;
+            let _ = s.logout();
+        }
+    }
+    Ok(())
 }

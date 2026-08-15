@@ -168,6 +168,7 @@ function GmailRow({
   async function disconnect() {
     setBusy(true);
     try {
+      await invoke("gmail_disconnect_pool").catch(() => {});
       await invoke("secret_clear", { name: GMAIL_SECRET });
       await updateSettings((s) => {
         s.apps = { ...(s.apps ?? {}), gmail: null };

@@ -67,6 +67,7 @@ export async function runAutomation(
     sources: auto.sources ?? [],
     apps: auto.apps ?? [],
     tools: auto.tools ?? [],
+    knowledge: auto.knowledge ?? [],
     steps: auto.steps ?? [],
     inputs: auto.inputs ?? [],
     outputs: auto.outputs ?? [],
@@ -97,6 +98,10 @@ export async function runAutomation(
     didNotDo: ["Sandbox only — your real folder untouched"],
     diff: null,
     answer: null,
+    indexInto:
+      auto.delivers === "files" && (auto.knowledge ?? []).length > 0
+        ? auto.knowledge![0]
+        : null,
   };
   await appendRun(run);
 
@@ -461,7 +466,48 @@ export async function keepRun(runId: string): Promise<string> {
     auto.lastRun = { at: Date.now(), status: "ok", summary: "Kept — applied." };
     await saveAutomation(auto);
   }
+  // Keep-time indexing: a document run that files into a knowledge base only
+  // indexes what was actually Kept — a discarded OCR run indexes nothing. The
+  // target rides on the run record, so an UNSAVED automation indexes too.
+  if (run.indexInto) {
+    try {
+      const extra = await indexKeptDocuments(run.indexInto, sandbox, run.diff);
+      if (extra) sentence += ` ${extra}`;
+    } catch {
+      // indexing is a courtesy after Keep — never fails the Keep itself
+    }
+  }
   return sentence;
+}
+
+// Read the OCR text outputs that were just Kept and add them to the KB.
+async function indexKeptDocuments(
+  kbName: string,
+  sandbox: Sandbox,
+  diff: RunRecord["diff"]
+): Promise<string | null> {
+  if (!diff) return null;
+  const { readTextFile, exists } = await import("@tauri-apps/plugin-fs");
+  const { toRealPath } = await import("./sandbox");
+  const { indexDocuments } = await import("../rag/index");
+  const docs: { name: string; text: string; sourcePath: string }[] = [];
+  for (const e of diff.entries) {
+    if (!e.kept || !/\.txt$/i.test(e.relPath)) continue;
+    // Map the kept sandbox .txt back to its real path; read the text there.
+    const display = e.relPath;
+    const real = toRealPath(sandbox, display) ?? "";
+    if (!real || !(await exists(real))) continue;
+    const text = await readTextFile(real);
+    if (!text.trim()) continue;
+    const name = display.split(/[\\/]/).pop()?.replace(/\.txt$/i, "") ?? "document";
+    const pdf = real.replace(/\.txt$/i, ".searchable.pdf");
+    docs.push({ name, text, sourcePath: (await exists(pdf)) ? pdf : real });
+  }
+  if (docs.length === 0) return null;
+  const res = await indexDocuments(kbName, docs);
+  return res.added > 0
+    ? `Indexed ${res.added} document${res.added === 1 ? "" : "s"} (${res.chunks} passage${res.chunks === 1 ? "" : "s"}) into ${kbName}.`
+    : null;
 }
 
 export async function putBackRun(runId: string): Promise<string> {

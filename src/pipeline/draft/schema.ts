@@ -58,6 +58,10 @@ export function buildWireSchema(catalog: Catalog) {
     apps: z.array(z.enum(CONNECTOR_IDS)),
     // The heavy-tools fence — same closed-enum trick.
     tools: z.array(z.enum(HEAVY_TOOL_IDS)),
+    // Knowledge bases (named document collections) this job reads or fills.
+    // Free strings: the person creates KBs by name; the runner validates one
+    // exists at run time and refuses honestly otherwise.
+    knowledge: z.array(z.string()),
     delivers: z.enum(["answer", "files"]),
     schedule: z.union([
       z.strictObject({
@@ -367,6 +371,7 @@ export function validateEditedAutomation(
     sources: string[];
     apps?: string[];
     tools?: string[];
+    knowledge?: string[];
     delivers: string;
     schedule: unknown;
     effort: string;
@@ -388,6 +393,7 @@ export function validateEditedAutomation(
         sources: record.sources,
         apps: record.apps ?? [],
         tools: record.tools ?? [],
+        knowledge: record.knowledge ?? [],
         delivers: record.delivers,
         schedule: record.schedule,
         effort: record.effort,

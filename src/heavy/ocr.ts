@@ -7,7 +7,7 @@
 // v1 handles IMAGES directly (jpg/png/tiff/webp/bmp) — Tesseract reads them
 // with no rasterizer. Scanned image-only PDFs (which need pdfium to rasterize
 // pages first) are the documented next step; a PDF here is refused honestly.
-import { readTextFile, writeTextFile, rename, exists } from "@tauri-apps/plugin-fs";
+import { readTextFile, writeTextFile, rename, exists, readDir, stat } from "@tauri-apps/plugin-fs";
 import { z } from "zod";
 import { runTool } from "./runTool";
 import type { HeavyContext, HeavyResult, HeavyToolSpec } from "./types";
@@ -47,12 +47,43 @@ export const realOcrRun = async (
   const tessdata = exe.replace(/tesseract\.exe$/i, "tessdata");
   const roots = ctx.sandbox.roots.map((r) => r.sandboxPath);
 
+  // Expand any folders in `files` to the image files they contain — the model
+  // often names the folder, not each scan.
+  const targets: string[] = [];
+  for (const display of a.files) {
+    const sb = ctx.toSandbox(display);
+    let isDir = false;
+    if (sb) {
+      try {
+        isDir = (await stat(sb)).isDirectory;
+      } catch {
+        isDir = false;
+      }
+    }
+    if (isDir && sb) {
+      const sep = display.includes("\\") ? "\\" : "/";
+      for (const e of await readDir(sb)) {
+        if (e.isFile && IMG.test(e.name)) targets.push(`${display}${sep}${e.name}`);
+      }
+    } else {
+      targets.push(display);
+    }
+  }
+  if (targets.length === 0) {
+    return {
+      ok: false,
+      family: "on_purpose",
+      text: "No scanned images (jpg, png, tiff) were found to read.",
+      logLine: "ocr_pdf: no images in the given files/folders.",
+    };
+  }
+
   const done: string[] = [];
   const lowConf: string[] = [];
   const allText: string[] = [];
   let pdfs = 0;
 
-  for (const display of a.files) {
+  for (const display of targets) {
     if (!IMG.test(display)) {
       // A digital PDF is read directly elsewhere; a scanned PDF needs the
       // rasterizer that isn't wired yet — refuse honestly rather than fail.

@@ -115,6 +115,19 @@ const TOOLS: ToolDef[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "rag_ask",
+      description:
+        "Search the automation's knowledge base (the person's filed documents) for the passages that answer a question. Returns numbered sources to answer FROM — cite them.",
+      parameters: {
+        type: "object",
+        properties: { question: { type: "string" } },
+        required: ["question"],
+      },
+    },
+  },
 ];
 
 // Tools are bound per record: file tools only when the record touches
@@ -128,10 +141,12 @@ function bindTools(record: AutomationRecord, sandbox: Sandbox | null): {
   const defs: ToolDef[] = [];
   const touchesFiles = sandbox !== null;
   const hasSources = record.sources.length > 0;
+  const hasKnowledge = (record.knowledge ?? []).length > 0;
   for (const t of TOOLS) {
     const n = t.function.name;
     if ((n === "list_files" || n === "read_file" || n === "write_file") && !touchesFiles) continue;
     if ((n === "fetch_page" || n === "read_page") && !hasSources) continue;
+    if (n === "rag_ask" && !hasKnowledge) continue;
     defs.push(t);
   }
   const specs = toolsFor(record.apps);
@@ -185,6 +200,9 @@ function systemPrompt(
       : "",
     heavy.length > 0
       ? `Heavy tools you may run on files in your folders: ${heavyTools}. They do real work (rename, zip, read scanned documents) in a COPY — the person keeps or discards the results. Give only the folders/files and options; the app builds the command. After a heavy tool succeeds, answer plainly what it did.`
+      : "",
+    (record.knowledge ?? []).length > 0
+      ? `To answer a question about the person's filed documents, call rag_ask{question} ONCE — it returns numbered passages from their "${(record.knowledge ?? [])[0]}" documents. Then answer ONLY from those passages, cite each fact like [1], and if the answer isn't in them reply exactly: "I couldn't find that in your documents." Use no outside knowledge.`
       : "",
     "You are in a loop and can make multiple tool calls before answering. Call exactly one tool per turn.",
     "If the job is to draft, send, or email a message: your final answer IS the message — a subject line, then the body, nothing else. The app shows a Send button; you never send anything yourself and must not say so.",
@@ -440,6 +458,24 @@ export async function runToolLoop(
           result = f.ok
             ? `${f.text}\n---\n${f.logLine}\nThe job remains: ${record.sentence}`
             : f.text;
+        } else if (name === "rag_ask") {
+          const kb = (record.knowledge ?? [])[0] ?? "";
+          const question = String(args.question ?? "").trim() || record.sentence;
+          onEvent({ text: `Tool loop — searching "${kb}"…` });
+          const { retrieve } = await import("../rag/ask");
+          const r = await retrieve(kb, question);
+          if (!r.ok) {
+            // Nothing to answer from — held back with the honest sentence.
+            outcome.heldBack = r.sentence;
+            outcome.answer = "";
+            return outcome;
+          }
+          outcome.corpus += `\n\n=== ${kb} (your documents) ===\n${r.context}`;
+          outcome.appsRead++;
+          outcome.logLines.push(
+            `Searched "${kb}" — the top ${r.sources.length} matching passage${r.sources.length === 1 ? "" : "s"} from your filed documents.`
+          );
+          result = `Answer ONLY from these numbered passages of the person's own documents. Cite each fact like [1]. If the answer isn't here, reply exactly: "I couldn't find that in your documents."\n\n${r.context}\n\nThe question: ${question}`;
         } else if (specByName.has(name)) {
           const spec = specByName.get(name)!;
           const parsed = spec.params.safeParse(args);

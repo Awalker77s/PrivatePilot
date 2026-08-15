@@ -37,6 +37,8 @@ export interface Catalog {
   displayToReal: Record<string, string>;
   // Apps automations can look into, with live status — the drafter's menu.
   apps: ConnectorSnapshot[];
+  // Knowledge bases (named document collections) the person has built.
+  knowledgeBases: string[];
 }
 
 // Online requests do not need 150 real paths embedded into the JSON grammar.
@@ -116,9 +118,20 @@ export async function buildCatalog(): Promise<Catalog> {
     await tryDir("Downloads", downloadDir);
   await tryDir("Documents", documentDir);
   await tryDir("Desktop", desktopDir);
+  // A picked folder displays relative to home when it sits under a standard
+  // folder (~/Downloads/receipts), so the model sees a resolvable path — a
+  // "~/…/x" abbreviation reads as out-of-scope to a small model.
+  const fwd = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const knownReals = folderSpecs.map((f) => ({ realFwd: fwd(f.real), display: f.display }));
   for (const picked of getSettings().pickedFolders) {
-    const name = picked.split(/[\\/]/).filter(Boolean).pop() ?? picked;
-    folderSpecs.push({ label: name, real: picked, display: `~/…/${name}` });
+    const norm = picked.replace(/[\\/]+$/, "");
+    const pf = fwd(norm);
+    const parent = knownReals.find((k) => pf.startsWith(k.realFwd + "/"));
+    const name = norm.split(/[\\/]/).filter(Boolean).pop() ?? norm;
+    const display = parent
+      ? `${parent.display}/${pf.slice(parent.realFwd.length + 1)}`
+      : `~/…/${name}`;
+    folderSpecs.push({ label: name, real: norm, display });
   }
 
   }
@@ -188,6 +201,13 @@ export async function buildCatalog(): Promise<Catalog> {
     // A status probe that breaks must not block compiling — the drafter
     // just sees no app menu this time.
   }
+  let knowledgeBases: string[] = [];
+  try {
+    const { listKnowledgeBases } = await import("../rag/store");
+    knowledgeBases = (await listKnowledgeBases()).map((k) => k.name);
+  } catch {
+    // no KBs yet, or the store is unavailable
+  }
 
   return {
     folders,
@@ -197,6 +217,7 @@ export async function buildCatalog(): Promise<Catalog> {
     writeTargets: [...folderDisplays, ...fileDisplays],
     displayToReal,
     apps,
+    knowledgeBases,
   };
 }
 

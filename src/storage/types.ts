@@ -50,6 +50,9 @@ export interface AutomationRecord {
   // closed fence like apps. Heavy tools act on files in the sandbox; the
   // model never composes a command line. Absent on old records.
   tools?: string[];
+  // Knowledge bases this automation reads from (to answer questions) or writes
+  // into (to file cleaned documents). Named collections the person built.
+  knowledge?: string[];
   delivers: "answer" | "files";
   schedule: Schedule;
   model: string;
@@ -133,6 +136,10 @@ export interface RunRecord {
   // Things the run left waiting for the person's own hand — a draft saved
   // in Outlook they press Send on. Rendered as buttons; never auto-acted.
   handoffs?: RunHandoff[];
+  // The knowledge base to index Kept document outputs into — set at run time
+  // from the record's `knowledge` fence, so Keep can index without needing the
+  // (possibly unsaved) automation.
+  indexInto?: string | null;
 }
 
 export interface RunHandoff {

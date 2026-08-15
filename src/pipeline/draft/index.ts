@@ -64,6 +64,12 @@ export function draftSystemPrompt(catalog: Catalog): string {
     "- An automation that does real file work MUST list the heavy tool in tools (the fence) AND name the folders in files. Heavy tools never touch the web, and a watcher may NEVER run one.",
     "- 'rename/convert/zip/unzip/read a scanned or photographed document (OCR)' = a heavy tool + files fence + delivers files. Everything runs in a copy; the person keeps the results.",
     "",
+    catalog.knowledgeBases.length > 0
+      ? `Knowledge bases (searchable document collections) the person has built: ${catalog.knowledgeBases.join(", ")}.`
+      : "Knowledge bases: none yet — one is created the first time documents are filed into a named base.",
+    "- 'clean/scan/file documents INTO a <name> knowledge base' = tools [\"ocr_pdf\"] + files fence + knowledge [\"<name>\"] + delivers files. The cleaned text is indexed when the person presses Keep.",
+    "- 'ask my <name> …' / 'what does my <name> say about …' / any question ABOUT filed documents = knowledge [\"<name>\"], NO tools, delivers answer, a step 'rag_ask the question'. The question the person will ask each time is an input named 'question'.",
+    "",
     "- One automation unless the person's words name two distinct jobs (shortest chain wins).",
     "- Two SEPARATE jobs with no hand-off ('and another automation that…', 'also make one that…', 'and then one to check…') = draft BOTH automations and leave chain null. Only set chain.links when one job's outputs actually feed the next — a link whose map is empty and whose onlyWhen is null is invalid.",
     "- The conversation context may list automations already built this session. NEVER re-create an automation named there — modifications to those are handled elsewhere; draft only genuinely new jobs.",

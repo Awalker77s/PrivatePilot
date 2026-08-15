@@ -348,6 +348,7 @@ function assembleRecord(
     sources: a.sources,
     apps: a.apps,
     tools: a.tools,
+    knowledge: a.knowledge,
     delivers: a.delivers,
     schedule: a.schedule,
     model,

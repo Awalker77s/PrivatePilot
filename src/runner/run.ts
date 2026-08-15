@@ -25,6 +25,7 @@ export interface RunOptions {
   stepIndex?: number | null;
   onProgress?: (text: string) => void;
   viaChain?: boolean; // the chain driver handles hand-offs itself
+  contextNote?: string; // e.g. "the watcher confirmed: price crossed below 75.50"
 }
 
 // The dispatcher registers here (avoids a circular import): it runs whenever
@@ -198,7 +199,8 @@ async function runInner(
       model,
       sandbox,
       opts.inputValues ?? {},
-      (e) => onProgress(e.text)
+      (e) => onProgress(e.text),
+      opts.contextNote
     );
   } catch (e) {
     const sentence =

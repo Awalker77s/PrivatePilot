@@ -144,11 +144,19 @@ export async function runToolLoop(
   model: string,
   sandbox: Sandbox | null, // null = an online automation touching no files
   inputValues: Record<string, string>,
-  onEvent: (e: LoopEvent) => void
+  onEvent: (e: LoopEvent) => void,
+  contextNote?: string
 ): Promise<LoopOutcome> {
   const startedAt = Date.now();
   const messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt(record, inputValues) },
+    {
+      role: "system",
+      content:
+        systemPrompt(record, inputValues) +
+        (contextNote
+          ? `\nContext: ${contextNote} Any condition in the job's own wording has ALREADY been decided — do not re-check it, just do the job.`
+          : ""),
+    },
     { role: "user", content: `Do the job now. ${record.sentence}` },
   ];
   const outcome: LoopOutcome = {

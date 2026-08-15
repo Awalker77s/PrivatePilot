@@ -106,6 +106,17 @@ day. This becomes the writeup.
   guaranteed-valid records (one fenced hostname each); Try it saves and runs
   in one click, so the first result card lands in seconds. Curated records
   skip earned-Save: that rule guards model drafts, not vetted ones.
+- **The watcher saga (step 9) was a compressed tour of real-world ops:**
+  a hung Ollama request (no per-call timeout) froze the heartbeat's ticking
+  guard; CoinGecko's keyless tier rate-limited a demo-heavy afternoon into
+  oblivion; the 9B reported "price = 0" for a failed fetch until told never
+  to invent values; and the latch then dutifully treated 0 as "already below
+  the line". Fixes, in order: per-call timeouts with designed sentences, the
+  no-invented-values loop rule, unreadable-value guard (≤0/NaN = "I can't
+  read the price any more — fix ›", never data), and the Coinbase fallback
+  endpoint from the research catalog (10k/hr where CoinGecko is ~10/min).
+  Every failure along the way surfaced as its designed sentence — the
+  honesty system debugged its own product.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

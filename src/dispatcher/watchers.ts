@@ -54,6 +54,42 @@ export async function watcherTick(force = false): Promise<void> {
       releaseHold = null;
     }
 
+    // Daily schedules ride the same heartbeat: run once when the hour has
+    // passed; a fully-missed day is said out loud, never skipped silently.
+    const dailies = getState().automations.records.filter(
+      (a) => a.schedule.trigger === "daily"
+    );
+    for (const auto of dailies) {
+      if (auto.schedule.trigger !== "daily") continue;
+      const last = getSettings().lastWatchTick?.[auto.id] ?? 0;
+      const now = new Date();
+      const todaySlot = new Date(now);
+      todaySlot.setHours(auto.schedule.hour, 0, 0, 0);
+      if (now < todaySlot || last >= todaySlot.getTime()) continue;
+      const missedDays = last
+        ? Math.floor((todaySlot.getTime() - last) / 86_400_000)
+        : 0;
+      await updateSettings((s) => {
+        s.lastWatchTick = { ...(s.lastWatchTick ?? {}), [auto.id]: Date.now() };
+      });
+      if (missedDays > 1) {
+        const missed = new Date(todaySlot.getTime() - 86_400_000);
+        await heldNote(
+          "",
+          auto.id,
+          `Skipped ${missed.toLocaleDateString(undefined, { weekday: "long" })} — this computer was asleep.`
+        );
+      }
+      try {
+        const run = await runAutomation(auto, {
+          cause: `it's ${auto.schedule.hour}:00`,
+        });
+        void run;
+      } catch {
+        // the run records its own designed failure
+      }
+    }
+
     for (const auto of watchers) {
       const every = Math.max(
         auto.schedule.trigger === "watch" ? auto.schedule.everyMinutes : 15,
@@ -209,12 +245,16 @@ async function fireNext(
       if (v !== undefined) inputValues[input] = String(v);
     }
   }
+  const cond = link?.onlyWhen;
   await runAutomation(next, {
     cause: "the watcher saw it cross",
     chainId,
     stepIndex: linkIdx + 1,
     inputValues,
     viaChain: true,
+    contextNote: cond
+      ? `the watcher confirmed ${cond.field.replace(/_/g, " ")} ${cond.op.replace(/_/g, " ")} ${cond.value} — it just happened.`
+      : "the watcher's condition just fired.",
   });
 }
 

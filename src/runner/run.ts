@@ -277,7 +277,12 @@ async function runInner(
   run.answer = cleanAnswer;
   if (loop.corpus.trim().length > 0) {
     try {
-      const v = await verifyNumbers(model, cleanAnswer, loop.corpus);
+      const contextText = [
+        auto.sentence,
+        ...auto.steps,
+        JSON.stringify(opts.inputValues ?? {}),
+      ].join("\n");
+      const v = await verifyNumbers(model, cleanAnswer, loop.corpus, contextText);
       for (const c of v.checkedLines) line(verifyLog, c);
       if (!v.ok) {
         verifyLog.status = "broke";

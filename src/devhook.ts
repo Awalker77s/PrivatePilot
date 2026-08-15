@@ -11,6 +11,8 @@ import * as catalog from "./pipeline/catalog";
 import * as session from "./pipeline/session";
 import * as chatStore from "./ui/chatStore";
 import * as runner from "./runner/run";
+import * as watchers from "./dispatcher/watchers";
+import * as dispatcher from "./dispatcher";
 import * as sandboxMod from "./runner/sandbox";
 import * as diffMod from "./runner/diff";
 import * as fetchMod from "./runner/fetchPage";
@@ -33,6 +35,8 @@ export function installDevHook() {
     session,
     chatStore,
     runner,
+    watchers,
+    dispatcher,
     sandboxMod,
     diffMod,
     fetchMod,

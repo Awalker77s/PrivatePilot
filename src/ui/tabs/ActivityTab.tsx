@@ -12,6 +12,8 @@ import { RunDetail } from "../RunDetail";
 import { LinkIcon } from "../icons";
 import { CategoryGlyph } from "../glyphs";
 import { StarterGallery } from "../StarterGallery";
+import { answerAlreadyTrue, isAlreadyTrueAsk } from "../../dispatcher/watchers";
+import { Sparkline, numberSeries } from "../Sparkline";
 
 // The one value worth showing big: a money amount, a number, or the first
 // line of the answer — from the record, never recomputed.
@@ -113,6 +115,9 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
                 <div className="result-value-row">
                   <span className="result-value">{headlineValue(r)}</span>
                   <DeltaChip run={r} all={all} />
+                  <Sparkline
+                    values={numberSeries(runs.records, r.automationId)}
+                  />
                 </div>
                 {auto && auto.sources.length > 0 && (
                   <span className="caption">{auto.sources[0]}</span>
@@ -134,12 +139,29 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
             <span className="status-line" style={{ color: "var(--amber)" }}>
               {r.summary ?? "Needs you."}
             </span>
-            <button
-              className="btn btn-sm"
-              onClick={() => setOpenRun(openRun === r.id ? null : r.id)}
-            >
-              Look first
-            </button>
+            {isAlreadyTrueAsk(r) ? (
+              <>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => answerAlreadyTrue(r.id, true)}
+                >
+                  Fire once
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => answerAlreadyTrue(r.id, false)}
+                >
+                  Wait
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn btn-sm"
+                onClick={() => setOpenRun(openRun === r.id ? null : r.id)}
+              >
+                Look first
+              </button>
+            )}
           </div>
           {openRun === r.id && <RunDetail runId={r.id} />}
         </div>

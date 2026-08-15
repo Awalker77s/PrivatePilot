@@ -4,6 +4,7 @@ import { loadAll, getState } from "../storage/stores";
 import { useStoreVersion } from "../storage/useStore";
 import { loadSettings } from "../storage/settings";
 import { initDispatcher } from "../dispatcher";
+import { initWatchers } from "../dispatcher/watchers";
 import { ChatTab } from "./tabs/ChatTab";
 import { AutomationsTab } from "./tabs/AutomationsTab";
 import { ActivityTab } from "./tabs/ActivityTab";
@@ -43,9 +44,11 @@ export default function App() {
   const [errorsOpen, setErrorsOpen] = useState(false);
 
   useEffect(() => {
-    loadAll();
+    loadAll().then(() => {
+      initDispatcher();
+      initWatchers();
+    });
     loadSettings();
-    initDispatcher();
   }, []);
 
   const problems = currentProblems();

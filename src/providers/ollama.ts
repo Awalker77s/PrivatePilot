@@ -59,9 +59,20 @@ async function ollamaFetch(
   init?: Parameters<typeof fetch>[1]
 ): Promise<Response> {
   try {
-    return await fetch(`${OLLAMA}${path}`, init);
+    // A wedged request must become a designed sentence, never a forever-hang
+    // (the tool loop's 30-min stall check only runs between turns).
+    return await fetch(`${OLLAMA}${path}`, {
+      signal: AbortSignal.timeout(path === "/api/chat" ? 300_000 : 20_000),
+      ...init,
+    });
   } catch (e) {
-    throw new ProviderError(OLLAMA_DOWN_SENTENCE, String(e));
+    const timedOut = String(e).toLowerCase().includes("timeout");
+    throw new ProviderError(
+      timedOut
+        ? "The local AI took too long to answer — try again."
+        : OLLAMA_DOWN_SENTENCE,
+      String(e)
+    );
   }
 }
 

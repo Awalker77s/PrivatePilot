@@ -94,12 +94,13 @@ function roundedMatch(claimed: string, corpus: string): string | null {
 export async function verifyNumbers(
   model: string,
   answer: string,
-  corpus: string
+  corpus: string,
+  contextText = "" // the record's own sentence/steps/fill-ins — user-given numbers are not inventions
 ): Promise<VerifyResult> {
   const numbers = extractNumbers(answer);
   if (numbers.length === 0) return { ok: true, unconfirmed: null, checkedLines: [] };
 
-  const flatCorpus = corpus.replace(/,/g, "");
+  const flatCorpus = (corpus + "\n" + contextText).replace(/,/g, "");
   const checkedLines: string[] = [];
 
   for (const n of numbers) {

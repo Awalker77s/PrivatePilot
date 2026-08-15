@@ -13,6 +13,12 @@ export interface AppSettings {
     key: string | null;
     model: string;
   };
+  // Watcher state: crossings are latched (fire once, re-arm on cross-back).
+  watchLatches?: Record<
+    string,
+    { lastValue: number | null; armed: boolean; askedAlreadyTrue: boolean }
+  >;
+  lastWatchTick?: Record<string, number>;
 }
 
 const DEFAULTS: AppSettings = {

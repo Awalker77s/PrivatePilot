@@ -1,5 +1,25 @@
 # NOTES — an honest running log
 
+**Demo-sentence status (all verified in the running app, never fabricated):**
+
+1. **MVP** — "I typed a sentence, it built an automation, I watched it run,
+   and nothing touched my files until I said Keep." TRUE — proven with
+   SHA256 hashes: identical through build/run/diff, changed only at Keep,
+   restored byte-exact by Put it back.
+2. **Core** — "I said 'then email me a summary' and it chained two
+   automations — watch the real values hand off." TRUE — the baton
+   (price = 62953 · change_pct = -0.83) rendered crossing the hand-off in
+   chat, on the strip, and in Activity; Save both earned by the watched run.
+3. **Stretch** — "It watched the price while I demoed, and fired exactly
+   once when it crossed." TRUE — latch armed at 75.51–75.52 above the
+   75.50 line, SOL dipped to 75.49 on Coinbase, fired once, post-fire tick
+   stayed at one fire.
+
+The packaged NSIS build was verified from its own origin
+(http://tauri.localhost): records load, the model doctor round-trips Ollama
+("Qwen 9B · 32k memory · your graphics card"), and a full automation run
+completed — the #1 CORS trap never got a chance.
+
 What was hard, what we decided, and why. Newest entries at the bottom of each
 day. This becomes the writeup.
 

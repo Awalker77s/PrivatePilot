@@ -31,6 +31,10 @@ npm run tauri dev
 
 > First run needs Rust + VS Build Tools (Tauri v2). See
 > [prerequisites](https://tauri.app/start/prerequisites/).
+> Or skip the toolchain: `npm run tauri build` produces
+> `src-tauri/target/release/bundle/nsis/Private Pilot_0.1.0_x64-setup.exe`
+> (and an MSI) — the packaged app is verified against Ollama from its own
+> origin, where naive `window.fetch` integrations die of CORS.
 
 ---
 

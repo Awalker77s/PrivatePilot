@@ -11,13 +11,15 @@ where compute happens.
 ## 60-second quickstart
 
 1. Install [Node 20+](https://nodejs.org) and [Ollama](https://ollama.com), then
-   pull a local model. Use 4B on a CPU-only computer; use 9B when you have a
-   capable GPU and want stronger drafts:
+   pull a local model. **Qwen 4B is the default** — fastest, and in a live
+   bench of this app's own pipeline it matched or beat every larger model at
+   building automations. Add **Gemma 12B** as a "Careful" option (Settings →
+   Local AI) if you want the best screen/image reading for Watch me:
 
 ```bash
 ollama pull qwen3.5:4b
-# or
-ollama pull qwen3.5:9b
+# optional, for screen-heavy jobs:
+ollama pull gemma4:12b
 ```
 
 2. Install and run:

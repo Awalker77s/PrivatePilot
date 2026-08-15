@@ -134,7 +134,7 @@ export async function compile(
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();
     draftLog.sentence = "No local model to draft with.";
-    return fail("No Qwen model is pulled yet — run: ollama pull qwen3.5:9b");
+    return fail("No local model is pulled yet — run: ollama pull qwen3.5:4b");
   }
   draftLog.lines.push({
     at: Date.now(),

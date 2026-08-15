@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 import { XIcon } from "./icons";
 import { runStorageSelfTest, SelfTestResult } from "../storage/selftest";
 import { useStore } from "../storage/useStore";
-import { DoctorReport, runModelDoctor } from "../providers/ollama";
+import {
+  DoctorReport,
+  RECOMMENDED_MODELS,
+  friendlyName,
+  runModelDoctor,
+} from "../providers/ollama";
 import { localModels, NUM_CTX_DRAFT, ollama } from "../providers";
 import type { ModelInfo } from "../providers/types";
 import {
@@ -125,35 +130,18 @@ export function SettingsSheet({ close }: { close: () => void }) {
               {doctor.visionCapable ? " Can look at screenshots." : ""}
             </div>
           )}
-          {localChoices.length > 1 && (
-            <>
-              <select
-                className="run-search"
-                style={{ width: "100%" }}
-                value={localChoice}
-                onChange={async (e) => {
-                  const value = e.target.value;
-                  setLocalChoice(value);
-                  await updateSettings((settings) => {
-                    settings.localModel = value || null;
-                  });
-                  setDoctor(await runModelDoctor());
-                }}
-                data-testid="local-model"
-              >
-                <option value="">Automatic — prefer Qwen 9B</option>
-                {localChoices.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-              <div className="caption">
-                Qwen 4B is faster on CPU-only computers; Qwen 9B usually makes
-                stronger drafts.
-              </div>
-            </>
-          )}
+          <ModelChooser
+            installed={localChoices}
+            active={doctor?.installedTag ?? null}
+            choice={localChoice}
+            onChoose={async (value) => {
+              setLocalChoice(value);
+              await updateSettings((settings) => {
+                settings.localModel = value || null;
+              });
+              setDoctor(await runModelDoctor());
+            }}
+          />
           {wakeLine && (
             <div className="caption" data-testid="wake-line">
               {wakeLine}
@@ -210,6 +198,113 @@ export function SettingsSheet({ close }: { close: () => void }) {
         <div style={{ flex: 1 }} />
         <div className="caption">Private Pilot 0.1.0</div>
       </div>
+    </div>
+  );
+}
+
+// The brain picker: role cards from the bench (Fast default, Careful for
+// screen-reading), each installed one selectable, plus an Automatic option.
+// A recommended model that isn't downloaded shows how to get it — the app
+// never pulls a multi-GB model behind the person's back.
+function ModelChooser({
+  installed,
+  active,
+  choice,
+  onChoose,
+}: {
+  installed: ModelInfo[];
+  active: string | null;
+  choice: string;
+  onChoose: (value: string) => void | Promise<void>;
+}) {
+  const installedTags = new Set(installed.map((m) => m.id));
+  // Recommended first (in role order), then any other installed CHAT models
+  // (embedding models like nomic-embed can't draft — never offer them).
+  const known = new Set(RECOMMENDED_MODELS.map((r) => r.tag));
+  const extras = installed.filter(
+    (m) => !known.has(m.id) && !/embed/i.test(m.id)
+  );
+  if (installed.length === 0) return null;
+
+  const Row = ({
+    value,
+    title,
+    sub,
+    disabled,
+    tail,
+  }: {
+    value: string;
+    title: string;
+    sub: string;
+    disabled?: boolean;
+    tail?: string;
+  }) => {
+    const selected = !disabled && choice === value;
+    const isActive = !disabled && active === value && (choice === value || (choice === "" && value === active));
+    return (
+      <button
+        className="model-row"
+        data-testid={`model-${value || "auto"}`}
+        disabled={disabled}
+        onClick={() => !disabled && void onChoose(value)}
+        style={{
+          display: "flex",
+          gap: 10,
+          alignItems: "flex-start",
+          width: "100%",
+          textAlign: "left",
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: `1px solid ${selected ? "var(--accent, #4a8)" : "var(--line)"}`,
+          background: selected ? "var(--accent-weak, rgba(74,136,136,0.12))" : "transparent",
+          color: disabled ? "var(--muted)" : "var(--text)",
+          cursor: disabled ? "default" : "pointer",
+          marginTop: 6,
+        }}
+      >
+        <span style={{ marginTop: 2, width: 14, flexShrink: 0, color: "var(--accent, #4a8)" }}>
+          {selected ? "●" : "○"}
+        </span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ fontWeight: 600 }}>
+            {title}
+            {isActive && <span className="caption" style={{ marginLeft: 6, color: "var(--green)" }}>· in use</span>}
+            {tail && <span className="caption" style={{ marginLeft: 6 }}>{tail}</span>}
+          </span>
+          <span className="caption" style={{ display: "block" }}>{sub}</span>
+        </span>
+      </button>
+    );
+  };
+
+  return (
+    <div style={{ marginTop: 6 }} data-testid="model-chooser">
+      <Row
+        value=""
+        title="Automatic"
+        sub={`Picks the best you have — right now ${active ? friendlyName(active) : "none installed"}.`}
+      />
+      {RECOMMENDED_MODELS.map((r) =>
+        installedTags.has(r.tag) ? (
+          <Row
+            key={r.tag}
+            value={r.tag}
+            title={`${r.name} · ${r.role}`}
+            sub={r.blurb}
+          />
+        ) : (
+          <Row
+            key={r.tag}
+            value={r.tag}
+            title={`${r.name} · ${r.role}`}
+            sub={`Not downloaded. Get it with:  ollama pull ${r.tag}  (${r.downloadGB} GB)`}
+            disabled
+          />
+        )
+      )}
+      {extras.map((m) => (
+        <Row key={m.id} value={m.id} title={friendlyName(m.id)} sub="Also installed on this computer." />
+      ))}
     </div>
   );
 }

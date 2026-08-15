@@ -183,6 +183,26 @@ day. This becomes the writeup.
   instant default; a failed session keeps its narration for "Listen again"
   — never lose a recording to a processing error (the #1 documented flaw
   in competing dictation flows).
+- **ASR verdict re-verified (owner asked "are you sure it's parakeet?").**
+  A 4-agent verification pass pulled the Open ASR Leaderboard's own backing
+  CSV (updated 2026-07-31): no model named "nanospark" exists anywhere (HF
+  full-text: zero results) — it's almost certainly a blend of NVIDIA's
+  "Nemotron Nano" LLMs × "DGX Spark" hardware × Spark-TTS (a text-to-speech,
+  wrong direction). NVIDIA's actual 2026 ASR release (Nemotron Speech
+  Streaming 0.6b) is a voice-agent streaming model at 7.2-7.8% WER — worse
+  for offline narration, NeMo/GPU only. Our stack is confirmed: whisper.cpp
+  v1.9.0 added official Parakeet TDT support (PR #3735, measured conversion
+  parity: 1.96% LibriSpeech), and our q8_0 artifact matches the official
+  ggml-org/parakeet-GGUF repo — the only Parakeet ggml in existence.
+  Everything ranked above Parakeet today is a proprietary API or a 1-3B
+  LLM-decoder with no Windows-CPU runtime. Local hard-fixture A/B: base.en
+  turned "append the rows" into "append the rose"; Parakeet got every
+  meaning-bearing token right. WATCHLIST for a future swap: (1) a
+  parakeet-v2 ggml appears (+0.3pt English, drop-in); (2) llama.cpp fixes
+  the >2min mtmd audio bug and Qwen3-ASR-1.7B (5.76% WER, 2.17GB, official
+  GGUF) gets a real CPU benchmark — then offer it as an optional accuracy
+  mode; (3) Moonshine v2 Medium (ONNX, 258ms) if we ever add live captions;
+  (4) an NVIDIA GPU appears — canary-qwen-2.5b becomes king.
 - **exceljs over SheetJS-from-CDN.** The pack allows either for .xlsx reads
   (the npm `xlsx` package is frozen at 0.18.5 with two known CVEs — avoided).
   exceljs installs from npm and audits clean, so the lockfile stays honest.

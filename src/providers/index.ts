@@ -1,11 +1,6 @@
 // Provider registry + active-model resolution. Featherless joins in step 8;
 // capability flags decide which pipeline defenses are available per model.
-import {
-  LOCAL_DEFAULT,
-  LOCAL_FALLBACKS,
-  OllamaProvider,
-  friendlyName,
-} from "./ollama";
+import { OllamaProvider, friendlyName, localModelCandidates } from "./ollama";
 import { FeatherlessProvider } from "./featherless";
 import type { ChatRequest, ChatResponse, ModelInfo, ModelProvider } from "./types";
 import { getSettings } from "../storage/settings";
@@ -33,9 +28,9 @@ export async function localModels(refresh = false): Promise<ModelInfo[]> {
 export async function activeLocalModel(): Promise<string | null> {
   const models = await localModels();
   const names = models.map((m) => m.id);
-  return (
-    [LOCAL_DEFAULT, ...LOCAL_FALLBACKS].find((t) => names.includes(t)) ?? null
-  );
+  return localModelCandidates(getSettings().localModel).find((t) =>
+    names.includes(t)
+  ) ?? null;
 }
 
 // The toggle decides where compute happens — and the UI never lies about it.

@@ -13,6 +13,7 @@ import type {
 } from "../storage/types";
 import {
   buildCatalog,
+  catalogForRequest,
   Catalog,
   formatForPath,
   matchCatalog,
@@ -113,7 +114,7 @@ export async function compile(
 
   let catalog: Catalog;
   try {
-    catalog = await buildCatalog();
+    catalog = catalogForRequest(await buildCatalog(), context.userText);
   } catch (e) {
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();

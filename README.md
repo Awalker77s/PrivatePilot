@@ -10,9 +10,13 @@ where compute happens.
 
 ## 60-second quickstart
 
-1. Install [Node 20+](https://nodejs.org) and [Ollama](https://ollama.com), then:
+1. Install [Node 20+](https://nodejs.org) and [Ollama](https://ollama.com), then
+   pull a local model. Use 4B on a CPU-only computer; use 9B when you have a
+   capable GPU and want stronger drafts:
 
 ```bash
+ollama pull qwen3.5:4b
+# or
 ollama pull qwen3.5:9b
 ```
 
@@ -25,6 +29,12 @@ npm i
 ```bash
 npm run tauri dev
 ```
+
+On Windows PowerShell, use `npm.cmd` in place of `npm` if script execution is
+disabled. When more than one supported model is installed, choose it under
+**Settings → Local AI**. The first CPU run can take around two minutes while
+the model loads and compiles the request; later short model calls are much
+faster.
 
 3. Optional: paste a [Featherless.ai](https://featherless.ai) key in Settings
    to borrow cloud compute — it's off by default and the UI says so honestly.

@@ -101,11 +101,12 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
             const auto = automations.records.find(
               (a) => a.id === r.automationId
             );
+            const resultKey = `result:${r.id}`;
             return (
               <button
                 key={r.id}
                 className="result-card card"
-                onClick={() => setOpenRun(openRun === r.id ? null : r.id)}
+                onClick={() => setOpenRun(openRun === resultKey ? null : resultKey)}
               >
                 <div className="result-name">
                   {auto && <CategoryGlyph category={auto.category} size={20} />}
@@ -127,9 +128,9 @@ export function ActivityTab(_props: { goTo: (t: TabId) => void }) {
           })}
         </div>
       )}
-      {results.some((r) => openRun === r.id) && (
+      {results.some((r) => openRun === `result:${r.id}`) && (
         <div className="activity-detail card" style={{ padding: "0 14px" }}>
-          <RunDetail runId={openRun!} />
+          <RunDetail runId={openRun!.slice("result:".length)} />
         </div>
       )}
       {needsYou.map((r) => (

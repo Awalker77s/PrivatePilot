@@ -10,6 +10,7 @@ import {
 import { readDir } from "@tauri-apps/plugin-fs";
 import { getState } from "../storage/stores";
 import { getSettings, loadSettings } from "../storage/settings";
+import { isDesktopApp } from "../platform";
 
 export interface CatalogFile {
   display: string; // "~/Downloads/invoice-jan.pdf" — what records store
@@ -33,6 +34,25 @@ export interface Catalog {
   readTargets: string[]; // folder + file displays — the reads enum
   writeTargets: string[];
   displayToReal: Record<string, string>;
+}
+
+// Online requests do not need 150 real paths embedded into the JSON grammar.
+// Keeping those enums out makes local CPU drafting materially faster while
+// preserving the closed catalog whenever the person actually mentions files.
+const FILE_INTENT =
+  /\b(file|folder|document|documents|pdf|spreadsheet|sheet|excel|csv|xlsx|docx|invoice|invoices|receipt|receipts|ledger|downloads?|desktop|directory|directories)\b/i;
+
+export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
+  if (FILE_INTENT.test(userText)) return catalog;
+  return {
+    ...catalog,
+    files: [],
+    readTargets: [],
+    writeTargets: [],
+    displayToReal: Object.fromEntries(
+      catalog.folders.map((folder) => [folder.display, folder.real])
+    ),
+  };
 }
 
 const MAX_FILES_PER_FOLDER = 250;
@@ -81,12 +101,15 @@ export async function buildCatalog(): Promise<Catalog> {
     }
   };
 
-  await tryDir("Downloads", downloadDir);
+  if (isDesktopApp()) {
+    await tryDir("Downloads", downloadDir);
   await tryDir("Documents", documentDir);
   await tryDir("Desktop", desktopDir);
   for (const picked of getSettings().pickedFolders) {
     const name = picked.split(/[\\/]/).filter(Boolean).pop() ?? picked;
     folderSpecs.push({ label: name, real: picked, display: `~/…/${name}` });
+  }
+
   }
 
   const folders: CatalogFolder[] = [];

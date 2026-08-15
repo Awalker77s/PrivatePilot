@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TabId } from "../App";
 import { PlusIcon, MicIcon, ArrowRightIcon } from "../icons";
 import { activeModelLabel } from "../../providers";
+import { loadSettings } from "../../storage/settings";
 import {
   ChatItem,
   chatBusy,
@@ -36,7 +37,8 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   const busy = chatBusy();
 
   useEffect(() => {
-    activeModelLabel()
+    loadSettings()
+      .then(() => activeModelLabel())
       .then(setModelLabel)
       .catch(() => setModelLabel("Ollama off"));
   }, []);

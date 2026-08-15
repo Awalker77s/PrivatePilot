@@ -4,7 +4,51 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri_plugin_fs::FsExt;
+
+#[derive(serde::Serialize)]
+struct LocalHttpResponse {
+    status: u16,
+    body: String,
+}
+
+// Ollama rejects the packaged WebView's synthetic Origin header. Keep this
+// native escape hatch loopback-only and limited to the four APIs the app uses.
+#[tauri::command]
+async fn ollama_request(
+    path: String,
+    method: String,
+    body: Option<String>,
+    timeout_ms: u64,
+) -> Result<LocalHttpResponse, String> {
+    const ALLOWED_PATHS: [&str; 4] = ["/api/tags", "/api/show", "/api/ps", "/api/chat"];
+    if !ALLOWED_PATHS.contains(&path.as_str()) {
+        return Err("Refused: unsupported Ollama endpoint".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms.min(305_000)))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("http://127.0.0.1:11434{}", path);
+    let request = match method.as_str() {
+        "GET" => client.get(url),
+        "POST" => client.post(url),
+        _ => return Err("Refused: unsupported Ollama method".to_string()),
+    };
+    let request = if let Some(contents) = body {
+        request
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(contents)
+    } else {
+        request
+    };
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    let status = response.status().as_u16();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    Ok(LocalHttpResponse { status, body })
+}
 
 #[tauri::command]
 fn allow_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -139,6 +183,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             allow_folder,
             allow_file,
+            ollama_request,
             atomic_write,
             walk_stats,
             copy_dir

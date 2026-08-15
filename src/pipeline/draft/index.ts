@@ -91,7 +91,12 @@ export async function draftCall(
     model,
     messages,
     format: wireJsonSchema(catalog),
-    options: { num_ctx: NUM_CTX_DRAFT, temperature: 0, seed: 7 },
+    options: {
+      num_ctx: NUM_CTX_DRAFT,
+      temperature: 0,
+      seed: 7,
+      max_tokens: 2048,
+    },
     think: false, // thinking models spend the whole response thinking otherwise
   });
   return { content: res.content, ms: res.totalMs };
@@ -122,7 +127,12 @@ export async function planFreeThenTranscribe(
           }) as ChatMessage
       ),
     ],
-    options: { num_ctx: NUM_CTX_DRAFT, temperature: 0, seed: 7 },
+    options: {
+      num_ctx: NUM_CTX_DRAFT,
+      temperature: 0,
+      seed: 7,
+      max_tokens: 1024,
+    },
     think: false,
   });
   const transcribe = await chat({
@@ -136,7 +146,12 @@ export async function planFreeThenTranscribe(
       },
     ],
     format: wireJsonSchema(catalog),
-    options: { num_ctx: NUM_CTX_DRAFT, temperature: 0, seed: 7 },
+    options: {
+      num_ctx: NUM_CTX_DRAFT,
+      temperature: 0,
+      seed: 7,
+      max_tokens: 2048,
+    },
     think: false,
   });
   return { content: transcribe.content, ms: plan.totalMs + transcribe.totalMs };

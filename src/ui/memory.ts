@@ -28,7 +28,7 @@ export const SCHEDULE_FIELD_RE =
   /\b(the |its )?(time|schedule|hour|day|frequency|cadence)\b/i;
 // Words that mean "something new", which must never be hijacked into an edit.
 export const NEW_TASK_RE =
-  /\b(another automation|a new automation|an automation (that|to|which)|a second automation|one more automation|make me (an|a new)|create (an|a new)|build (me )?(an|a)|a copy of|a version of|duplicate)\b/i;
+  /\b(another automation|a new automation|an automation (that|to|which|for|about)|a second automation|one more automation|make me (an|a new)|create (an|a new)|build (me )?(an|a)|a copy of|a version of|duplicate)\b/i;
 // "Make a VARIANT of an existing automation" — meaningful only when a real
 // automation name is also present (otherwise "a second batch of scans" is just
 // an object). Used to send "create a second Morning Brief" to a fresh compile

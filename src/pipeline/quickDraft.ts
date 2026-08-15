@@ -176,30 +176,55 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
   const wantsNews = /\b(news|headlines?|stories)\b/i.test(text);
   const wantsTech = wantsNews && /\b(tech|technology|hacker news)\b/i.test(text);
   const wantsSports = wantsNews && /\bsports?\b/i.test(text);
+  // A topic qualifier ("news on Claude", "news specifically about rust") must
+  // never be dropped — serving the generic template for a specific ask is the
+  // fast path answering a different question than the person asked.
+  const aboutMatch = text.match(
+    /\b(?:news|headlines?|stories)\s+(?:\w+\s+){0,2}?(?:about|on|for|regarding|covering)\s+(.+?)(?=\s+every\b|\s+daily\b|\s+each\b|\s+at\s+\d|$)/i
+  );
+  const aboutTopic = aboutMatch?.[1]?.trim().replace(/[.!?]+$/, "");
   if (wantsTech) {
     const count = requestedCount(text);
-    automations.push(
-      automation(text, {
-        name: "Top Tech News",
-        sentence: `Fetches today's top ${count} technology stories and lists them clearly.`,
-        category: "Notes",
-        steps: [
-          `GET https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=${count}`,
-          `List the top ${count} stories, one item per line`,
-        ],
-        sources: ["hn.algolia.com"],
-        outputs: [],
-      })
-    );
-    matched.push("tech headlines");
+    if (aboutTopic && !/^(tech|technology)$/i.test(aboutTopic)) {
+      // Topic-qualified tech news: search Hacker News for the topic.
+      const label = aboutTopic.replace(/\b\w/g, (c) => c.toUpperCase());
+      automations.push(
+        automation(text, {
+          name: `${label} Tech News`.split(/\s+/).slice(0, 4).join(" "),
+          sentence: `Fetches today's top ${count} tech stories about ${aboutTopic} and lists them clearly.`,
+          category: "Notes",
+          steps: [
+            `GET https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(aboutTopic).replace(/%20/g, "+")}&tags=story&hitsPerPage=${count}`,
+            `List the top ${count} stories about ${aboutTopic}, one item per line with its link`,
+          ],
+          sources: ["hn.algolia.com"],
+          outputs: [],
+        })
+      );
+      matched.push(`${aboutTopic} tech headlines`);
+    } else {
+      automations.push(
+        automation(text, {
+          name: "Top Tech News",
+          sentence: `Fetches today's top ${count} technology stories and lists them clearly.`,
+          category: "Notes",
+          steps: [
+            `GET https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=${count}`,
+            `List the top ${count} stories, one item per line`,
+          ],
+          sources: ["hn.algolia.com"],
+          outputs: [],
+        })
+      );
+      matched.push("tech headlines");
+    }
   }
   if (wantsSports) {
     automations.push(newsAutomation(text, "sports", "Sports"));
     matched.push("sports headlines");
   }
   if (wantsNews && !wantsTech && !wantsSports) {
-    const about = text.match(/\bnews\s+(?:about|on|for)\s+(.+?)(?=\s+every\b|\s+daily\b|\s+at\s+\d|$)/i);
-    const topic = about?.[1]?.trim() || (/\bworld\b/i.test(text) ? "world" : "top stories");
+    const topic = aboutTopic || (/\bworld\b/i.test(text) ? "world" : "top stories");
     const label = topic === "top stories" ? "Top" : topic.replace(/\b\w/g, (c) => c.toUpperCase());
     automations.push(newsAutomation(text, topic, label));
     matched.push(`${topic} headlines`);

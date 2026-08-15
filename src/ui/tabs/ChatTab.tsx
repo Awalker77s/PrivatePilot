@@ -449,6 +449,21 @@ function ChatItemView({ item }: { item: ChatItem }) {
           <FormattedAnswer text={item.text} />
         </div>
       );
+    case "answer": {
+      // The run's reply, as its own assistant bubble — rendered from the run
+      // record so the thread never drifts from what actually ran.
+      const answerRun = getRun(item.runId);
+      if (!answerRun || !(answerRun.answer ?? "").trim()) return null;
+      return (
+        <div className="answer-bubble" data-testid="answer-bubble">
+          <div className="answer-bubble-head">
+            <span className="dot dot-green" />
+            <span className="answer-bubble-name">Answer · {item.autoName}</span>
+          </div>
+          <FormattedAnswer text={answerRun.answer!} />
+        </div>
+      );
+    }
   }
 }
 
@@ -889,6 +904,18 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
                     <span className="dot dot-amber" />
                     {auto ? `${auto.name} — ` : ""}
                     {run.summary}
+                  </div>
+                ) : chatItems().some(
+                    (x) => x.kind === "answer" && x.runId === run.id
+                  ) ? (
+                  // The answer lives in its own bubble below — the card keeps
+                  // a one-line receipt so it stays the record of what ran.
+                  <div className="run-answer">
+                    <span className="dot dot-green" />
+                    <span className="caption">
+                      {stepRuns.length > 1 && auto ? `${auto.name} — ` : ""}
+                      Ran — the answer is below.
+                    </span>
                   </div>
                 ) : (
                   <div className="run-answer">

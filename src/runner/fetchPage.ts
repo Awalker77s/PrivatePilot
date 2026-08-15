@@ -183,7 +183,10 @@ export async function fetchPage(
   let text: string;
   const trimmedStart = body.trimStart();
   if (/json/i.test(ctype) || trimmedStart.startsWith("{") || trimmedStart.startsWith("[")) {
-    text = body;
+    // NEVER blind-truncate JSON — a mid-structure cut breaks every consumer
+    // (the direct endpoint reader and the model alike). Shrink it instead:
+    // long strings clipped, big arrays capped, structure kept valid.
+    text = body.length > TEXT_CAP ? shrinkJsonText(body) : body;
   } else if (
     /xml|rss|atom/i.test(ctype) ||
     trimmedStart.startsWith("<?xml") ||
@@ -201,6 +204,32 @@ export async function fetchPage(
     family: "ok",
     logLine: `Fetched ${host} — kept ${trimmed.length.toLocaleString()} characters.`,
   };
+}
+
+// Shrink an oversized JSON body while keeping it VALID: clip long string
+// values, cap arrays, and re-serialize compactly. Two passes (gentle, then
+// harsh); only if both still overflow does the caller's plain slice apply.
+function shrinkJsonText(body: string): string {
+  const shrink = (value: unknown, maxStr: number, maxArr: number): unknown => {
+    if (typeof value === "string")
+      return value.length > maxStr ? value.slice(0, maxStr) : value;
+    if (Array.isArray(value))
+      return value.slice(0, maxArr).map((v) => shrink(v, maxStr, maxArr));
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value)) out[k] = shrink(v, maxStr, maxArr);
+      return out;
+    }
+    return value;
+  };
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    const gentle = JSON.stringify(shrink(parsed, 300, 30));
+    if (gentle.length <= TEXT_CAP) return gentle;
+    return JSON.stringify(shrink(parsed, 80, 12));
+  } catch {
+    return body; // not actually parseable — leave it to the plain trim
+  }
 }
 
 async function extractReadable(html: string, url: string): Promise<string> {

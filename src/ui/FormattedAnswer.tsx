@@ -4,12 +4,18 @@ import type { ReactNode } from "react";
 // useful but imperfect. Normalize the common "- **item** - value - **item**"
 // shape before rendering it as safe React elements (never injected HTML).
 export function normalizeAnswerText(text: string): string {
-  return text
-    .replace(/\r\n?/g, "\n")
-    .replace(/([:])\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "$1\n\n- ")
-    .replace(/\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "\n- ")
-    .replace(/\s+(?=\d+[.)]\s+\*\*[^*\n]+\*\*)/g, "\n")
-    .trim();
+  return (
+    text
+      .replace(/\r\n?/g, "\n")
+      // Small models open with filler despite instructions — strip the
+      // classic preamble line so the answer leads with the answer.
+      .replace(/^\s*(sure[,!.]?|okay[,!.]?|certainly[,!.]?|of course[,!.]?)\s+(here('s| is| are)\b[^\n]*[:.]\s*\n?)?/i, "")
+      .replace(/^here('s| is| are)\s[^\n]{0,60}[:.]\s*\n(?=\s*(\d+[.)]|[-*•])\s)/i, "")
+      .replace(/([:])\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "$1\n\n- ")
+      .replace(/\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "\n- ")
+      .replace(/\s+(?=\d+[.)]\s+\*\*[^*\n]+\*\*)/g, "\n")
+      .trim()
+  );
 }
 
 function inline(text: string, keyPrefix: string): ReactNode[] {

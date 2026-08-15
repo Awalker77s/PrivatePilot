@@ -68,6 +68,10 @@ type ChatItemVariant =
   // A grounded answer ABOUT an automation ("what can this do?") — rendered
   // like a run answer, sourced only from the record + its run history.
   | { id: number; kind: "explain"; autoName: string; text: string }
+  // A finished run's ANSWER, as its own assistant bubble below the card —
+  // the card stays the record of what ran; the bubble is the reply. Renders
+  // from the run record (never a prose copy).
+  | { id: number; kind: "answer"; autoName: string; runId: string }
   | {
       id: number;
       kind: "edit";
@@ -1232,6 +1236,11 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
       } else {
         markBuiltTested(itemId);
         patchBuilt(itemId, { state: "ran", progress: null, runId: run.id });
+        // The answer is a REPLY, not card furniture — it gets its own
+        // assistant bubble below the card, rendered from the run record.
+        if (run.status === "ok" && (run.answer ?? "").trim()) {
+          push({ kind: "answer", autoName: autos[0].name, runId: run.id });
+        }
       }
     } else {
       const runs = await runChain(item.result.chain, autos, {
@@ -1245,13 +1254,20 @@ export async function tryOnce(itemId: number, inputValues?: Record<string, strin
       if (!broke) markBuiltTested(itemId);
       patchBuilt(itemId, {
         state: broke ? "fresh" : "ran",
-        progress: null,
         chainRunIds: runs.map((r) => r.id),
+        progress: null,
         runId: runs[0]?.id ?? null,
       });
       if (broke) {
         const bad = runs.find((r) => r.status === "broke");
         push({ kind: "note", tone: "red", text: bad?.summary ?? "Broke." });
+      }
+      // Each step that answered gets its own labeled bubble, in run order.
+      for (const r of runs) {
+        if (r.status === "ok" && (r.answer ?? "").trim()) {
+          const auto = autos.find((a) => a.id === r.automationId);
+          push({ kind: "answer", autoName: auto?.name ?? "Automation", runId: r.id });
+        }
       }
     }
   } catch (e) {

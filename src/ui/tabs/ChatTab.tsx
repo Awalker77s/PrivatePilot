@@ -590,9 +590,13 @@ function WatchMeCard({ item }: { item: ChatItem & { kind: "watchme" } }) {
 
   if (item.state === "listening" || item.state === "reading") {
     return (
-      <div className="pipeline-card card">
-        <span className="spinner" />
-        <span className="stage-text">
+      <div className="thinking" role="status" aria-live="polite">
+        <span className="thinking-dots" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="thinking-text">
           {item.state === "listening"
             ? "Listening back…"
             : "Reading the frames…"}
@@ -759,6 +763,19 @@ function EditCard({ item }: { item: ChatItem & { kind: "edit" } }) {
   );
 }
 
+// The animated line says what KIND of work is happening, nothing more:
+// "Searching…", not "Searching files…" or "Tool loop — searching "Invoices"…".
+// The detail is not lost — every one of those lines is still written to the
+// run record, where it is a receipt you can read afterwards instead of
+// something that flickers past mid-thought.
+export function shortStage(text: string): string {
+  const t = text.replace(/^tool loop\s*[—–-]\s*/i, "").trim();
+  const verb = t.match(/^([A-Za-z]+ing)\b/);
+  if (!verb) return "Working…";
+  const word = verb[1].toLowerCase();
+  return `${word[0].toUpperCase()}${word.slice(1)}…`;
+}
+
 function ProgressCard({
   item,
 }: {
@@ -772,11 +789,21 @@ function ProgressCard({
     return () => clearInterval(t);
   }, []);
   const elapsed = Math.floor((Date.now() - item.startedAt) / 1000);
+  // No card, no spinner: while it thinks, the words themselves carry the
+  // motion (a light sweeping through them) with three dots keeping time.
+  // Past 10s a quiet counter appears, because a wait you can measure is a
+  // different feeling from a wait you cannot.
   return (
-    <div className="pipeline-card card" data-testid="progress">
-      <span className="spinner" />
-      <span className="stage-text">{item.text}</span>
-      {elapsed > 10 && <span className="caption">{elapsed}s</span>}
+    <div className="thinking" role="status" aria-live="polite" data-testid="progress">
+      <span className="thinking-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span className="thinking-text" data-testid="stage-text">
+        {shortStage(item.text)}
+      </span>
+      {elapsed > 10 && <span className="thinking-elapsed" aria-hidden="true">{elapsed}s</span>}
     </div>
   );
 }
@@ -951,10 +978,14 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
         ))}
       </div>
       {state === "running" && item.progress && (
-        <div className="pipeline-card" style={{ border: "none", padding: "4px 0" }}>
-          <span className="spinner" />
-          <span className="stage-text" data-testid="run-progress">
-            {item.progress}
+        <div className="thinking" role="status" aria-live="polite" style={{ padding: "6px 0 2px" }}>
+          <span className="thinking-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="thinking-text" data-testid="run-progress">
+            {shortStage(item.progress)}
           </span>
         </div>
       )}

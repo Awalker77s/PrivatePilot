@@ -387,10 +387,29 @@ async function runInner(
   run.answer = cleanAnswer;
   if (loop.corpus.trim().length > 0) {
     try {
+      // The clock is something the APP told the model ("Right now it is …"),
+      // so a time or date in the answer is a restatement, not an invention.
+      // Without this, "at 11:38 PM in Orlando" failed verification on the
+      // number 11 and broke a run whose data was perfectly good.
+      const now = new Date();
+      const clockText = [
+        now.toLocaleString(),
+        now.toLocaleString(undefined, {
+          weekday: "short",
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+        now.toISOString(),
+        `${now.getFullYear()} ${now.getMonth() + 1} ${now.getDate()} ${now.getHours()} ${now.getMinutes()} ${((now.getHours() + 11) % 12) + 1}`,
+      ].join("\n");
       const contextText = [
         auto.sentence,
         ...auto.steps,
         JSON.stringify(opts.inputValues ?? {}),
+        clockText,
       ].join("\n");
       const v = await verifyNumbers(
         model ?? auto.model,

@@ -7,6 +7,7 @@
 import { chat } from "../providers";
 import { ENDPOINTS } from "./endpoints";
 import type { Catalog } from "./catalog";
+import { CHAIN_REQUEST_RE } from "./catalog";
 import type { DraftContext } from "./draft";
 import {
   buildWireSchema,
@@ -29,6 +30,17 @@ const SCREEN_REQUEST =
 
 function endpointHints(text: string): string[] {
   const wanted = ENDPOINTS.filter((endpoint) => {
+    // Alerts and warnings are their own endpoint — folding them into the
+    // forecast hints sent the drafter looking for a temperature when the
+    // person asked whether a storm was coming.
+    if (/\b(alerts?|warnings?|watches?|advisor(y|ies))\b/i.test(text))
+      return /alert|warning/.test(endpoint.intent);
+    if (/\b(air quality|aqi|smog|pollution|pollen)\b/i.test(text))
+      return /air quality/.test(endpoint.intent);
+    if (/\b(earthquakes?|quake|seismic|tremor)\b/i.test(text))
+      return /earthquake/.test(endpoint.intent);
+    if (/\b(sunrise|sunset|daylight|golden hour)\b/i.test(text))
+      return /sunrise/.test(endpoint.intent);
     if (/\b(weather|forecast|temperature|rain|snow)\b/i.test(text))
       return /weather|coordinates/.test(endpoint.intent);
     if (/\b(currency|exchange rate|usd|eur|gbp|jpy)\b/i.test(text))
@@ -53,6 +65,10 @@ export function isCompactReadRequest(context: DraftContext): boolean {
   if (context.demo || context.answers.length > 0) return false;
   const text = context.userText.trim();
   if (!READ_REQUEST.test(text) || COMPLEX_REQUEST.test(text)) return false;
+  // This path builds exactly ONE automation, so it can never answer "a
+  // sequence of X and Y" — which needs a job per item plus the line joining
+  // them. Step aside and let the full drafter have it.
+  if (CHAIN_REQUEST_RE.test(text)) return false;
   return SCREEN_REQUEST.test(text) || endpointHints(text).length > 0;
 }
 

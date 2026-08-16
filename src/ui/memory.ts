@@ -71,8 +71,12 @@ export const CHAIN_TALK_RE = new RegExp(
     // "make it a sequence", "turn these into a chain"
     String.raw`\b(?:make|turn|build|create) (?:it|this|them|these|those)?\s*(?:in)?to (?:a |one )?(?:chain|sequence|workflow)\b`,
     String.raw`\bmake (?:it|this|them|these) (?:a |one )?(?:chain|sequence)\b`,
-    // "a chain of these", "a sequence out of them"
-    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with) (?:them|these|those)\b`,
+    // "make a sequence from A and B", "build a workflow out of these" — the
+    // thing being made IS the chain, whether what follows is names or a
+    // pointer. (The tier still requires two real automations to act.)
+    String.raw`\b(?:make|build|create|set up|put together)\s+(?:me\s+)?(?:a|one|an)\s+(?:chain|sequence|workflow)\b`,
+    // "a chain of these", "a sequence out of Bitcoin Price and the note"
+    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with)\b`,
     // phrases that can only mean sequencing
     // "put them together" and "put Tesla Stock Check and Bitcoin Price
     // Fetch together" — but never "put together a summary of my invoices",
@@ -87,6 +91,11 @@ export const CHAIN_TALK_RE = new RegExp(
   ].join("|"),
   "i"
 );
+// "make a sequence from A and B", "build a chain out of these" — the thing
+// being MADE is the sequence itself, so the new-automation guard must not
+// swallow it. (NEW_TASK_RE fires on the bare "make a".)
+export const MAKE_A_SEQUENCE_RE =
+  /\b(?:make|build|create|set up|put together)\s+(?:me\s+)?(?:a|one|an)\s+(?:chain|sequence|workflow)\b/i;
 // "them / these / both / together" — the message points at automations the
 // thread already knows instead of naming them.
 export const PLURAL_REF_RE = /\b(?:them|these|those|both|the two|together)\b/i;

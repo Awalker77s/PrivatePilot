@@ -309,6 +309,23 @@ export function buildWireSchema(catalog: Catalog) {
       // chain", "connect them") — several jobs arriving unchained is the
       // drafter dropping the ask. Insist. (Branch-intent wins when both
       // fire: its steps ARE a chain.)
+      // A sequence of things is, by construction, more than one thing. When
+      // the request explicitly asks for one and the draft comes back as a
+      // single automation, the drafter folded the jobs together — which is
+      // never what "a sequence of the meta price and the orlando weather"
+      // asked for.
+      if (
+        catalog.chainIntent &&
+        !catalog.branchIntent &&
+        v.automations.length === 1
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["automations"],
+          message:
+            'The person asked for a SEQUENCE of separate jobs ("a sequence of X and Y"). Draft ONE automation per job named in the request — do not fold them into a single automation — and join them with chain.links in the order stated.',
+        });
+      }
       if (
         catalog.chainIntent &&
         !catalog.branchIntent &&

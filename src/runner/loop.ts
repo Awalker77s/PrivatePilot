@@ -6,7 +6,7 @@ import { chat, NUM_CTX_DRAFT, NUM_CTX_TOOLS } from "../providers";
 import type { ChatMessage, ToolCall, ToolDef } from "../providers/types";
 import type { AutomationRecord } from "../storage/types";
 import { readAnyFile } from "./readFile";
-import { fetchPage } from "./fetchPage";
+import { fetchPersistently } from "./persistentFetch";
 import { Sandbox, toSandboxPath } from "./sandbox";
 import { readDir, writeTextFile, exists, mkdir } from "@tauri-apps/plugin-fs";
 import { toolsFor } from "../connectors/registry";
@@ -203,6 +203,11 @@ function systemPrompt(
     "You are in a loop and can make multiple tool calls before answering. Call exactly one tool per turn.",
     "If the job is to draft, send, or email a message: your final answer IS the message — a subject line, then the body, nothing else. The app shows a Send button; you never send anything yourself and must not say so.",
     "If a fetch is refused, empty, or rate-limited: NEVER invent or guess a value, never output 0 as a stand-in. Say you couldn't read it and end with OUTPUTS: (none).",
+    // Every number in the answer is checked against what was actually
+    // fetched. Category thresholds ("51-100 is moderate"), unit conversions,
+    // and round counts the source never stated fail that check and stop the
+    // run — so the answer must carry only the source's own figures.
+    "Use ONLY numbers that appear in what you fetched. Do not add scale ranges, thresholds, converted units, or counts the source did not state — every number you write is checked against the source, and one that isn't there stops the run. Describe categories in words instead (\"moderate\", not \"51-100\").",
     "Answer briefly unless the job asks for more. Never describe your tools or limitations.",
     "FORMAT RULES for the final answer (it renders as Markdown in a chat bubble) — follow exactly:",
     "- First line: the direct answer in one plain sentence. No header, no greeting, no preamble like \"Sure\" or \"Here is\".",
@@ -642,12 +647,19 @@ export async function runToolLoop(
             result = `${line}\nThe job remains: ${record.sentence}`;
           }
         } else if (name === "fetch_page") {
-          const f = await fetchPage(String(args.url ?? ""), record.sources);
+          // Blocked ≠ unavailable: this walks the browser-then-mirror ladder
+          // before it reports failure, so bot protection on one site doesn't
+          // end the run.
+          const f = await fetchPersistently(
+            String(args.url ?? ""),
+            record.sources,
+            (text) => onEvent({ text: `Tool loop — ${text}` })
+          );
           outcome.logLines.push(f.logLine);
           if (f.ok) outcome.corpus += `\n\n=== ${args.url} ===\n${f.text}`;
           if (!f.ok && f.family === "on_purpose") outcome.refusals.push(f.text);
           result = f.ok
-            ? `${f.text}\n---\n${f.logLine}\nThe job remains: ${record.sentence}`
+            ? `${f.text}\n---\n${f.logLine}\n${f.substituted ? "That came from a stand-in source — say which one in your answer. " : ""}The job remains: ${record.sentence}`
             : f.text;
         } else if (name === "read_page") {
           onEvent({ text: `Tool loop — reading a page like a browser…` });

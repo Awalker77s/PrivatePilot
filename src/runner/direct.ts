@@ -49,6 +49,11 @@ export async function runDirectEndpoint(
   if (!kind) return null;
   const fetched = await fetchPage(url, record.sources);
   if (!fetched.ok) {
+    // Blocked is not the end of the road — but this fast path parses ONE
+    // known response shape, so it can't read a stand-in source itself.
+    // Returning null hands the job to the model tool loop, which walks the
+    // browser-then-mirror ladder and can read whatever comes back.
+    if (fetched.blocked) return null;
     throw new DirectEndpointError(
       fetched.sentence ?? "The verified data source did not return an answer."
     );
@@ -62,6 +67,7 @@ export async function runDirectEndpoint(
       const summaryUrl = url.replace(/\/info(\?|$)/, "/summary$1");
       const summary = await fetchPage(summaryUrl, record.sources);
       if (!summary.ok) {
+        if (summary.blocked) return null; // let the resilient loop have it
         throw new DirectEndpointError(
           summary.sentence ?? "Nasdaq did not return the stock summary."
         );

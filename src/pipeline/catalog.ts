@@ -70,12 +70,17 @@ export const CHAIN_REQUEST_RE = new RegExp(
   [
     // "…as a chain", "…into one sequence"
     String.raw`\b(?:as|into) (?:a |one )?(?:chain|sequence|workflow)\b`,
+    // "make a sequence from A and B" — the thing being made IS the chain.
+    String.raw`\b(?:make|build|create|set up) (?:me )?(?:a|one|an) (?:chain|sequence|workflow)\b`,
     // "make an automation for this and one for that a chain" — the ask
     // tacked onto the end, which is how people say it out loud.
     String.raw`\b(?:a|one) (?:chain|sequence|workflow)\b(?:\s+or\s+(?:a\s+)?(?:chain|sequence|workflow))?\s*[.!?]*\s*$`,
     String.raw`\b(?:chain|sequence|connect|link|combine|join) (?:them|these|those|both|the two|together)\b`,
     String.raw`\b(?:make|turn) (?:it|this|them|these|those)?\s*(?:in)?to (?:a |one )?(?:chain|sequence|workflow)\b`,
-    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with) (?:them|these|those)\b`,
+    // "a sequence of them" AND "a sequence of the meta price and the orlando
+    // weather" — the jobs named after "of" may not exist yet, which is the
+    // whole point: one sentence builds both and joins them.
+    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with)\b`,
     String.raw`\bfeeds? (?:it |that |the result )?into\b`,
     String.raw`\bone after (?:the other|another)\b`,
     String.raw`\bback to back\b`,

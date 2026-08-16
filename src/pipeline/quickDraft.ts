@@ -121,7 +121,10 @@ const TEMPLATE_VOCAB = new Set(
    minute minutes week weekly am pm oclock time schedule
    price prices worth quote quotes cost value stock stocks share shares market
    news headline headlines story stories hacker tech technology sports
-   status outage outages operational working down`
+   status outage outages operational working down
+   sequence sequences chain chains workflow workflows connect connected
+   connecting link linked links combine combined join joined together
+   then after order series row back string hook`
     .split(/\s+/)
     .filter(Boolean)
 );

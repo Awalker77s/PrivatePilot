@@ -79,6 +79,7 @@ export function draftSystemPrompt(catalog: Catalog): string {
     ...(catalog.chainIntent
       ? [
           "- THIS request explicitly asks for ONE connected sequence ('as a chain', 'as a sequence', 'connect them', 'one after the other'): draft each job AND set chain.links joining them in the order stated — never leave chain null here. Map outputs to inputs by name where one job's result feeds the next; when nothing passes between two jobs, a link with an empty map is allowed for pure ordering.",
+          "- Each item listed there is its own automation, never one that does both: 'a sequence of the meta price and the orlando weather' = 2 automations + 1 link; three items = 3 automations + 2 links.",
         ]
       : []),
     `- The request below is ALWAYS a NEW job — draft it from the request's own words. These automations ALREADY EXIST: ${existing}. Never output one of those as a name, never copy its steps; a request that merely resembles one is still a different job (changes to an existing automation never reach you).`,

@@ -56,6 +56,12 @@ export interface Catalog {
 // preserving the closed catalog whenever the person actually mentions files.
 const FILE_INTENT =
   /\b(file|folder|document|documents|pdf|spreadsheet|sheet|excel|csv|xlsx|docx|invoice|invoices|receipt|receipts|ledger|downloads?|desktop|directory|directories|scan|scanned|scans|image|images|photo|photos|picture|pictures|jpe?g|png|tiff?|ocr|searchable|rename|zip|archive|convert)\b/i;
+// A NAMED file is a file request even when the sentence never says "file":
+// "summarize Project Phoenix Update.md" carries no keyword above, so the
+// catalog arrived with zero files and the app asked "Which file?" about a
+// filename the person had just typed in full.
+const FILENAME_RE =
+  /[\w()[\]{}~%&#@+,'-][\w ()[\]{}~%&#@+,'-]*\.(pdf|docx?|xlsx?|xlsm|csv|tsv|txt|md|markdown|rtf|json|ya?ml|pptx?|html?|png|jpe?g|gif|tiff?|bmp|webp|heic|zip|7z|rar|eml|msg|log)\b/i;
 
 // Result-dependent routing in the person's own words. Deliberately narrow:
 // a bare "if" appears in single-job requests ("check if…") all the time.
@@ -95,7 +101,8 @@ export const CHAIN_REQUEST_RE = new RegExp(
 export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
   const branchIntent = BRANCH_INTENT.test(userText);
   const chainIntent = CHAIN_REQUEST_RE.test(userText);
-  if (FILE_INTENT.test(userText)) return { ...catalog, branchIntent, chainIntent };
+  if (FILE_INTENT.test(userText) || FILENAME_RE.test(userText))
+    return { ...catalog, branchIntent, chainIntent };
   return {
     ...catalog,
     branchIntent,
@@ -232,6 +239,18 @@ export async function buildCatalog(): Promise<Catalog> {
 
       for (const entry of entries) {
         if (entry.name.startsWith(".") || entry.name.startsWith("~$")) continue;
+        // OCR leaves its machinery beside the documents: a "<stem>-pages"
+        // folder of rendered PNGs, a .pagelist.txt, an .ocr.json sidecar.
+        // Cataloguing those offers them to the drafter as if they were the
+        // person's documents — one run fenced "scanned-receipt-pages" and
+        // filed page images into a knowledge base instead of the folder it
+        // was asked about.
+        if (entry.isDirectory && /-pages$/i.test(entry.name)) continue;
+        if (/\.(pagelist\.txt|ocr\.json)$/i.test(entry.name)) continue;
+        // A previous run's OWN outputs are not new documents. Left in, a
+        // second filing indexed "receipt-1", "receipt-1.ocr" and
+        // "receipt-1.searchable" as three separate things.
+        if (/\.(searchable\.pdf|ocr\.txt)$/i.test(entry.name)) continue;
         const entryReal = await join(real, entry.name);
         const entryDisplay = `${display}/${entry.name}`;
         if (entry.isFile) {

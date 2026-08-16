@@ -1171,9 +1171,30 @@
   gap: 8px;
 }
 
+/* "checks geocoding-api.open-meteo.com" is longer than the tile. The chip
+   shrink-wrapped its text with nothing to stop it, so a long hostname ran
+   straight through the card's rounded border and got sliced by the edge.
+   It is bounded now and the last few pixels dissolve instead of being cut:
+   overflow clips at the PADDING box, so a short chip's fade falls entirely
+   on its own right padding (invisible), while a long one runs under the
+   gradient and fades out before the border. */
 .tile-chip {
   margin-left: auto;
   font-size: 10px;
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+  padding-right: 16px;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 16px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 16px),
+    transparent 100%
+  );
 }
 
 .tile-hover-actions {
@@ -1468,6 +1489,26 @@
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* One line that ends by dissolving rather than by being sliced. Used for
+   run summaries inside a step card, where the text is arbitrary length and
+   the card is not. */
+.status-fade {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  padding-right: 18px;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 18px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 18px),
+    transparent 100%
+  );
 }
 
 .strip-arrow {

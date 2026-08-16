@@ -330,6 +330,84 @@ try {
     );
   }
 
+  // ---- routing: a file VERB is not a file REQUEST ----
+  // "summarize" alone used to drag inbox and sequence requests into the file
+  // compiler, which then asked "Which folder should I summarize?" about an
+  // email. The template must decline anything that doesn't point at a file.
+  const { catalogForRequest } = await server.ssrLoadModule(
+    "/src/pipeline/catalog.ts"
+  );
+  const fileCatalog = {
+    folders: [
+      { label: "Downloads", display: "~/Downloads", real: "C:\\u\\Downloads", readable: true, writable: true },
+      { label: "Documents", display: "~/Documents", real: "C:\\u\\Documents", readable: true, writable: true },
+      { label: "Desktop", display: "~/Desktop", real: "C:\\u\\Desktop", readable: true, writable: true },
+    ],
+    files: [{ name: "Project Phoenix Update.md", display: "~/Documents/Project Phoenix Update.md", real: "C:\\u\\p.md", folderDisplay: "~/Documents" }],
+    readTargets: ["~/Downloads", "~/Documents", "~/Desktop"],
+    writeTargets: ["~/Downloads"], hosts: [], automationNames: [],
+    automations: [], knowledge: [], apps: [], tools: [], displayToReal: {},
+  };
+  const claimsFile = (text) =>
+    tryQuickFileCompile(
+      { userText: text, answers: [], history: undefined },
+      catalogForRequest(fileCatalog, text)
+    ) !== null;
+  for (const text of [
+    "Make a sequence to check my gmail, if someone has sent me an email in the past 5 minutes, summarize the email, if no one has sent me an email, create a schedule for 2 minutes and check again, if they sent an email summarize it, if not stop working.",
+    "check my outlook every 10 minutes and if there's a new email from my boss summarize it, otherwise do nothing",
+    "summarize my unread emails and then email me the summary",
+    "read my inbox and summarize anything from Sarah",
+    "give me a recap of my emails from today",
+    "summarize my Downloads folder and then email me the result",
+    "rename the automation to Morning Check",
+    "move the meeting to 3pm",
+    "summarize the news about nvidia",
+  ]) {
+    assert(!claimsFile(text), `file template must decline: "${text.slice(0, 48)}"`);
+  }
+  for (const text of [
+    "summarize everything in my Downloads folder",
+    "summarize Project Phoenix Update.md",
+    "summarize the pdfs in Documents",
+    "summarize my desktop files",
+    "move my invoices into Documents",
+  ]) {
+    assert(claimsFile(text), `file template must still claim: "${text}"`);
+  }
+
+  // ---- sequences grow, and are not capped at four automations ----
+  const { appendToSequence, sequenceFrom } = await server.ssrLoadModule(
+    "/src/pipeline/sequence.ts"
+  );
+  const { assertNoCycle } = await server.ssrLoadModule("/src/dispatcher/index.ts");
+  const mk = (id, name, outputs = [], inputs = []) => ({
+    ...baseRecord, id, name,
+    inputs: inputs.map((x) => ({ name: x })),
+    outputs: outputs.map((x) => ({ name: x })),
+    revision: { id: `rev-${id}-1-a`, number: 1, contentHash: "a", status: "published", createdAt: 1 },
+  });
+  const members = [mk("a1", "One", ["price"]), mk("a2", "Two", [], ["price"]), mk("a3", "Three")];
+  const look = (id) => members.find((m) => m.id === id);
+  const nameOf = (id) => look(id)?.name ?? id;
+  const base = sequenceFrom([members[0], members[1]], "Grow Me");
+  const grown = appendToSequence(base, [members[2]], look);
+  assert(grown !== null, "appending a new automation to a sequence returns a chain");
+  assert(grown.id === base.id, "an appended sequence keeps its id, so history survives");
+  assert(grown.links.length === 2, "appending adds exactly one link");
+  assert(grown.links[1].from === "a2", "the new job attaches to the tail, not the head");
+  assert(appendToSequence(base, [members[0]], look) === null, "a member already in the chain is not added twice");
+
+  let long = sequenceFrom([members[0], members[1]], "Long");
+  for (let i = 3; i <= 10; i++) {
+    const extra = mk(`a${i}`, `Job ${i}`);
+    members.push(extra);
+    long = appendToSequence(long, [extra], look);
+  }
+  assert(long.links.length === 9, `a ten-member chain has 9 links, got ${long.links.length}`);
+  assertNoCycle(long, nameOf); // threw at 4 members before the cap was raised
+  assertionCount++;
+
   console.log(`Quick regression suite passed (${assertionCount} assertions).`);
 } finally {
   await server.close();

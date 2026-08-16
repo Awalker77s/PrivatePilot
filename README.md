@@ -91,9 +91,9 @@ ollama pull gemma4:12b          # better screen/image reading for "Watch me"
 npm install && npm run verify
 ```
 
-That type-checks the whole project and runs the regression suite (**62
+That type-checks the whole project and runs the regression suite (**83
 assertions** covering the compiler's template path, chat routing, sequence
-detection, schedule parsing, and the file compiler). It needs no model, no
+detection and growth, schedule parsing, and the file compiler's refusals). It needs no model, no
 network at test time, and none of the Tauri prerequisites — which is why
 [CI runs the same command on every push](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml),
 green on a clean Linux runner in under 30 seconds.
@@ -356,7 +356,7 @@ docs/           architecture, file-safety model, terminal plan, screenshots
 ## Tests
 
 ```bash
-npm run verify        # tsc --noEmit + 62 regression assertions
+npm run verify        # tsc --noEmit + 83 regression assertions
 npm run test:quick    # the suite alone
 ```
 

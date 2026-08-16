@@ -60,12 +60,12 @@ const FILE_INTENT =
 // "summarize Project Phoenix Update.md" carries no keyword above, so the
 // catalog arrived with zero files and the app asked "Which file?" about a
 // filename the person had just typed in full.
-const FILENAME_RE =
+export const FILENAME_RE =
   /[\w()[\]{}~%&#@+,'-][\w ()[\]{}~%&#@+,'-]*\.(pdf|docx?|xlsx?|xlsm|csv|tsv|txt|md|markdown|rtf|json|ya?ml|pptx?|html?|png|jpe?g|gif|tiff?|bmp|webp|heic|zip|7z|rar|eml|msg|log)\b/i;
 
 // Result-dependent routing in the person's own words. Deliberately narrow:
 // a bare "if" appears in single-job requests ("check if…") all the time.
-const BRANCH_INTENT =
+export const BRANCH_INTENT =
   /\b(otherwise|or else|if not\b|if it (does not|doesn't)|depending on (what|the|that|it)|if the \w+ (fails|breaks|is down|works|succeeds)|if the (result|answer|outcome|check)|if (it|that|this)(\s+\w+)? (fails|breaks|finds|says|mentions|succeeds|is down|works))\b/i;
 
 // An explicit ask that the jobs be CONNECTED, in any of the words people use

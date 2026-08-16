@@ -2,7 +2,12 @@
 // the closed catalog. If the words do not identify one, it asks with real
 // choices (and a Choose button) instead of starting the full local-AI draft.
 import type { Catalog, CatalogFile, CatalogFolder } from "./catalog";
-import { matchCatalog } from "./catalog";
+import {
+  BRANCH_INTENT,
+  CHAIN_REQUEST_RE,
+  FILENAME_RE,
+  matchCatalog,
+} from "./catalog";
 import type { DraftContext } from "./draft";
 import type { WireAutomation } from "./draft/schema";
 import type { QuickCompileMatch, QuickQuestion } from "./quickDraft";
@@ -296,6 +301,33 @@ function moveDraft(text: string, catalog: Catalog): QuickCompileMatch {
   };
 }
 
+// NOUNS only — deliberately not the action verbs. "rename", "scan" and
+// "convert" are what made requestedAction() fire in the first place, so
+// counting them as evidence would be circular: every "rename this meeting"
+// would prove itself a file job.
+const FILE_NOUN =
+  /\b(files?|folders?|directory|directories|documents?|pdfs?|spreadsheets?|sheets?|excel|csv|tsv|xlsx?|docx?|invoices?|receipts?|ledger|downloads?|desktop|images?|photos?|pictures?|screenshots?|jpe?g|png|tiff?|attachments?|archives?|zip)\b/i;
+
+// The domains a file template cannot serve at all. Naming one of these means
+// the job belongs to a connector (mail, music, a window), not to the sandbox.
+const APP_DOMAIN =
+  /\b(gmail|outlook|inbox|mailbox|e-?mails?|messages?|spotify|calendar|browser|window)\b/i;
+
+// More than one job in one sentence. A file template drafts exactly one
+// automation, so claiming these would quietly answer half of what was asked.
+const MORE_THAN_ONE_JOB =
+  /\band then\b|\bafter (?:that|which)\b|\bthen (?:e-?mail|send|message|text|save|write|post|notify|alert|tell|summari[sz])/i;
+
+// Does anything in the sentence actually point at a file, a folder, or a real
+// catalog path? Without this, the bare verb "summarize" was enough to drag an
+// inbox request into the file compiler, which then asked "Which folder should
+// I summarize?" about an email.
+function pointsAtFiles(text: string, catalog: Catalog): boolean {
+  if (FILE_NOUN.test(text) || FILENAME_RE.test(text)) return true;
+  if (mentionedFolders(text, catalog).length > 0) return true;
+  return mentionedFiles(text, catalog).length > 0;
+}
+
 export function tryQuickFileCompile(
   context: DraftContext,
   catalog: Catalog
@@ -305,6 +337,27 @@ export function tryQuickFileCompile(
   const text = `${context.userText.trim()} ${answerText}`.trim();
   const action = requestedAction(text);
   if (!action) return null;
+
+  // Three ways this template must decline and let the full compiler have it.
+  // Declining costs a model call; claiming wrongly costs the person a question
+  // card about the wrong subject entirely.
+  if (!pointsAtFiles(text, catalog)) return null;
+  if (
+    CHAIN_REQUEST_RE.test(text) ||
+    BRANCH_INTENT.test(text) ||
+    MORE_THAN_ONE_JOB.test(text)
+  )
+    return null;
+  // "summarize the attachments in my gmail" names a file noun AND an app. The
+  // app wins unless a real catalog path was named, because the attachment has
+  // to be fetched by a connector before any file tool can touch it.
+  if (
+    APP_DOMAIN.test(text) &&
+    mentionedFolders(text, catalog).length === 0 &&
+    mentionedFiles(text, catalog).length === 0
+  )
+    return null;
+
   if (action === "summarize") return summarizeDraft(text, catalog);
   if (action === "rename") return renameDraft(text, catalog);
   return moveDraft(text, catalog);

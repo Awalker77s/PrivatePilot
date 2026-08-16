@@ -32,7 +32,7 @@ import {
   splitCoordination,
 } from "./memory";
 import { CHAIN_REQUEST_RE } from "../pipeline/catalog";
-import { sequenceFrom } from "../pipeline/sequence";
+import { appendToSequence, sequenceFrom } from "../pipeline/sequence";
 import { explainAutomation } from "../pipeline/explain";
 import {
   ELLIPTICAL_RE,
@@ -851,6 +851,77 @@ async function pushSequenceCard(input: AutomationRecord[], text: string) {
   });
 }
 
+// Growing a sequence that already exists. Same card as building a fresh one,
+// but the chain keeps its id — so Save updates it in place and its version
+// history survives, instead of leaving a near-duplicate behind.
+async function pushSequenceChangeCard(
+  before: ChainRecord,
+  after: ChainRecord,
+  _text: string
+) {
+  const saved = getState().automations.records;
+  const idOf = (c: ChainRecord) =>
+    c.steps?.length
+      ? c.steps.map((s) => s.automationId)
+      : [...new Set(c.links.flatMap((l) => [l.from, l.to]))];
+  const beforeIds = new Set(idOf(before));
+  const addedIds = idOf(after).filter((id) => !beforeIds.has(id));
+  const named = (id: string) =>
+    saved.find((a) => a.id === id)?.name ?? "an automation";
+  const addedNames = addedIds.map(named);
+  const members = idOf(after)
+    .map((id) => saved.find((a) => a.id === id))
+    .filter((m): m is AutomationRecord => Boolean(m));
+
+  const summary = `Added ${addedNames
+    .map((n) => `"${n}"`)
+    .join(" and ")} to the end of "${after.name}" — ${
+    beforeIds.size
+  } step${beforeIds.size === 1 ? "" : "s"} became ${idOf(after).length}.`;
+  const runId = newId("run");
+  const at = Date.now();
+  await appendRun({
+    id: runId,
+    automationId: addedIds[0] ?? members[0]?.id ?? "",
+    chainId: after.id,
+    stepIndex: null,
+    cause: "you asked to add to a sequence",
+    startedAt: at,
+    finishedAt: at,
+    status: "ok",
+    ranOn: "local",
+    sandbox: null,
+    baton: null,
+    summary,
+    stages: [],
+    events: [],
+    counters: { drafts: 0, fieldsFixed: 0, questionCard: false },
+    didNotDo: [],
+    diff: null,
+    answer: null,
+  });
+  push({
+    kind: "built",
+    result: {
+      ok: true,
+      automations: members,
+      chain: after,
+      question: null,
+      argument: [
+        `${summary} Nothing was re-drafted, and "${after.name}" keeps its history — Save updates the sequence you already had.`,
+      ],
+      failSentence: null,
+      runId,
+      keptToOneStep: false,
+    },
+    state: "fresh",
+    runId: null,
+    chainRunIds: null,
+    progress: null,
+    keepSentence: null,
+  });
+}
+
 // A one-tap "Which one?" card — a delta with an ambiguous target never
 // guesses and never falls through to a fresh build.
 function askWhichOne(targets: EditTarget[], request: string) {
@@ -1034,11 +1105,26 @@ export async function sendText(text: string) {
       ).test(text)
     );
     if (chainMention && chainNamed.length >= 1) {
-      push({
-        kind: "note",
-        tone: "amber",
-        text: `Adding to "${chainMention.name}" isn't chat-editable yet — open it in the Library's Sequence builder. Or name all the automations and I'll build a fresh sequence.`,
-      });
+      // "add the tesla check to the Bitcoin Morning Briefing" — grow the
+      // sequence that already exists. Appending keeps its id, so its history
+      // and pinned member revisions survive; rebuilding would throw both away.
+      const saved = getState().automations.records;
+      const grown = appendToSequence(
+        chainMention,
+        chainNamed.map((t) => t.record),
+        (id) => saved.find((a) => a.id === id)
+      );
+      if (!grown) {
+        push({
+          kind: "note",
+          tone: "gray",
+          text: `${chainNamed.map((t) => `"${t.record.name}"`).join(" and ")} ${
+            chainNamed.length > 1 ? "are" : "is"
+          } already in "${chainMention.name}" — nothing to add.`,
+        });
+        return;
+      }
+      await pushSequenceChangeCard(chainMention, grown, text);
       return;
     }
     // Exactly one name + chain talk ("combine the two steps in X") is about

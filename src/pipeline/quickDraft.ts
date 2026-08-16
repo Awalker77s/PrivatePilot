@@ -59,7 +59,7 @@ export function scheduleFrom(text: string): WireAutomation["schedule"] {
   if (every) {
     return {
       trigger: "watch",
-      everyMinutes: Math.max(5, Math.min(1440, Number(every[1]))),
+      everyMinutes: Math.max(1, Math.min(1440, Number(every[1]))),
     };
   }
   if (/\b(every\s+(day|morning)|daily|each\s+(day|morning))\b/i.test(text)) {

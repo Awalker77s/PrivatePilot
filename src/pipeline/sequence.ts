@@ -14,7 +14,12 @@ import {
   mergePermissionManifests,
   normalizeAutomation,
 } from "../storage/revisions";
-import type { AutomationRecord, ChainLink, ChainRecord } from "../storage/types";
+import type {
+  AutomationRecord,
+  ChainLink,
+  ChainRecord,
+  ChainStep,
+} from "../storage/types";
 
 // The order of a sequence is the order the person said it. Templates match
 // in their own order ("the solana price and the world news" can come back
@@ -44,6 +49,116 @@ export function orderByMention(
     .map((record, i) => ({ record, i, at: at(record) }))
     .sort((a, b) => a.at - b.at || a.i - b.i)
     .map((x) => x.record);
+}
+
+// Outputs of one job that match inputs of the next, by name. Both chain
+// shapes carry the same map, so both build it the same way.
+function mapBetween(
+  from: AutomationRecord | undefined,
+  to: AutomationRecord
+): Record<string, string> {
+  if (!from) return {};
+  return Object.fromEntries(
+    to.inputs
+      .filter((input) => from.outputs.some((o) => o.name === input.name))
+      .map((input) => [input.name, input.name])
+  );
+}
+
+// The end of a sequence. In links form that is the job nothing leads away
+// from; in steps form it is every step no other step waits on — plural when
+// the workflow branched, which is why an appended step can need "any".
+function tailOf(chain: ChainRecord): string[] {
+  if (chain.steps?.length) {
+    const waited = new Set(chain.steps.flatMap((s) => s.after));
+    const ends = chain.steps.filter((s) => !waited.has(s.id)).map((s) => s.id);
+    return ends.length ? ends : [chain.steps[chain.steps.length - 1].id];
+  }
+  const froms = new Set(chain.links.map((l) => l.from));
+  const ends = chain.links.map((l) => l.to).filter((to) => !froms.has(to));
+  return ends.length ? [ends[ends.length - 1]] : [];
+}
+
+// Grow a sequence that already exists, rather than rebuilding it from
+// scratch. "also add the tesla check to that one" is how people actually
+// extend a workflow, and rebuilding would drop the chain's history and its
+// pinned member revisions. Returns null when there is nothing new to add.
+export function appendToSequence(
+  chain: ChainRecord,
+  additions: AutomationRecord[],
+  lookup: (id: string) => AutomationRecord | undefined
+): ChainRecord | null {
+  const present = new Set(
+    chain.steps?.length
+      ? chain.steps.map((s) => s.automationId)
+      : chain.links.flatMap((l) => [l.from, l.to])
+  );
+  // A job already in the chain would be a second visit, which the dispatcher
+  // rejects as a cycle. Silently skipping it is the honest read of "add X"
+  // when X is already there.
+  const fresh = additions
+    .filter((a, i) => additions.findIndex((x) => x.id === a.id) === i)
+    .filter((a) => !present.has(a.id))
+    .map((a) => normalizeAutomation(a));
+  if (!fresh.length) return null;
+
+  const next: ChainRecord = {
+    ...chain,
+    links: [...chain.links],
+    steps: chain.steps ? [...chain.steps] : undefined,
+  };
+
+  if (next.steps?.length) {
+    let anchors = tailOf(chain);
+    let previousId = anchors.length === 1 ? stepAutomationId(next.steps, anchors[0]) : undefined;
+    let n = next.steps.length;
+    for (const add of fresh) {
+      const id = `s${++n}`;
+      next.steps.push({
+        id,
+        automationId: add.id,
+        after: anchors,
+        // Joining several branch ends means "after whichever one ran".
+        needs: anchors.length > 1 ? "any" : "all",
+        when: "ran",
+        ifAnswerContains: null,
+        ifAnswerLacks: null,
+        map: mapBetween(previousId ? lookup(previousId) : undefined, add),
+      } satisfies ChainStep);
+      anchors = [id];
+      previousId = add.id;
+    }
+  } else {
+    let previousId = tailOf(chain)[0];
+    for (const add of fresh) {
+      if (previousId) {
+        next.links.push({
+          from: previousId,
+          to: add.id,
+          map: mapBetween(lookup(previousId), add),
+          onlyWhen: null,
+        });
+      }
+      previousId = add.id;
+    }
+  }
+
+  const members = [...present]
+    .map((id) => lookup(id))
+    .filter((m): m is AutomationRecord => Boolean(m))
+    .map((m) => normalizeAutomation(m))
+    .concat(fresh);
+  next.components = members.map((m) => ({
+    automationId: m.id,
+    revisionId: m.revision!.id,
+    revisionNumber: m.revision!.number,
+  }));
+  next.permissions = mergePermissionManifests(members);
+  return next;
+}
+
+function stepAutomationId(steps: ChainStep[], stepId: string): string | undefined {
+  return steps.find((s) => s.id === stepId)?.automationId;
 }
 
 export function sequenceFrom(

@@ -110,7 +110,7 @@ function deterministicEditPatch(
     return {
       schedule: {
         trigger: "watch",
-        everyMinutes: Math.max(5, Math.min(1440, Number(watch[1]))),
+        everyMinutes: Math.max(1, Math.min(1440, Number(watch[1]))),
       },
     };
   }

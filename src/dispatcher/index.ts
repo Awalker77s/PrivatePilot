@@ -32,7 +32,11 @@ export function initDispatcher(): void {
   });
 }
 
-const HOP_CAP = 3;
+// A safety net against a runaway workflow, not a design limit on how much a
+// person may automate. Chains are also bounded at runtime by the record's own
+// timeoutMinutes, so a long chain is long, not unbounded. Kept finite because
+// a cycle that slipped past the toposort should still terminate.
+const HOP_CAP = 25;
 
 export class ChainCycleError extends Error {
   constructor(public sentence: string) {
@@ -72,7 +76,7 @@ export function assertNoCycle(
   }
 }
 
-const STEP_CAP = 8;
+const STEP_CAP = 25;
 
 // Branching chains: unknown refs, cycles (Kahn's toposort), caps — all
 // refused at save with the problem named in words.

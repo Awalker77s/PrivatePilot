@@ -70,7 +70,7 @@ export function buildWireSchema(catalog: Catalog) {
       }),
       z.strictObject({
         trigger: z.literal("watch"),
-        everyMinutes: z.int().min(5).max(1440),
+        everyMinutes: z.int().min(1).max(1440),
       }),
       z.strictObject({ trigger: z.literal("manual") }),
     ]),
@@ -450,11 +450,14 @@ export function buildWireSchema(catalog: Catalog) {
             });
           }
         }
-        if (v.chain.links.length > 3) {
+        // Matches HOP_CAP in the dispatcher. A drafted chain longer than this
+        // is far more likely to be the model looping than a person's actual
+        // request, so it is refused at compile rather than at run.
+        if (v.chain.links.length > 25) {
           ctx.addIssue({
             code: "custom",
             path: ["chain", "links"],
-            message: "Chains cap at 3 hops.",
+            message: "Chains cap at 25 hops.",
           });
         }
         const known = (n: string) =>

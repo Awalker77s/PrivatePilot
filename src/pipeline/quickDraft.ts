@@ -4,7 +4,7 @@ import type { WireAutomation, WireDraft } from "./draft/schema";
 export interface QuickQuestion {
   asking: string;
   term: string;
-  kind: "other";
+  kind: "file" | "folder" | "other";
   options: { label: string; value: string }[];
 }
 

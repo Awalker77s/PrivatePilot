@@ -145,7 +145,14 @@ export function formatForPath(display: string): string {
 
 export async function buildCatalog(): Promise<Catalog> {
   await loadSettings();
-  const folderSpecs: { label: string; real: string; display: string }[] = [];
+  const folderSpecs: {
+    label: string;
+    real: string;
+    display: string;
+    recursive: boolean;
+  }[] = [];
+  const fwd = (path: string) =>
+    path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
   const tryDir = async (
     label: string,
@@ -157,6 +164,7 @@ export async function buildCatalog(): Promise<Catalog> {
         label,
         real: real.replace(/[\\/]+$/, ""),
         display: `~/${label}`,
+        recursive: false,
       });
     } catch {
       // folder genuinely unavailable on this machine — simply absent
@@ -170,7 +178,6 @@ export async function buildCatalog(): Promise<Catalog> {
   // A picked folder displays relative to home when it sits under a standard
   // folder (~/Downloads/receipts), so the model sees a resolvable path — a
   // "~/…/x" abbreviation reads as out-of-scope to a small model.
-  const fwd = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   const knownReals = folderSpecs.map((f) => ({ realFwd: fwd(f.real), display: f.display }));
   for (const picked of getSettings().pickedFolders) {
     const norm = picked.replace(/[\\/]+$/, "");
@@ -180,7 +187,7 @@ export async function buildCatalog(): Promise<Catalog> {
     const display = parent
       ? `${parent.display}/${pf.slice(parent.realFwd.length + 1)}`
       : `~/…/${name}`;
-    folderSpecs.push({ label: name, real: norm, display });
+    folderSpecs.push({ label: name, real: norm, display, recursive: true });
   }
 
   }
@@ -189,41 +196,74 @@ export async function buildCatalog(): Promise<Catalog> {
   const files: CatalogFile[] = [];
   const displayToReal: Record<string, string> = {};
   const perFolder: CatalogFile[][] = [];
+  const seenFolderReals = new Set<string>();
+  const MAX_RECURSIVE_DEPTH = 3;
+  const MAX_FOLDERS_PER_ROOT = 50;
+  const SKIP_FOLDERS = new Set([
+    "node_modules",
+    "target",
+    "dist",
+    ".git",
+    ".pilot-versions",
+  ]);
 
   for (const spec of folderSpecs) {
-    let readable = true;
     const bucket: CatalogFile[] = [];
-    try {
-      const entries = await readDir(spec.real);
-      for (const e of entries) {
-        if (!e.isFile) continue;
-        if (e.name.startsWith(".") || e.name.startsWith("~$")) continue;
-        // Text formats the runner can read, PLUS image formats the OCR tool
-        // can turn into searchable text — both are automatable targets.
-        const ext = e.name.split(".").pop()?.toLowerCase() ?? "";
-        if (!(ext in FORMAT_BY_EXT) && !OCR_EXTS.has(ext)) continue;
-        if (bucket.length >= MAX_FILES_PER_FOLDER) break;
-        const display = `${spec.display}/${e.name}`;
-        const real = await join(spec.real, e.name);
-        bucket.push({
-          display,
-          real,
-          name: e.name,
-          ext,
-          folderDisplay: spec.display,
-        });
+    let foldersSeen = 0;
+    const scan = async (
+      real: string,
+      display: string,
+      label: string,
+      depth: number
+    ): Promise<void> => {
+      const realKey = fwd(real);
+      if (seenFolderReals.has(realKey)) return;
+      seenFolderReals.add(realKey);
+      let entries;
+      try {
+        entries = await readDir(real);
+      } catch {
+        folders.push({ display, real, label, readable: false });
+        displayToReal[display] = real;
+        return;
       }
-    } catch {
-      readable = false; // surfaced as the "Folder unreadable" designed state
-    }
+      folders.push({ display, real, label, readable: true });
+      displayToReal[display] = real;
+
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") || entry.name.startsWith("~$")) continue;
+        const entryReal = await join(real, entry.name);
+        const entryDisplay = `${display}/${entry.name}`;
+        if (entry.isFile) {
+          // Text formats the runner can read, PLUS image formats the OCR tool
+          // can turn into searchable text — both are automatable targets.
+          const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
+          if (!(ext in FORMAT_BY_EXT) && !OCR_EXTS.has(ext)) continue;
+          if (bucket.length >= MAX_FILES_PER_FOLDER) continue;
+          bucket.push({
+            display: entryDisplay,
+            real: entryReal,
+            name: entry.name,
+            ext,
+            folderDisplay: display,
+          });
+          continue;
+        }
+        if (
+          !spec.recursive ||
+          !entry.isDirectory ||
+          depth >= MAX_RECURSIVE_DEPTH ||
+          foldersSeen >= MAX_FOLDERS_PER_ROOT ||
+          SKIP_FOLDERS.has(entry.name.toLowerCase())
+        ) {
+          continue;
+        }
+        foldersSeen++;
+        await scan(entryReal, entryDisplay, entry.name, depth + 1);
+      }
+    };
+    await scan(spec.real, spec.display, spec.label, 0);
     perFolder.push(bucket);
-    folders.push({
-      display: spec.display,
-      real: spec.real,
-      label: spec.label,
-      readable,
-    });
-    displayToReal[spec.display] = spec.real;
   }
 
   // Round-robin across folders up to the total cap — a crowded Downloads

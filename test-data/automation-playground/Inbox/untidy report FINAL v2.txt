@@ -1,0 +1,13 @@
+SAMPLE PRODUCT RESEARCH NOTE
+
+Title: First-run onboarding review
+Written: August 13, 2026
+
+Five fictional testers completed the setup flow. Four finished without help.
+The median completion time was 2 minutes 36 seconds. The one tester who needed
+help did not understand that the local model had to be running before the first
+chat request.
+
+Recommendation: keep onboarding below three minutes, test the local model as
+part of setup, and give the person one button that explains and repairs common
+local-model connection problems.

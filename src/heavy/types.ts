@@ -8,7 +8,12 @@ import type { z } from "zod";
 import type { ToolDef } from "../providers/types";
 import type { Sandbox } from "../runner/sandbox";
 
-export type HeavyToolId = "bulk_rename" | "zip_folder" | "unzip" | "ocr_pdf";
+export type HeavyToolId =
+  | "bulk_rename"
+  | "move_files"
+  | "zip_folder"
+  | "unzip"
+  | "ocr_pdf";
 
 export type ToolFamily = "ok" | "on_purpose" | "needs_you" | "broke";
 

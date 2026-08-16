@@ -66,7 +66,7 @@ export function draftSystemPrompt(catalog: Catalog): string {
     "Heavy tools an automation can run on files in its folders (real work — the app builds the command, the model only fills the blanks):",
     heavyMenu(),
     "- An automation that does real file work MUST list the heavy tool in tools (the fence) AND name the folders in files. Heavy tools never touch the web, and a watcher may NEVER run one.",
-    "- 'rename/convert/zip/unzip/read a scanned or photographed document (OCR)' = a heavy tool + files fence + delivers files. Everything runs in a copy; the person keeps the results.",
+    "- 'rename/move/convert/zip/unzip/read a scanned or photographed document (OCR)' = a heavy tool + files fence + delivers files. Everything runs in a copy; the person keeps the results.",
     "",
     catalog.knowledgeBases.length > 0
       ? `Knowledge bases (searchable document collections) the person has built: ${catalog.knowledgeBases.join(", ")}.`

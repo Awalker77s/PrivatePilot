@@ -43,6 +43,7 @@ import {
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
+import { isDesktopApp } from "../platform";
 import { keepRun, putBackRun, runAutomation } from "../runner/run";
 import {
   appendRun,
@@ -423,6 +424,42 @@ function replace(id: number, item: ChatItem | null) {
   emit();
 }
 
+function explicitWindowsPath(text: string): string | null {
+  const quoted = text.match(/(["'`])([A-Za-z]:\\[^\r\n"'`]+)\1/);
+  if (quoted?.[2]) return quoted[2].trim();
+  const atEnd = text.match(/([A-Za-z]:\\[^\r\n"'`]+?)\s*[.!?]*\s*$/);
+  return atEnd?.[1]?.trim() ?? null;
+}
+
+// Naming an exact path in the request is the same narrow permission as
+// choosing it from the folder card. Register only an existing path; anything
+// malformed or missing falls through to the ordinary grounded question.
+async function rememberExplicitPath(text: string): Promise<void> {
+  if (!isDesktopApp()) return;
+  const path = explicitWindowsPath(text);
+  if (!path) return;
+  try {
+    const directory = await invoke<string>("allow_exact_path", { path });
+    if (!directory) return;
+    await updateSettings((settings) => {
+      if (!settings.pickedFolders.includes(directory)) {
+        settings.pickedFolders.push(directory);
+      }
+      settings.permissions ??= {
+        fullAccess: false,
+        approvedRevisions: {},
+        approvedWorkflowRevisions: {},
+        approvedDirectories: [],
+      };
+      if (!settings.permissions.approvedDirectories.includes(directory)) {
+        settings.permissions.approvedDirectories.push(directory);
+      }
+    });
+  } catch {
+    // The compile session will ask with real choices and a Choose button.
+  }
+}
+
 async function runCompile(context: DraftContext) {
   const controller = new AbortController();
   activePromptController = controller;
@@ -434,6 +471,7 @@ async function runCompile(context: DraftContext) {
     startedAt: Date.now(),
   });
   try {
+    await rememberExplicitPath(context.userText);
     const result = await compile(context, (stage, text) => {
       replace(progress.id, {
         ...(progress as ChatItem & { kind: "progress" }),

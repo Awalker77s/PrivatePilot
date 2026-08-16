@@ -6,7 +6,9 @@ const server = await createServer({
   server: { middlewareMode: true },
 });
 
+let assertionCount = 0;
 function assert(condition, message) {
+  assertionCount++;
   if (!condition) throw new Error(message);
 }
 
@@ -15,6 +17,9 @@ try {
     "/src/pipeline/quickDraft.ts"
   );
   const { DELTA_VERB_RE } = await server.ssrLoadModule("/src/ui/memory.ts");
+  const { isCompactReadRequest } = await server.ssrLoadModule(
+    "/src/pipeline/compactDraft.ts"
+  );
   const compile = (userText) =>
     tryQuickCompile({ userText, answers: [], history: undefined });
 
@@ -47,8 +52,35 @@ try {
     "stock prompt should use the no-key Nasdaq source"
   );
 
+  const mixedMarket = compile("Check Bitcoin and Tesla prices");
+  assert(
+    mixedMarket?.kind === "draft",
+    "the market starter should compile locally"
+  );
+  assert(
+    mixedMarket.draft.automations.length === 2,
+    "the market starter should build both Bitcoin and Tesla"
+  );
+
   const privateDiscord = compile("Check my unread Discord messages.");
   assert(privateDiscord?.kind === "question", "private Discord should ask instead of guessing");
+
+  const visibleDiscord = compile(
+    "Every morning at 9, check the Discord app messages shown on screen."
+  );
+  assert(
+    visibleDiscord?.kind === "draft" &&
+      visibleDiscord.draft.automations[0].apps.includes("computer"),
+    "a visible Discord app request should compile locally with the computer fence"
+  );
+
+  assert(
+    isCompactReadRequest({
+      userText: "Every morning at 9, open Notepad and tell me the first line shown.",
+      answers: [],
+    }),
+    "a simple custom screen-reading job should use the lightweight compiler"
+  );
 
   assert(
     !DELTA_VERB_RE.test("Every day at 7 PM, check Bitcoin and its 24-hour change."),
@@ -56,7 +88,7 @@ try {
   );
   assert(DELTA_VERB_RE.test("Make it 6 AM."), "an explicit schedule edit should look like an edit");
 
-  console.log("Quick regression suite passed (13 assertions)." );
+  console.log(`Quick regression suite passed (${assertionCount} assertions).`);
 } finally {
   await server.close();
 }

@@ -54,7 +54,7 @@ const SERVICES: Record<string, { host: string; label: string }> = {
   anthropic: { host: "status.anthropic.com", label: "Anthropic" },
 };
 
-function scheduleFrom(text: string): WireAutomation["schedule"] {
+export function scheduleFrom(text: string): WireAutomation["schedule"] {
   const every = text.match(/\bevery\s+(\d{1,4})\s+minutes?\b/i);
   if (every) {
     return {
@@ -253,6 +253,27 @@ function privateDiscordQuestion(): QuickCompileMatch {
   };
 }
 
+function discordScreenDraft(text: string): QuickCompileMatch {
+  const record = automation(text, {
+    name: "Discord Message Check",
+    sentence:
+      "Reads the visible Discord window and summarizes only the messages currently shown.",
+    category: "Notes",
+    steps: [
+      "read_app Discord",
+      "Answer with a concise summary of the messages visible in the Discord window",
+    ],
+    sources: [],
+    outputs: [],
+  });
+  record.apps = ["computer"];
+  return {
+    kind: "draft",
+    matched: ["visible Discord messages"],
+    draft: { automations: [record], chain: null, question: null },
+  };
+}
+
 function newsEmailBrief(text: string): QuickCompileMatch | null {
   if (
     !/\b(news|headlines?|stories)\b/i.test(text) ||
@@ -344,7 +365,12 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
     /\bdiscord\b/i.test(text) &&
     /\b(messages?|dms?|unread|channels?|servers?|inbox)\b/i.test(text) &&
     !/\b(status|down|outage|operational)\b/i.test(answerText);
-  if (discordPrivate) return privateDiscordQuestion();
+  if (discordPrivate) {
+    const visibleAppRequest =
+      /\b(app|application|window|screen|visible|shown|showing|desktop)\b/i.test(text) &&
+      !/\b(watch|monitor|every \d+ minutes?|click|type|send|reply|post)\b/i.test(text);
+    return visibleAppRequest ? discordScreenDraft(text) : privateDiscordQuestion();
+  }
 
   const automations: WireAutomation[] = [];
   const matched: string[] = [];
@@ -432,9 +458,14 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
 
   // NOT a bare "quote" — "a motivational quote", "a shipping quote" are not
   // stock asks, and the zero-ticker branch below would hijack the message.
-  const wantsStock = /\b(stock|share price|market price|stock price|stock quote)\b/i.test(text);
+  // A named company plus ordinary price language is unambiguous too. This is
+  // what keeps the built-in "Check Bitcoin and Tesla prices" request on the
+  // instant verified path even though a person naturally omits "stock".
+  const stocks = aliasesIn(lower, STOCKS);
+  const wantsStock =
+    /\b(stock|share price|market price|stock price|stock quote)\b/i.test(text) ||
+    (stocks.length > 0 && /\b(price|prices|worth|quote|quotes|value)\b/i.test(text));
   if (wantsStock) {
-    const stocks = aliasesIn(lower, STOCKS);
     // Only ASK when the stock request is the whole message — returning here
     // would throw away automations other templates already matched.
     if (stocks.length === 0 && automations.length === 0) {
@@ -478,7 +509,7 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
     }
   }
 
-  const wantsPrice = /\b(price|worth|quote)\b/i.test(text);
+  const wantsPrice = /\b(price|prices|worth|quote|quotes|value|values)\b/i.test(text);
   if (wantsPrice) {
     for (const coin of aliasesIn(lower, COINS).slice(0, 3)) {
       automations.push(

@@ -44,11 +44,90 @@ export async function validateLoop(
   let attempts = 1;
   let usedEscapeHatch = false;
 
+  // When the request touched no files, the catalog carries no file targets and
+  // files.reads/writes compile to z.never(). A model that names a file anyway
+  // has invented one — the closed catalog's whole point — and re-prompting it
+  // burns two more passes to be told the same thing. Dropping the invented
+  // path is the repair, and it is safe precisely because nothing on this
+  // machine could have satisfied it. Seen in the wild on "make a sequence of
+  // the bitcoin price and the weather in orlando", where a third automation
+  // appeared with files.writes[0] set and killed all three drafts.
+  const noFilesInPlay =
+    catalog.readTargets.length === 0 && catalog.writeTargets.length === 0;
+  // A full URL in `sources` is the model answering correctly in the wrong
+  // format — it knows the host, it just wrote the whole address. Re-prompting
+  // for that is a wasted pass and it recurs on almost every multi-job draft
+  // ("https://api.coingecko.com/api/v3/simple/price" where api.coingecko.com
+  // belongs). Take the hostname and move on; the fence still checks it.
+  const bareHost = (value: string): string => {
+    const raw = value.trim();
+    if (!raw.includes("/") && !raw.includes(":")) return raw;
+    try {
+      return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname;
+    } catch {
+      return raw;
+    }
+  };
+
+  const repairDraft = (value: unknown): unknown => {
+    if (!value || typeof value !== "object") return value;
+    const draft = value as { automations?: unknown };
+    if (!Array.isArray(draft.automations)) return value;
+    for (const automation of draft.automations) {
+      const a = automation as {
+        files?: { reads?: unknown; writes?: unknown };
+        sources?: unknown;
+      };
+      if (Array.isArray(a.sources)) {
+        a.sources = a.sources.map((s) => (typeof s === "string" ? bareHost(s) : s));
+      }
+      // When the request touched no files the catalog carries no file targets,
+      // so files.reads/writes compile to z.never(). A model that names a file
+      // anyway has invented one — the closed catalog's whole point — and
+      // dropping it is safe precisely because nothing on this machine could
+      // have satisfied it.
+      if (noFilesInPlay && a.files) {
+        if (Array.isArray(a.files.reads) && a.files.reads.length) a.files.reads = [];
+        if (Array.isArray(a.files.writes) && a.files.writes.length) a.files.writes = [];
+        // Heavy tools only ever act on a sandbox copy of named folders, so a
+        // heavy tool with no folders is not a smaller job — it is no job.
+        // Clearing files without clearing these would trade one validator
+        // complaint for another.
+        if (Array.isArray((a as { tools?: unknown[] }).tools))
+          (a as { tools: unknown[] }).tools = [];
+      }
+    }
+
+    // A link may only carry an output the next job actually takes as an input.
+    // The model reliably invents one plausible extra pair ("price" into a
+    // weather job), and an unmatched name is not a smaller hand-off — it is a
+    // name for nothing. Dropping it leaves the ORDER, which is what a sequence
+    // request asks for, and is exactly what sequenceFrom() builds by hand.
+    const chain = (value as { chain?: { links?: unknown } }).chain;
+    const links = chain?.links;
+    if (Array.isArray(links)) {
+      const inputsOf = (name: string): Set<string> => {
+        const found = (draft.automations as { name?: string; inputs?: { name?: string }[] }[])
+          .find((a) => a?.name === name);
+        return new Set((found?.inputs ?? []).map((i) => i?.name).filter(Boolean) as string[]);
+      };
+      for (const link of links) {
+        const l = link as { to?: string; map?: Record<string, string> };
+        if (!l?.map || typeof l.map !== "object" || !l.to) continue;
+        const allowed = inputsOf(l.to);
+        for (const key of Object.keys(l.map)) {
+          if (!allowed.has(key)) delete l.map[key];
+        }
+      }
+    }
+    return value;
+  };
+
   for (let pass = 1; pass <= 3; pass++) {
     let parsed: unknown;
     let prettified: string;
     try {
-      parsed = JSON.parse(content);
+      parsed = repairDraft(JSON.parse(content));
       const result = (pass === 3 ? lenientSchema : schema).safeParse(parsed);
       if (result.success) {
         argument.push(

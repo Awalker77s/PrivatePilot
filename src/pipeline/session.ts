@@ -519,14 +519,32 @@ export async function compile(
     valLog.finishedAt = Date.now();
     valLog.sentence =
       "Three drafts didn't line up — asking you instead of guessing.";
+    // Keep WHY. Without this the run records that three drafts failed and
+    // throws away the only thing that says what was wrong with them, which
+    // makes the same failure un-diagnosable the second time it happens.
+    if (outcome.lastError) {
+      valLog.lines.push({
+        at: Date.now(),
+        text: `Last validator complaint — ${outcome.lastError.replace(/\s+/g, " ").slice(0, 400)}`,
+        anchor: anchor(runId, anchorN++),
+      });
+    }
+    // Offering "Something in Downloads" for a job about a price or the weather
+    // is the same wrong-domain guess the file compiler used to make. Only
+    // offer folders when the request actually reached for files.
+    const wantsFiles = catalog.readTargets.length > 0;
     const question: CompileQuestion = {
-      asking: "What exactly should this automation work on?",
+      asking: wantsFiles
+        ? "What exactly should this automation work on?"
+        : "I couldn't get this into one clear automation — what should it do first?",
       term: context.userText,
       kind: "other",
-      options: catalog.folders
-        .filter((f) => f.readable)
-        .slice(0, 3)
-        .map((f) => ({ label: `Something in ${f.label}`, value: f.display })),
+      options: wantsFiles
+        ? catalog.folders
+            .filter((f) => f.readable)
+            .slice(0, 3)
+            .map((f) => ({ label: `Something in ${f.label}`, value: f.display }))
+        : [],
     };
     await updateRun(runId, (r) => {
       r.status = "needs_you";

@@ -13,10 +13,12 @@ import { readTextFile, writeTextFile, rename, exists, readDir, stat } from "@tau
 import { invoke } from "@tauri-apps/api/core";
 import { z } from "zod";
 import { runTool, findBinary } from "./runTool";
+import { readAnyFile } from "../runner/readFile";
 import type { HeavyContext, HeavyResult, HeavyToolSpec } from "./types";
 
 const IMG = /\.(png|jpe?g|tiff?|bmp|webp)$/i;
 const PDF = /\.pdf$/i;
+const READABLE = /\.(txt|md|markdown|csv|tsv|json|ya?ml|log|html?|docx|xlsx|xlsm|rtf)$/i;
 const LOW_CONF_CHARS = 20; // below this, a page came back unreadable — say so
 const DIGITAL_PDF_CHARS = 100; // per-doc chars above which a PDF already has text
 
@@ -96,8 +98,12 @@ export const realOcrRun = async (
     }
     if (isDir && sb) {
       const sep = display.includes("\\") ? "\\" : "/";
+      // Everything the app can READ belongs in a knowledge base, not just
+      // the things that need OCR — a folder of notes and spreadsheets was
+      // filed as an empty base before this.
       for (const e of await readDir(sb)) {
-        if (e.isFile && (IMG.test(e.name) || PDF.test(e.name))) targets.push(`${display}${sep}${e.name}`);
+        if (e.isFile && (IMG.test(e.name) || PDF.test(e.name) || READABLE.test(e.name)))
+          targets.push(`${display}${sep}${e.name}`);
       }
     } else {
       targets.push(display);
@@ -107,7 +113,7 @@ export const realOcrRun = async (
     return {
       ok: false,
       family: "on_purpose",
-      text: "No scanned images or PDFs were found to read.",
+      text: "No documents were found to read in those folders.",
       logLine: "ocr_pdf: no images/PDFs in the given files/folders.",
     };
   }
@@ -122,22 +128,55 @@ export const realOcrRun = async (
   // invoice.jpg) would both write invoice.txt and clobber each other. Track
   // used output stems and disambiguate with the source extension.
   const usedStems = new Set<string>();
+  // One unreadable document must not sink a whole folder. A corrupt or
+  // truncated PDF among fifty good ones used to abort the run and file
+  // nothing — the batch now steps over it and says so at the end.
+  const skipped: string[] = [];
 
   for (const display of targets) {
     if (!IMG.test(display) && !PDF.test(display)) {
-      return {
-        ok: false,
-        family: "on_purpose",
-        text: `${display} isn't a scan I can read — I read images (jpg, png, tiff) and PDFs.`,
-        logLine: `ocr_pdf: ${display} is not a supported type.`,
-      };
+      // A folder holds notes and spreadsheets as well as scans. These need
+      // no OCR — they already ARE text — but they were being dropped, so
+      // "file this folder into a knowledge base" quietly indexed only the
+      // pictures and then answered "I couldn't find that in your documents"
+      // about a note sitting right there. Read them straight in.
+      const plain = ctx.toSandbox(display);
+      if (!plain) {
+        skipped.push(`${display} is outside this automation's folders`);
+        continue;
+      }
+      try {
+        const read = await readAnyFile(plain);
+        const words = read.text.trim();
+        if (!words) {
+          skipped.push(`${display} had no readable text`);
+          continue;
+        }
+        const label = display.split("/").pop() ?? display;
+        allText.push(`=== ${label} ===
+${words}`);
+        // Write the text out beside the original, the same way OCR does:
+        // filing into a knowledge base indexes the .txt files a run KEEPS,
+        // so a document with no .txt was read and then silently dropped.
+        const { dir: tdir, stem: tstem, sep: tsep } = baseName(plain);
+        if (!/\.txt$/i.test(plain)) {
+          await writeTextFile(`${tdir}${tsep}${tstem}.txt`, words);
+        }
+        digitalCount++;
+        done.push(label);
+        ctx.runNote(`Read ${label} — already text, no scan needed.`);
+      } catch (error) {
+        skipped.push(`${display} — ${String(error).slice(0, 70)}`);
+      }
+      continue;
     }
     const src = ctx.toSandbox(display);
     if (!src) {
       return { ok: false, family: "on_purpose", text: `Refused — ${display} is outside this automation's folders.`, logLine: `ocr_pdf: ${display} outside fence.` };
     }
     if (!(await exists(src))) {
-      return { ok: false, family: "broke", text: `${display} isn't there to read.`, logLine: `ocr_pdf: ${display} missing in sandbox.` };
+      skipped.push(`${display} isn't there to read`);
+      continue;
     }
     const { dir, stem: rawStem, sep } = baseName(src);
     // Disambiguate a colliding stem with the source extension (invoice-pdf,
@@ -185,7 +224,9 @@ export const realOcrRun = async (
           outDir: `${dir}${sep}${stem}-pages`,
         })) as string[];
       } catch (e) {
-        return { ok: false, family: "broke", text: `Couldn't render ${stem} — ${String(e).slice(0, 100)}`, logLine: `ocr_pdf: rasterize failed on ${stem}.` };
+        skipped.push(`${stem} — ${String(e).slice(0, 80)}`);
+        ctx.runNote(`Skipped ${stem} — its pages wouldn't render.`);
+        continue;
       }
     }
     ctx.runNote(`Reading ${stem}…`);
@@ -221,7 +262,8 @@ export const realOcrRun = async (
       env: [["TESSDATA_PREFIX", tessdata]],
     });
     if (report.timed_out) {
-      return { ok: false, family: "broke", text: `Reading ${stem} took too long and was stopped. Nothing was kept.`, logLine: `ocr_pdf: ${stem} timed out.` };
+      skipped.push(`${stem} took too long to read`);
+      continue;
     }
     if (report.exit_code !== 0) {
       return {
@@ -272,21 +314,31 @@ export const realOcrRun = async (
   const lowNote = lowConf.length
     ? ` ${lowConf.length} came back unreadable (${lowConf.slice(0, 3).join(", ")}) — those pages need a clearer scan.`
     : "";
+  // Say which documents were stepped over and why — a silent skip is the
+  // one outcome worse than stopping.
+  const skipNote = skipped.length
+    ? ` Skipped ${skipped.length}: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? "…" : ""}.`
+    : "";
   const ocrCount = readable - digitalCount;
   // Say what actually happened — OCR only where a scan was read, and "already
   // had text" for the digital PDFs (no 300-DPI pass, no searchable copy made).
   let text: string;
   if (ocrCount > 0 && digitalCount > 0) {
-    text = `Read ${readable} of ${done.length} documents — ${ocrCount} scanned with OCR at 300 DPI (searchable copies made), ${digitalCount} already had text (indexed as-is).${lowNote} Everything's in a copy — you keep the results.`;
+    text = `Read ${readable} of ${done.length} documents — ${ocrCount} scanned with OCR at 300 DPI (searchable copies made), ${digitalCount} already had text (indexed as-is).${lowNote}${skipNote} Everything's in a copy — you keep the results.`;
   } else if (ocrCount > 0) {
-    text = `Read ${ocrCount} of ${done.length} document${done.length === 1 ? "" : "s"} with OCR at 300 DPI and made a searchable copy of each (in a copy — you keep the results).${lowNote}`;
+    text = `Read ${ocrCount} of ${done.length} document${done.length === 1 ? "" : "s"} with OCR at 300 DPI and made a searchable copy of each (in a copy — you keep the results).${lowNote}${skipNote}`;
   } else {
-    text = `${digitalCount} document${digitalCount === 1 ? "" : "s"} already had text — indexed as-is, no OCR needed (in a copy — you keep the results).${lowNote}`;
+    text = `${digitalCount} document${digitalCount === 1 ? "" : "s"} already had text — indexed as-is, no OCR needed (in a copy — you keep the results).${lowNote}${skipNote}`;
   }
   return {
     ok: readable > 0,
     family: readable > 0 ? "ok" : "on_purpose",
-    text: readable > 0 ? text : `None of the ${done.length} images had readable text after OCR — they may be too blurry or low-resolution.`,
+    text:
+      readable > 0
+        ? text
+        : done.length === 0 && skipped.length > 0
+          ? `Couldn't read any of these documents. ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? "…" : ""}.`
+          : `None of the ${done.length} images had readable text after OCR — they may be too blurry or low-resolution.`,
     corpusText: allText.join("\n\n"),
     logLine: `ocr_pdf: OCR'd ${done.length} image${done.length === 1 ? "" : "s"} in the sandbox — ${readable} readable, ${pdfs} searchable PDF${pdfs === 1 ? "" : "s"} made. Nothing left this computer.`,
     producedNote: `${readable} searchable`,

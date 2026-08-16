@@ -369,9 +369,12 @@ function ChainStrip({
                 <CategoryGlyph category={m.category} size={22} />
                 <div>
                   <div className="tile-name">{m.name}</div>
-                  <div className="status-line">
+                  {/* No character slice: cutting at 34 left words guillotined
+                      mid-letter ("…62989 USD. 24"). The line is bounded and
+                      faded in CSS instead, which follows the real width. */}
+                  <div className="status-line status-fade">
                     {m.lastRun
-                      ? `${m.lastRun.status === "ok" ? "✓" : m.lastRun.status === "broke" ? "✕" : "●"} ${m.lastRun.summary.slice(0, 34)}`
+                      ? `${m.lastRun.status === "ok" ? "✓" : m.lastRun.status === "broke" ? "✕" : "●"} ${m.lastRun.summary}`
                       : m.outputs.length
                         ? `hands back ${m.outputs.map((o) => o.name.replace(/_/g, " ")).join(", ")}`
                         : "never run"}

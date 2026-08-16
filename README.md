@@ -1,5 +1,8 @@
 # Private Pilot
 
+[![verify](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml/badge.svg)](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Automations that never leave your computer.** Describe a job in plain
 English; a model running on your own machine compiles it into an **automation
 record you can read**, then runs it behind a fence written in code — not in a
@@ -17,6 +20,7 @@ about where compute happened.
 | **Stack** | Tauri v2 · React 19 · TypeScript · Rust · Ollama · Featherless.ai |
 | **Size** | ~26,000 lines across 100 source files |
 | **Platform** | Windows 11 (WebView2) |
+| **Team** | Alexander Walker · Mustapha324 · Ryan Schlosbon |
 | **License** | [MIT](LICENSE) |
 | **Built** | entirely inside the 48-hour window — first commit [`54ec863`](https://github.com/Awalker77s/PrivatePilot/commit/54ec863) at 6:27 PM CST, 27 minutes after kickoff; 97 commits, [full history](https://github.com/Awalker77s/PrivatePilot/commits/main) |
 

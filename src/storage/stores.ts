@@ -296,22 +296,11 @@ export function automationVersions(id: string): AutomationRecord[] {
   return state.automations.versions[id] ?? [];
 }
 
-// Put-it-back: restore the newest kept version (it becomes current; the
-// replaced current is itself versioned so redo works).
-export async function restoreVersion(id: string): Promise<boolean> {
-  const versions = state.automations.versions[id] ?? [];
-  const prev = versions[0];
-  if (!prev) return false;
-  const file = state.automations;
-  const idx = file.records.findIndex((r) => r.id === id);
-  if (idx < 0) return false;
-  const current = file.records[idx];
-  file.records[idx] = prev;
-  file.versions[id] = [current, ...versions.slice(1)].slice(0, VERSIONS_KEPT);
-  await persistStore("automations", file);
-  emit();
-  return true;
-}
+// (Put-it-back used to pop versions[0] here — wrong twice over: a rename
+// keeps no version since name is outside the content hash, and versions[0]
+// may not be the card's before. revertEdit now saves the card's own
+// before-record via saveAutomation, which also versions the replaced
+// current so redo stays possible.)
 
 // ---- chains ----
 export async function saveChain(record: ChainRecord): Promise<void> {

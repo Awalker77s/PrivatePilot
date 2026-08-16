@@ -6,10 +6,15 @@ import type { ToolDef } from "../providers/types";
 import type { Connector, ConnectorId, ConnectorStatus, ToolSpec } from "./types";
 import { computerConnector } from "./computer";
 import { gmailConnector } from "./gmail";
-import { outlookConnector } from "./outlook";
-import { spotifyConnector } from "./spotify";
 
-export const CONNECTORS: Connector[] = [outlookConnector, gmailConnector, spotifyConnector, computerConnector];
+// Outlook (classic desktop COM) and Spotify are NOT registered. Both were
+// built and neither works reliably enough to ship: Outlook reaches only the
+// classic desktop app over COM, which the new Outlook has replaced, and the
+// Spotify transport depends on a Windows media session that is not
+// dependable. Their modules stay in the tree — unregistering is the whole
+// removal, because everything downstream (the Settings list, the drafter's
+// app enum, tool binding, the fence) reads this array.
+export const CONNECTORS: Connector[] = [gmailConnector, computerConnector];
 export const CONNECTOR_IDS = CONNECTORS.map((c) => c.id) as [ConnectorId, ...ConnectorId[]];
 
 export function connectorById(id: string): Connector | undefined {

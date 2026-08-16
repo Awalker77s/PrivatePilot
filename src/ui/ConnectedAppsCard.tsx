@@ -13,17 +13,11 @@ import { getSettings, updateSettings } from "../storage/settings";
 
 const ALLOW_KEY: Partial<Record<ConnectorId, "computerAllowed" | "outlookClassicAllowed" | "spotifyAllowed">> = {
   computer: "computerAllowed",
-  outlook: "outlookClassicAllowed",
-  spotify: "spotifyAllowed",
 };
 
-const CONSENT: Record<ConnectorId, string> = {
-  outlook:
-    "Reads your inbox and calendar from the classic Outlook app on this computer. Saves drafts into your Drafts folder — never sends. If Outlook shows its own permission dialog, click Allow there.",
+const CONSENT: Partial<Record<ConnectorId, string>> = {
   gmail:
     "Reads your Gmail over IMAP using an app password (Google Account → Security → 2-Step Verification → App passwords → generate one and paste it here). Personal Gmail only — Google no longer allows app passwords on Workspace accounts. Saves drafts into Gmail's Drafts; never sends; never marks mail as read.",
-  spotify:
-    "Reads what Spotify on this computer is playing, and can pause or skip. No Spotify account is involved.",
   computer:
     "Reads what an open app window shows — the same text a screen reader gets — one window at a time, only when an automation names it. Never password managers. It looks; it never clicks or types.",
 };
@@ -107,8 +101,8 @@ export function ConnectedAppsCard() {
         );
       })}
       <div className="caption" style={{ marginTop: 8 }}>
-        Coming next: a Microsoft-account connection so Outlook works from any
-        device (including the new Outlook), and more apps.
+        Reading is the default, and the only writes are drafts you send
+        yourself.
       </div>
     </div>
   );

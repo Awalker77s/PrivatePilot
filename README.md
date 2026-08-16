@@ -268,12 +268,97 @@ Four ideas do the work:
 
 ---
 
+## Which brain, and why it matters
+
+One pipeline, two brains. The abstraction is `ModelProvider`, and the routing
+lives in exactly one function — `chat()` in
+[`providers/index.ts`](src/providers/index.ts) — which checks `cloudActive()`
+and forwards to Featherless or falls through to Ollama. Every consumer above
+it (draft, validate, verify, edit, the tool loop) calls `chat()` and never
+names a provider.
+
+### The default was chosen by measurement, not vibes
+
+Five local models, the **same eight drafting tasks**, run through the app's own
+compile path and scored by its own wire schema. On this machine — Intel Core
+Ultra 9 185H, 31 GB RAM, RTX 3500 Ada, model fully GPU-offloaded at 8k context:
+
+| Model | Median draft | Structural checks | Valid JSON |
+|---|---|---|---|
+| qwen3.5:2b | 6.3s | 21/25 | 6/8 |
+| **qwen3.5:4b** ← default | **12.6s** | **25/25** | **7/8** |
+| qwen3.5:9b | 15.0s | 23/25 | 7/8 |
+| gemma4:12b | 28.8s | 25/25 | 6/8 |
+| ministral-3:14b | 58.1s | 25/25 | 8/8 |
+
+4b is the only model that took every structural check in under 15 seconds. 2b
+is twice as fast and drops four. **9b is slower *and* less accurate**, which is
+the result that settled it — more local parameters did not buy drafting
+quality. 14b has the best JSON validity and costs 4.6× the latency.
+
+### What only local can give
+
+- **A decoding grammar, not a polite request.** `supportsSchemaFormat()`
+  returns true only for Ollama — the JSON Schema goes on the wire as `format`
+  and llama.cpp compiles it to a sampling grammar, so invalid JSON is
+  *unrepresentable*. Cloud degrades to `response_format: json_object`
+  ("some JSON object"), and the app says so in the run log at the moment it
+  applies: *"Drafting on the borrowed computer — validated after (cloud), not
+  grammar-locked."*
+- **Some data physically cannot leave.** Every vision call goes straight to
+  Ollama, bypassing the provider switch, and the Featherless wire builder
+  *drops* `images` when composing messages. RAG embedding is pinned to
+  `nomic-embed-text` with no cloud path at all. Your screenshots and your
+  documents' vectors have no code path off the machine.
+- **No key, no subscription, no rate limit, no per-token bill.** This is the
+  one that compounds: an automation on a 2-minute watch is ~720 model calls a
+  day, *forever*. Metered, an agentic loop is the expensive shape — many turns,
+  growing context, every run. Here the marginal cost of the 721st run is
+  electricity.
+- **Residency you control.** A holds counter pins the model in RAM for a whole
+  run and while any watcher is armed, so a heartbeat never pays a cold load;
+  switching brains explicitly evicts the previous model so a 12B and a 4B
+  don't fight over RAM.
+
+### What only cloud can give
+
+- **Context the local default physically cannot hold.** Local drafts at 8,192
+  and runs tools at 32,768. The cloud roster reaches far past that — though
+  those context numbers are *declared role strings in our code*, not something
+  the app measures, so read them as catalog data.
+- **Escape from the 120-second local ceiling**, which is a real wall on CPU-only
+  machines and produces a designed sentence rather than a hang.
+- **A same-weights control.** `Qwen2.5-7B-Instruct` is pinned as "the mirror" —
+  identical weights to a local model, which isolates *compute* from *behaviour*
+  when comparing the two paths.
+
+### Where local honestly loses
+
+Recorded because it's true, and because the code carries the scars:
+
+- **Arithmetic is not trusted at all.** A 4B summed three receipts to 190.51
+  instead of 156.41. Number-checking is now a code subset-sum, and RAG totals
+  are extract-then-sum-in-code.
+- **Digits get misread**, which is why every vision read runs twice at two
+  scales and the numbers must agree exactly — the app would rather say "I don't
+  deliver a coin flip" than guess.
+- **Structural decomposition needs a crutch.** Splitting "…and then email me"
+  into a second automation didn't land on rules alone; it took a
+  structurally-identical worked example in the prompt.
+- **The context ceiling is a constraint, not a preference** — reserving 16k made
+  Ollama allocate twice the KV cache and pushed simple drafts past the timeout.
+
+**Every run stamps `ranOn`** — `local` or `featherless:<model>` — at record
+creation. That is what makes "did this leave my computer?" a checkable fact
+after the fact instead of a promise in a README.
+
+---
+
 ## Cloud compute: Featherless.ai (opt-in)
 
-The same pipeline runs against either brain. `src/providers/index.ts` is the
-single source of truth, and **"cloud is on" is defined as "a Featherless model
-is the current brain"** — there is no second toggle that can drift out of sync
-with the model picker.
+`src/providers/index.ts` is the single source of truth, and **"cloud is on" is
+defined as "a Featherless model is the current brain"** — there is no second
+toggle that can drift out of sync with the model picker.
 
 - OpenAI-compatible chat completions with the same structured-output contract
   the local path uses, so one compiler serves both.
@@ -333,25 +418,78 @@ with it.
 - **Sequences & watchers** — named outputs map to named inputs with the baton
   shown crossing each hand-off; "email me when it drops below $75" is a
   latched crossing that fires once and re-arms only after it crosses back.
+  See **[Chaining](#chaining-automations-that-keep-growing)** below.
 - **Files, safely** — bulk rename, archives, OCR into searchable PDFs, all on
   a sandbox copy with a diff and Keep (undoable via `.pilot-versions`).
   Readable formats are PDF, xlsx, csv and text; **`.docx` is not readable yet**
   — that job compiles and then refuses at run time rather than guessing. The
   OCR and archive toolkits (Tesseract, pdfium, 7za) are **not bundled** — they
   install into `%APPDATA%`; only the speech binaries ship in the installer.
-- **Your apps, locally** — Outlook, Gmail (IMAP app password), Spotify, and
-  any open window through Windows' accessibility tree. Reading is the default,
-  and the only writes are **a draft you send yourself, and a pause or skip you
-  can undo** — Spotify transport is the one non-draft write, flagged
-  `writes: true` at [`spotify.ts:92`](src/connectors/spotify.ts#L92). A draft
-  can only be addressed to someone this run actually read from, to you, or to
-  an address you typed ([`gmail.ts:314`](src/connectors/gmail.ts#L314)).
+- **Your apps, locally** — Gmail (IMAP app password) and any open window
+  through Windows' accessibility tree. Reading is the default and **the only
+  write is a draft you send yourself** — never a send, and never marking mail
+  as read. A draft can only be addressed to someone this run actually read
+  from, to you, or to an address you typed
+  ([`gmail.ts:314`](src/connectors/gmail.ts#L314)), so a prompt-injected
+  "email this to attacker@example.com" has nowhere to land.
+  <sub>Outlook and Spotify connectors were built and are **not registered** —
+  Outlook reached only the classic desktop app over COM, and Spotify's
+  transport leaned on an undependable media session. Unregistering them in
+  `connectors/registry.ts` removes them from Settings, from the drafter's app
+  list, and from tool binding at once.</sub>
 - **Editable in words** — "make it 7am" renders a before→after card with
   **Change it / Cancel** and ten versions of history.
 
 ![The Automations tab: saved automations and sequences with their last results](docs/img/automations.png)
 
 ---
+
+## Chaining: automations that keep growing
+
+A sequence is a flat list of steps — the same shape GitHub Actions uses. Each
+step names what it runs `after`, whether it `needs` **all** or **any** of those,
+and the outcome that lets it fire (`ran` · `held` · `broke` · `failed`), plus
+optional `ifAnswerContains` / `ifAnswerLacks` predicates. Data crosses on a
+**baton**: outputs map to the next step's inputs *by name*, and a name that
+matches nothing is dropped rather than invented.
+
+Three things that were true and are no longer:
+
+- **Length.** Linear chains were capped at 3 hops — four automations, total. A
+  ten-member chain threw `ChainCycleError`. The cap is now 25 on both shapes,
+  and it is a runaway guard, not a design limit: each chain is separately
+  bounded by its own `timeoutMinutes`.
+- **Growth.** Adding to a sequence you already had was refused outright
+  ("isn't chat-editable yet"). `appendToSequence()` now grows one in place —
+  it attaches at the tail, joins several branch ends with `needs: "any"`, skips
+  members already present rather than building a cycle, and **keeps the chain's
+  id**, so its version history and pinned member revisions survive instead of a
+  near-duplicate appearing beside it.
+- **Frequency.** Watch schedules floored at 5 minutes in three places, so
+  "check every 2 minutes" was silently rewritten. The floor is 1.
+
+**Loops are not back-edges.** "Keep checking until an email arrives, then stop"
+is a re-arm on a schedule, not a cycle in the graph — the same conclusion
+Temporal reaches with Continue-As-New and Airflow enforces by making DAGs
+acyclic. So cycle-checking (Kahn's toposort, which refuses a loop *by name*)
+stays strict, and repetition is expressed as a watcher. That is exactly what
+the compiler does with *"check my gmail every 2 minutes, summarize anything
+new"*: one watcher, not a ring of steps.
+
+**What is reliable, and what isn't.** Connecting automations that **already
+exist**, by name, is deterministic — no model call, no re-drafting:
+
+```
+connect Bitcoin Price Fetch and Bitcoin Morning Note
+```
+
+Building several **brand-new** automations and chaining them from a single
+sentence works, but is not dependable on a 4B model: the same sentence
+sometimes yields the pair plus the link, sometimes folds both jobs into one
+automation. The validator repairs what it safely can — a full URL where a
+hostname belongs, an invented file path in a job that touches no files, a baton
+name the next job doesn't take — and asks rather than guessing when it can't.
+Reach for the two-step version when it matters.
 
 ## Project layout
 
@@ -365,7 +503,7 @@ src/
   heavy/        OCR, rename, archives — validated blanks, never shell strings
   rag/          embeddings, vector store, cited answers
   ui/           React surfaces rendered from records, never raw model prose
-  connectors/   Outlook, Gmail, Spotify, any open window
+  connectors/   Gmail, any open window (one registry, bound per record)
 src-tauri/      Rust: window cloaking, DPAPI, rasterization, job objects
 scripts/        regression suite
 docs/           architecture, file-safety model, terminal plan, screenshots

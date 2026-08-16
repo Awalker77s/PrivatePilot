@@ -114,6 +114,7 @@ const TEMPLATE_VOCAB = new Set(
    was be do does what whats how when much many current currently live latest
    new newest right now today todays up top first best main again just only also
    still per out specifically exactly really actually maybe instead else
+   one two three four five six seven eight nine ten couple few several
    more other another next last sure ok okay thanks please regarding
    covering over across around related world
    every each daily day days morning mornings evening night hour hours hourly
@@ -153,6 +154,56 @@ function aliasKeysWhere<T>(
     .map(([key]) => key);
 }
 
+function requestedEditorialCount(text: string, noun: string, fallback: number): number {
+  const words: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+  };
+  const match = text.match(
+    new RegExp(
+      `\\b(\\d|one|two|three|four|five)\\s+(?:biggest|main|key|most important\\s+)?${noun}`,
+      "i"
+    )
+  );
+  if (!match) return fallback;
+  return Number(match[1]) || words[match[1].toLowerCase()] || fallback;
+}
+
+// The editorial vocabulary the finishing steps EXPRESS — when they fire, the
+// template really did account for these words, so the coverage guard must not
+// treat them as leftovers and hand the request to the model.
+// What the price templates actually REPORT — a request naming these is fully
+// answered by them ('the Tesla stock price and previous close', 'bitcoin and
+// its 24-hour change'), so they are covered, not leftovers.
+const PRICE_REPORT_WORDS =
+  'previous close change changes percent percentage percentages hour hours ' +
+  'daily market status last trade time current';
+
+export const EDITORIAL_WORDS =
+  'identify pick highlight rank important importance themes theme summarize ' +
+  'summarise summary summaries gist takeaways takeaway biggest main key most ' +
+  'strongest matters why each concise brief briefing';
+
+function newsFinishingSteps(text: string): string[] {
+  const steps: string[] = [];
+  if (/\b(identify|pick|highlight|rank)\b.*\bimportant\b/i.test(text)) {
+    const count = requestedEditorialCount(text, "(?:stories|headlines)", 3);
+    steps.push(
+      `Add a Most important section with the ${count} strongest stories and one sentence on why each matters`
+    );
+  }
+  if (/\b(themes?|summari[sz]e|summary|gist|takeaways?)\b/i.test(text)) {
+    const count = requestedEditorialCount(text, "themes?", 3);
+    steps.push(
+      `End with a Themes section covering the ${count} strongest recurring themes in plain words`
+    );
+  }
+  return steps;
+}
+
 function aliasesIn<T>(text: string, aliases: Record<string, T>): T[] {
   const found: T[] = [];
   const seen = new Set<T>();
@@ -168,13 +219,15 @@ function aliasesIn<T>(text: string, aliases: Record<string, T>): T[] {
 function newsAutomation(text: string, topic: string, label: string): WireAutomation {
   const count = requestedCount(text);
   const query = encodeURIComponent(topic).replace(/%20/g, "+");
+  const finishing = newsFinishingSteps(text);
   return automation(text, {
     name: `${label} Headlines`.split(/\s+/).slice(0, 4).join(" "),
-    sentence: `Fetches today's top ${count} ${label.toLowerCase()} headlines and lists them clearly.`,
+    sentence: `Fetches today's top ${count} ${label.toLowerCase()} headlines${finishing.length ? " and turns them into a concise briefing" : " and lists them clearly"}.`,
     category: "Notes",
     steps: [
       `GET https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`,
       `List the top ${count} headlines, one item per line`,
+      ...finishing,
     ],
     sources: ["news.google.com"],
     outputs: [],
@@ -200,6 +253,71 @@ function privateDiscordQuestion(): QuickCompileMatch {
   };
 }
 
+function newsEmailBrief(text: string): QuickCompileMatch | null {
+  if (
+    !/\b(news|headlines?|stories)\b/i.test(text) ||
+    !/\b(email|e-mail|mail)\b/i.test(text)
+  ) {
+    return null;
+  }
+  const label = /\b(ai|artificial intelligence)\b/i.test(text)
+    ? "AI"
+    : /\bsports?\b/i.test(text)
+      ? "Sports"
+      : /\b(tech|technology)\b/i.test(text)
+        ? "Tech"
+        : "News";
+  const topic = label === "AI" ? "artificial intelligence" : label.toLowerCase();
+  const source = newsAutomation(text, topic, label);
+  source.name = `${label} News Brief`;
+  source.sentence = `Builds a ${requestedCount(text)}-story ${label.toLowerCase()} briefing and identifies what matters most.`;
+  source.outputs = [{ name: "headlines" }];
+
+  const email: WireAutomation = {
+    ...automation("", {
+      name: `${label} Email Brief`,
+      sentence: `Drafts a concise email from the ${label.toLowerCase()} news briefing, with links and why each story matters.`,
+      category: "Email",
+      steps: [
+        "Draft a short email with a specific subject line",
+        "Use {headlines} as the source material",
+        "Keep the links and add one concise why-it-matters line per highlighted story",
+      ],
+      sources: [],
+      outputs: [],
+    }),
+    inputs: [
+      {
+        name: "headlines",
+        label: "News briefing",
+        example: "Five verified headlines with links",
+      },
+    ],
+    schedule: { trigger: "manual" },
+  };
+
+  return {
+    kind: "draft",
+    matched: [`${label} news email brief`],
+    draft: {
+      automations: [source, email],
+      chain: {
+        name: `${label} News to Email`,
+        links: [
+          {
+            from: source.name,
+            to: email.name,
+            map: [{ output: "headlines", input: "headlines" }],
+            onlyWhen: null,
+          },
+        ],
+        steps: [],
+      },
+      question: null,
+    },
+  };
+}
+
 // Common public-data requests have a stable, keyless source and a fixed record
 // shape. Compile those locally in milliseconds; the model remains available
 // for requests that actually need interpretation, files, chains, or edits.
@@ -210,9 +328,13 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
   const text = `${original} ${answerText}`.trim();
   const lower = text.toLowerCase();
 
+  const emailBrief = newsEmailBrief(text);
+  if (emailBrief) return emailBrief;
+
   if (
     /\b(file|folder|document|pdf|spreadsheet|sheet|excel|invoice|receipt|ledger)\b/i.test(text) ||
-    /\b(email me|send me|text me|draft (an? )?(email|message)|then message)\b/i.test(text) ||
+    /\b(email|e-mail|mail me|send me|text me|message me|draft me|draft (an? )?(email|message))\b/i.test(text) ||
+    /\b(then|after that|hand[ -]?off)\b/i.test(text) ||
     /\b(edit|rename|delete|remove|put it back|make it \d|change (it|my|the))\b/i.test(text)
   ) {
     return null;
@@ -229,9 +351,14 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
   // Words this template path actually accounted for — checked at the end so a
   // canned automation never stands in for a request it only half-matched.
   const consumed: string[] = [];
+  // If the editorial finishing steps fire, the template DID express those
+  // words ("highlight the two most important", "summarize the themes") — they
+  // are covered, not leftovers.
+  const consumedEditorial = newsFinishingSteps(text).length > 0;
 
   const wantsNews = /\b(news|headlines?|stories)\b/i.test(text);
   const wantsTech = wantsNews && /\b(tech|technology|hacker news)\b/i.test(text);
+  const wantsAi = wantsNews && /\b(ai|artificial intelligence)\b/i.test(text);
   const wantsSports = wantsNews && /\bsports?\b/i.test(text);
   // A topic qualifier ("news on Claude", "news specifically about rust") must
   // never be dropped — serving the generic template for a specific ask is the
@@ -242,17 +369,24 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
   const aboutTopic = aboutMatch?.[1]?.trim().replace(/[.!?]+$/, "");
   if (wantsTech) {
     const count = requestedCount(text);
+    // Both hardenings apply: a topic qualifier searches HN for that topic
+    // (never the generic front page), and either shape gets the editorial
+    // finishing steps when the person asked for importance/themes.
+    const finishing = newsFinishingSteps(text);
+    const briefing = finishing.length
+      ? " and turns them into a concise briefing"
+      : " and lists them clearly";
     if (aboutTopic && !/^(tech|technology)$/i.test(aboutTopic)) {
-      // Topic-qualified tech news: search Hacker News for the topic.
       const label = aboutTopic.replace(/\b\w/g, (c) => c.toUpperCase());
       automations.push(
         automation(text, {
           name: `${label} Tech News`.split(/\s+/).slice(0, 4).join(" "),
-          sentence: `Fetches today's top ${count} tech stories about ${aboutTopic} and lists them clearly.`,
+          sentence: `Fetches today's top ${count} tech stories about ${aboutTopic}${briefing}.`,
           category: "Notes",
           steps: [
             `GET https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(aboutTopic).replace(/%20/g, "+")}&tags=story&hitsPerPage=${count}`,
             `List the top ${count} stories about ${aboutTopic}, one item per line with its link`,
+            ...finishing,
           ],
           sources: ["hn.algolia.com"],
           outputs: [],
@@ -264,11 +398,12 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
       automations.push(
         automation(text, {
           name: "Top Tech News",
-          sentence: `Fetches today's top ${count} technology stories and lists them clearly.`,
+          sentence: `Fetches today's top ${count} technology stories${briefing}.`,
           category: "Notes",
           steps: [
             `GET https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=${count}`,
             `List the top ${count} stories, one item per line`,
+            ...finishing,
           ],
           sources: ["hn.algolia.com"],
           outputs: [],
@@ -277,11 +412,17 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
       matched.push("tech headlines");
     }
   }
+  if (wantsAi) {
+    automations.push(newsAutomation(text, "artificial intelligence", "AI"));
+    matched.push("AI headlines");
+  }
   if (wantsSports) {
     automations.push(newsAutomation(text, "sports", "Sports"));
     matched.push("sports headlines");
   }
-  if (wantsNews && !wantsTech && !wantsSports) {
+  // Their AI branch, our topic capture (computed once above; "for" left out
+  // deliberately so "news for my newsletter" isn't read as a topic).
+  if (wantsNews && !wantsTech && !wantsAi && !wantsSports) {
     const topic = aboutTopic || (/\bworld\b/i.test(text) ? "world" : "top stories");
     const label = topic === "top stories" ? "Top" : topic.replace(/\b\w/g, (c) => c.toUpperCase());
     automations.push(newsAutomation(text, topic, label));
@@ -319,10 +460,11 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
           sentence: `Checks the current ${stock.label} stock price and previous close.`,
           category: "Money",
           steps: [
-            `GET https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(stock.symbol)}?interval=1d&range=1d`,
-            "Answer with the current price and previous close",
+            `GET https://api.nasdaq.com/api/quote/${encodeURIComponent(stock.symbol)}/info?assetclass=stocks`,
+            `GET https://api.nasdaq.com/api/quote/${encodeURIComponent(stock.symbol)}/summary?assetclass=stocks`,
+            "Answer with the current price, previous close, daily dollar and percentage change, market status, and last trade time",
           ],
-          sources: ["query1.finance.yahoo.com"],
+          sources: ["api.nasdaq.com"],
           outputs: [{ name: "price" }],
         })
       );
@@ -330,7 +472,8 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
       consumed.push(
         stock.label,
         stock.symbol,
-        ...aliasKeysWhere(STOCKS, (v) => v.symbol === stock.symbol)
+        ...aliasKeysWhere(STOCKS, (v) => v.symbol === stock.symbol),
+        PRICE_REPORT_WORDS
       );
     }
   }
@@ -355,7 +498,8 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
       consumed.push(
         coin.label,
         coin.id,
-        ...aliasKeysWhere(COINS, (v) => v.id === coin.id)
+        ...aliasKeysWhere(COINS, (v) => v.id === coin.id),
+        PRICE_REPORT_WORDS
       );
     }
   }
@@ -396,7 +540,10 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
   // words mean the person asked for something this template cannot express
   // ("...with summaries", "...about quantum", "...for my team") — hand the
   // whole request to the model instead of serving a near-miss.
-  const leftover = uncoveredWords(text, consumed);
+  const leftover = uncoveredWords(
+    text,
+    consumedEditorial ? [...consumed, EDITORIAL_WORDS] : consumed
+  );
   if (leftover.length > 0) return null;
   return {
     kind: "draft",

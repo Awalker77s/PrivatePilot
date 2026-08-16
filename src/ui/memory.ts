@@ -14,7 +14,7 @@ export interface EditTarget {
 
 // A follow-up that tweaks something, not a request for something new.
 export const DELTA_VERB_RE =
-  /\b(schedule|reschedule|rename|change|adjust|update|set|make it|move|switch|pause|resume|turn (it |this )?(on|off)|remove|delete|run (it|this|that)|use)\b/i;
+  /^\s*(?:About ".+?":\s*)?(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:schedule|reschedule|rename|change|adjust|update|set|make|move|switch|pause|resume|turn|remove|delete|run|use)\b/i;
 // Anaphora aimed at the focus card. A BARE "that" is a relative pronoun far
 // more often than a demonstrative ("a job THAT moves old downloads"), and a
 // trailing "it" is usually a new object ("put it on my drive") — so a bare

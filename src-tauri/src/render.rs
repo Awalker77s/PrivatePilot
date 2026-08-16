@@ -5,8 +5,14 @@
 //
 // Hard-won constraints honored here (researched against WebView2 issues):
 // - CapturePreview's completion handler NEVER fires on a hidden webview
-//   (WebView2Feedback #579) → the window is visible but parked offscreen,
-//   with occlusion-based throttling disabled at startup.
+//   (WebView2Feedback #579) → the window must keep WS_VISIBLE. But builder
+//   position() is silently ignored on Windows (measured: the window landed
+//   mid-screen at (179,22) for the whole render), so "parked offscreen" is
+//   not enough. The window is built hidden, DWM-CLOAKED (the compositor
+//   never draws it — no flash, no Alt-Tab), marked WS_EX_NOACTIVATE (can't
+//   steal focus), explicitly parked offscreen, and only THEN shown. With
+//   occlusion-based throttling disabled at startup, WebView2 keeps
+//   rendering and capturing under the cloak.
 // - Page-side timers are throttled when occluded → the settle check is
 //   HOST-driven polling, never page timers.
 // - ExecuteScript runs host-side on any origin with zero IPC exposure —
@@ -39,6 +45,36 @@ pub struct RenderResult {
     pub fence_blocks: Vec<String>,
     pub final_url: String,
     pub settle_ms: u64,
+}
+
+/// Make the reader window impossible to see BEFORE it is ever shown.
+/// - DWMWA_CLOAK: the compositor never draws it anywhere — no flash at
+///   creation, nothing on any monitor, no Alt-Tab entry — while the window
+///   keeps WS_VISIBLE, which WebView2 needs for CapturePreview.
+/// - WS_EX_NOACTIVATE: showing it can never yank focus from the user.
+/// - Parked at -32000 as belt and braces in case cloaking is unavailable.
+fn cloak_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::core::BOOL;
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+    };
+
+    let hwnd = window.hwnd().map_err(|e| format!("hwnd: {e}"))?;
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+        let cloak = BOOL(1);
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            &cloak as *const BOOL as *const _,
+            std::mem::size_of::<BOOL>() as u32,
+        )
+        .map_err(|e| format!("cloak: {e}"))?;
+    }
+    let _ = window.set_position(tauri::LogicalPosition::new(-32000.0, -32000.0));
+    Ok(())
 }
 
 fn host_allowed(sources: &[String], host: &str) -> bool {
@@ -240,9 +276,10 @@ async fn render_inner(
     let loaded_tx = Mutex::new(Some(loaded_tx));
 
     let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(parsed))
-        // Visible but parked far offscreen: CapturePreview never completes on
-        // hidden webviews, and this one code path serves text AND pixels.
-        .visible(true)
+        // Built hidden, cloaked, THEN shown — see the header comment. Shown
+        // because CapturePreview never completes on a hidden webview; cloaked
+        // because the compositor must never draw it on the user's screen.
+        .visible(false)
         .position(-32000.0, -32000.0)
         .inner_size(1280.0, 900.0)
         .skip_taskbar(true)
@@ -270,6 +307,14 @@ async fn render_inner(
         })
         .build()
         .map_err(|e| format!("Window:{e}"))?;
+
+    // Cloak BEFORE show: between build and show the window is SW_HIDE, so
+    // there is no instant where the screen could catch it.
+    if let Err(e) = cloak_window(&window) {
+        let _ = window.destroy();
+        return Err(format!("Cloak:{e}"));
+    }
+    let _ = window.show();
 
     let started = Instant::now();
 

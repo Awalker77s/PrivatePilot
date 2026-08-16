@@ -39,7 +39,7 @@
   "license": "MIT",
   "contributors": [
     "Alexander Walker",
-    "Mustapha Straton",
+    "Mustapha Strachan",
     "Ryan Schlosbon"
   ],
   "description": "Local-first desktop automation: a model on your machine compiles plain English into automation records you can read, then runs them behind a fence."

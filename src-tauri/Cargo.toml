@@ -2,7 +2,7 @@
 name = "private-pilot"
 version = "0.1.0"
 description = "Private Pilot — automations that never leave your computer"
-authors = ["Alexander Walker", "Mustapha Straton", "Ryan Schlosbon"]
+authors = ["Alexander Walker", "Mustapha Strachan", "Ryan Schlosbon"]
 edition = "2021"
 
 [lib]

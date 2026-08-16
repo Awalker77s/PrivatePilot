@@ -22,7 +22,7 @@ no server.</sub>
 | **Stack** | Tauri v2 · React 19 · TypeScript · Rust · Ollama · Featherless.ai |
 | **Size** | ~26,000 lines across 100 source files |
 | **Platform** | Windows 11 (WebView2) |
-| **Team** | Alexander Walker · Mustapha Straton · Ryan Schlosbon |
+| **Team** | Alexander Walker · Mustapha Strachan · Ryan Schlosbon |
 | **License** | [MIT](LICENSE) |
 | **Built** | entirely inside the 48-hour window — first commit [`54ec863`](https://github.com/Awalker77s/PrivatePilot/commit/54ec863) at 6:27 PM CST, 27 minutes after kickoff — [full history](https://github.com/Awalker77s/PrivatePilot/commits/main) |
 
@@ -577,8 +577,8 @@ a Zap *succeeded*, not what it *found*).
 
 ## Team
 
-Built by **Alexander Walker**, **Mustapha Straton**, and **Ryan Schlosbon**.
+Built by **Alexander Walker**, **Mustapha Strachan**, and **Ryan Schlosbon**.
 
 ## License
 
-[MIT](LICENSE) © 2026 Alexander Walker, Mustapha Straton, and Ryan Schlosbon
+[MIT](LICENSE) © 2026 Alexander Walker, Mustapha Strachan, and Ryan Schlosbon

@@ -23,6 +23,7 @@ import type { WireAutomation } from "./draft/schema";
 import { validateLoop } from "./validate";
 import { tryQuickCompile } from "./quickDraft";
 import { compactReadDraft } from "./compactDraft";
+import { mirrorHostsFor } from "../runner/mirrors";
 import {
   draftRevisionFor,
   mergePermissionManifests,
@@ -555,6 +556,11 @@ function assembleRecord(
   for (const p of [...a.files.reads, ...a.files.writes]) {
     formats[p] = formatForPath(p);
   }
+  // Backup sources ride along in the fence, not around it: when a source has
+  // a curated same-fact mirror, the record LISTS it, so the permission line
+  // the person approves already says "2 websites" and a run that meets bot
+  // protection can keep going without anything sneaking outside the fence.
+  const sources = [...a.sources, ...mirrorHostsFor(a.sources)];
   const record: AutomationRecord = {
     id: newId("auto"),
     name: a.name,
@@ -565,7 +571,7 @@ function assembleRecord(
     outputs: a.outputs,
     files: a.files,
     formats,
-    sources: a.sources,
+    sources,
     apps: a.apps,
     tools: a.tools,
     knowledge: a.knowledge,
@@ -574,7 +580,7 @@ function assembleRecord(
     model,
     effort: a.effort,
     compiledBy: model,
-    permissions: permissionManifestFor(a),
+    permissions: permissionManifestFor({ ...a, sources }),
     origin: context.demo
       ? {
           kind: "watched",

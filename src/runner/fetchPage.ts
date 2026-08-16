@@ -15,6 +15,10 @@ export interface FetchOutcome {
   sentence: string | null; // designed sentence when stopped
   family: "ok" | "on_purpose" | "broke";
   logLine: string;
+  // The site pushed us away rather than not having the data: a 403, a rate
+  // limit, a human-proof challenge. Worth trying the same fact elsewhere —
+  // unlike a fence refusal or a bad URL, where retrying is pointless.
+  blocked?: boolean;
 }
 
 export function hostnameOf(url: string): string | null {
@@ -134,17 +138,28 @@ export async function fetchPage(
     const sentence = timedOut
       ? `${host} didn't answer within 15 seconds.`
       : `Couldn't reach ${host}.`;
-    return { ok: false, text: sentence, sentence, family: "broke", logLine: sentence };
+    // Aggressive protection often drops the connection instead of answering
+    // 403, and a tarpit just never replies — both look like this. No data
+    // came back either way, so the same fact is worth asking for elsewhere.
+    return {
+      ok: false,
+      text: sentence,
+      sentence,
+      family: "broke",
+      logLine: sentence,
+      blocked: true,
+    };
   }
 
-  if (res.status === 403) {
-    const sentence = `${host} turned the request away (403). Some sites don't talk to programs.`;
+  if (res.status === 403 || res.status === 401) {
+    const sentence = `${host} turned the request away (${res.status}). Some sites don't talk to programs.`;
     return {
       ok: false,
       text: sentence,
       sentence,
       family: "on_purpose",
       logLine: sentence,
+      blocked: true,
     };
   }
   if (res.status === 429) {
@@ -156,11 +171,22 @@ export async function fetchPage(
       sentence,
       family: "on_purpose",
       logLine: sentence,
+      blocked: true,
     };
   }
   if (!res.ok) {
     const sentence = `${host} answered with an error (${res.status}).`;
-    return { ok: false, text: sentence, sentence, family: "broke", logLine: sentence };
+    // 5xx and the Cloudflare-family codes are the site pushing back, not the
+    // data being absent — the same fact may be a mirror away.
+    const pushback = res.status >= 500 || res.status === 418 || res.status === 451;
+    return {
+      ok: false,
+      text: sentence,
+      sentence,
+      family: "broke",
+      logLine: sentence,
+      blocked: pushback,
+    };
   }
 
   const ctype = res.headers.get("Content-Type") ?? "";
@@ -197,6 +223,20 @@ export async function fetchPage(
     text = await extractReadable(body, full);
   }
   const trimmed = text.length > TEXT_CAP ? text.slice(0, TEXT_CAP) : text;
+  // A challenge page answers 200 and contains no data — Cloudflare's "Just a
+  // moment", a JS/cookie demand, a human-proof puzzle. Treating that as a
+  // successful fetch hands the model an interstitial to summarize.
+  if (CHALLENGE_RE.test(trimmed.slice(0, 1500)) && trimmed.length < 3000) {
+    const sentence = `${host} answered with a "prove you're human" page instead of the content.`;
+    return {
+      ok: false,
+      text: sentence,
+      sentence,
+      family: "on_purpose",
+      logLine: sentence,
+      blocked: true,
+    };
+  }
   return {
     ok: true,
     text: trimmed,
@@ -205,6 +245,10 @@ export async function fetchPage(
     logLine: `Fetched ${host} — kept ${trimmed.length.toLocaleString()} characters.`,
   };
 }
+
+// Interstitials that mean "we blocked you", not "here is the page".
+const CHALLENGE_RE =
+  /just a moment|checking your browser|enable javascript and cookies|verify you are human|are you a robot|unusual traffic|access denied|attention required|cf-browser-verification|ddos protection by/i;
 
 // Shrink an oversized JSON body while keeping it VALID: clip long string
 // values, cap arrays, and re-serialize compactly. Two passes (gentle, then

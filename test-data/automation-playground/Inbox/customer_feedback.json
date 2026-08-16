@@ -1,0 +1,26 @@
+[
+  {
+    "id": "FB-101",
+    "rating": 5,
+    "theme": "exports",
+    "comment": "The result was useful, but make the CSV export action easier to find."
+  },
+  {
+    "id": "FB-102",
+    "rating": 3,
+    "theme": "watchers",
+    "comment": "Show whether my price watcher is armed, held back, or waiting to re-arm."
+  },
+  {
+    "id": "FB-103",
+    "rating": 4,
+    "theme": "appearance",
+    "comment": "Dark mode looks good, though secondary labels need more contrast."
+  },
+  {
+    "id": "FB-104",
+    "rating": 5,
+    "theme": "privacy",
+    "comment": "I like seeing that the run stayed on my computer."
+  }
+]

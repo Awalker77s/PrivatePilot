@@ -22,6 +22,7 @@ import { draftCall, draftMessages, DraftContext } from "./draft";
 import type { WireAutomation } from "./draft/schema";
 import { validateLoop } from "./validate";
 import { tryQuickCompile } from "./quickDraft";
+import { tryQuickFileCompile } from "./fileQuickDraft";
 import { compactReadDraft } from "./compactDraft";
 import {
   draftRevisionFor,
@@ -244,6 +245,82 @@ export async function compile(
     text: `Catalog: ${catalog.files.length} files across ${catalog.folders.length} folders, ${catalog.automationNames.length} existing automations.`,
     anchor: anchor(runId, anchorN++),
   });
+
+  // Common grounded file jobs are deterministic once a real catalog path is
+  // known. This path also returns the ordinary file/folder question card when
+  // the words are ambiguous, so Ollama never spends two minutes discovering
+  // that it needs the person to choose a folder.
+  const fileQuick = tryQuickFileCompile(context, catalog);
+  if (fileQuick) {
+    onProgress("draft", "Matching a safe file request…");
+    draftLog.status = "ok";
+    draftLog.finishedAt = Date.now();
+    draftLog.sentence = "Built from a grounded file template on this computer.";
+    draftLog.lines.push({
+      at: Date.now(),
+      text: `Matched: ${fileQuick.matched.join(", ")}. No drafting-model wait needed.`,
+      anchor: anchor(runId, anchorN++),
+    });
+
+    if (fileQuick.kind === "question") {
+      run.counters.questionCard = true;
+      await updateRun(runId, (record) => {
+        record.status = "needs_you";
+        record.finishedAt = Date.now();
+        record.summary = fileQuick.question.asking;
+      });
+      return {
+        ok: true,
+        automations: [],
+        chain: null,
+        question: fileQuick.question,
+        argument: [
+          "Matched the file action immediately and asked for a real catalog path instead of guessing.",
+        ],
+        failSentence: null,
+        runId,
+        keptToOneStep: false,
+      };
+    }
+
+    const assembled = fileQuick.draft.automations.map((automation) =>
+      assembleRecord(automation, "Private Pilot file quick path", context)
+    );
+    const validateLog: StageLog = {
+      stage: "validate",
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+      status: "ok",
+      lines: [
+        {
+          at: Date.now(),
+          text: "Checked every read/write path against the live file catalog and closed tool fence.",
+          anchor: anchor(runId, anchorN++),
+        },
+      ],
+      sentence: "Grounded file template - no model correction pass needed.",
+    };
+    stages.push(validateLog);
+    const summary = `Built "${assembled[0].name}" - waiting for a watched run`;
+    await updateRun(runId, (record) => {
+      record.status = "ok";
+      record.finishedAt = Date.now();
+      record.summary = summary;
+      record.automationId = assembled[0].id;
+    });
+    return {
+      ok: true,
+      automations: assembled,
+      chain: null,
+      question: null,
+      argument: [
+        "Matched a grounded file template - skipped the local AI drafting wait.",
+      ],
+      failSentence: null,
+      runId,
+      keptToOneStep: true,
+    };
+  }
 
   const model = cloudActive()
     ? getSettings().featherless.model

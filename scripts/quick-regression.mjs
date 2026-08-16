@@ -16,6 +16,12 @@ try {
   const { tryQuickCompile } = await server.ssrLoadModule(
     "/src/pipeline/quickDraft.ts"
   );
+  const { tryQuickFileCompile } = await server.ssrLoadModule(
+    "/src/pipeline/fileQuickDraft.ts"
+  );
+  const { parseQuickReadAll, parseQuickToolStep } = await server.ssrLoadModule(
+    "/src/runner/quickSteps.ts"
+  );
   const { DELTA_VERB_RE } = await server.ssrLoadModule("/src/ui/memory.ts");
   const { isCompactReadRequest } = await server.ssrLoadModule(
     "/src/pipeline/compactDraft.ts"
@@ -80,6 +86,104 @@ try {
       answers: [],
     }),
     "a simple custom screen-reading job should use the lightweight compiler"
+  );
+
+  // ---- instant grounded file jobs ----
+  const playgroundRoot = "C:\\Developer\\GitHub\\PrivatePilot\\test-data\\automation-playground";
+  const playgroundCatalog = {
+    folders: [
+      {
+        display: "~/…/automation-playground",
+        real: playgroundRoot,
+        label: "automation-playground",
+        readable: true,
+      },
+      {
+        display: "~/…/automation-playground/Inbox",
+        real: `${playgroundRoot}\\Inbox`,
+        label: "Inbox",
+        readable: true,
+      },
+      {
+        display: "~/…/automation-playground/Sorted/Invoices",
+        real: `${playgroundRoot}\\Sorted\\Invoices`,
+        label: "Invoices",
+        readable: true,
+      },
+    ],
+    files: [
+      {
+        display: "~/…/automation-playground/Inbox/Invoice ACME 1042.pdf",
+        real: `${playgroundRoot}\\Inbox\\Invoice ACME 1042.pdf`,
+        name: "Invoice ACME 1042.pdf",
+        ext: "pdf",
+        folderDisplay: "~/…/automation-playground/Inbox",
+      },
+    ],
+    automationNames: [],
+    readTargets: [
+      "~/…/automation-playground",
+      "~/…/automation-playground/Inbox",
+      "~/…/automation-playground/Sorted/Invoices",
+      "~/…/automation-playground/Inbox/Invoice ACME 1042.pdf",
+    ],
+    writeTargets: [
+      "~/…/automation-playground",
+      "~/…/automation-playground/Inbox",
+      "~/…/automation-playground/Sorted/Invoices",
+      "~/…/automation-playground/Inbox/Invoice ACME 1042.pdf",
+    ],
+    displayToReal: {},
+    apps: [],
+    knowledgeBases: [],
+  };
+  const fileCompile = (userText) =>
+    tryQuickFileCompile(
+      { userText, answers: [], history: undefined },
+      playgroundCatalog
+    );
+
+  const folderSummary = fileCompile(
+    `Make an automation that summarizes the test folder in this folder path ${playgroundRoot}`
+  );
+  assert(folderSummary?.kind === "draft", "an exact folder path should compile locally");
+  assert(
+    parseQuickReadAll(folderSummary.draft.automations[0].steps[0]) ===
+      "~/…/automation-playground",
+    "the folder summary should encode the cataloged root"
+  );
+
+  const namedFile = fileCompile("Summarize Invoice ACME 1042.pdf");
+  assert(namedFile?.kind === "draft", "a cataloged filename should compile locally");
+  assert(
+    namedFile.draft.automations[0].files.reads[0].endsWith("Invoice ACME 1042.pdf"),
+    "the filename summary should fence the exact file"
+  );
+
+  const renameFiles = fileCompile(
+    "Rename every PDF in Inbox to sample-invoice-{n}{ext}"
+  );
+  assert(renameFiles?.kind === "draft", "a patterned rename should compile locally");
+  assert(
+    parseQuickToolStep(renameFiles.draft.automations[0].steps[0])?.tool ===
+      "bulk_rename",
+    "the rename should encode one deterministic bulk_rename call"
+  );
+
+  const moveFiles = fileCompile("Move every PDF from Inbox to Invoices");
+  assert(moveFiles?.kind === "draft", "a two-folder move should compile locally");
+  const moveStep = parseQuickToolStep(moveFiles.draft.automations[0].steps[0]);
+  assert(moveStep?.tool === "move_files", "the move should encode move_files");
+  assert(
+    moveStep?.args.destination_folder ===
+      "~/…/automation-playground/Sorted/Invoices",
+    "the move destination should be the named catalog folder"
+  );
+
+  const missingFile = fileCompile("Summarize quarterly-plan-unknown.docx");
+  assert(
+    missingFile?.kind === "question" && missingFile.question.kind === "file",
+    "an unknown filename should ask with real file choices instead of calling the model"
   );
 
   assert(

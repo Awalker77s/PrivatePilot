@@ -15,6 +15,7 @@ import type { RunHandoff } from "../storage/types";
 import { heavyToolsFor, heavyAllowed } from "../heavy/registry";
 import { findBinary } from "../heavy/runTool";
 import type { HeavyContext, HeavyToolSpec } from "../heavy/types";
+import { parseQuickReadAll, parseQuickToolStep } from "./quickSteps";
 
 const CTX_GUARD = 0.85;
 
@@ -194,7 +195,7 @@ function systemPrompt(
       ? "INBOX TRIAGE: after ONE listing, judge urgency from each message's sender and subject alone. Open a message (…_read) ONLY if you will act on it — draft a reply or describe its details. NEVER open newsletters, promotions, receipts, social or security-alert emails — you already know from the subject that they need no reply. Open at most 3 messages total, then answer. Reading everything wastes the run."
       : "",
     heavy.length > 0
-      ? `Heavy tools you may run on files in your folders: ${heavyTools}. They do real work (rename, zip, read scanned documents) in a COPY — the person keeps or discards the results. Give only the folders/files and options; the app builds the command. After a heavy tool succeeds, answer plainly what it did.`
+      ? `Heavy tools you may run on files in your folders: ${heavyTools}. They do real work (rename, move, zip, read scanned documents) in a COPY — the person keeps or discards the results. Give only the folders/files and options; the app builds the command. After a heavy tool succeeds, answer plainly what it did.`
       : "",
     (record.knowledge ?? []).length > 0
       ? `To answer a question about the person's filed documents, call rag_ask{question} ONCE — it returns numbered passages from their "${(record.knowledge ?? [])[0]}" documents. Then answer ONLY from those passages, cite each fact like [1], and if the answer isn't in them reply exactly: "I couldn't find that in your documents." Use no outside knowledge.`
@@ -245,7 +246,10 @@ function systemPrompt(
 
 // Connector args are validated + coerced before anything runs; a bad call
 // goes back to the model as a plain sentence and costs a turn, never a crash.
-function argError(spec: ToolSpec, issues: { path: PropertyKey[]; message: string }[]): string {
+function argError(
+  spec: Pick<ToolSpec, "def">,
+  issues: { path: PropertyKey[]; message: string }[]
+): string {
   const what = issues
     .slice(0, 3)
     .map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`)
@@ -267,6 +271,127 @@ async function listSandboxFiles(sandbox: Sandbox, folderDisplay: string): Promis
   return names.length ? names.join("\n") : `${folderDisplay} is empty.`;
 }
 
+function emptyOutcome(): LoopOutcome {
+  return {
+    answer: "",
+    turns: 0,
+    corpus: "",
+    contextTrimmed: false,
+    recoveredCalls: 0,
+    refusals: [],
+    logLines: [],
+    stalled: false,
+    heldBack: null,
+    handoffs: [],
+    appsRead: 0,
+    heavyRan: false,
+  };
+}
+
+const SUMMARY_FILE_CAP = 30;
+const SUMMARY_CHAR_CAP = 22_000;
+
+// A grounded summary reads the selected file/tree in code, then makes one
+// ordinary completion. The previous agentic path spent one slow CPU model turn
+// just to list, another for every file, and another to answer.
+async function runDirectFileSummary(
+  record: AutomationRecord,
+  model: string,
+  sandbox: Sandbox,
+  onEvent: (event: LoopEvent) => void
+): Promise<LoopOutcome | null> {
+  const target = parseQuickReadAll(record.steps[0] ?? "");
+  if (!target) return null;
+  const sandboxTarget = toSandboxPath(sandbox, target);
+  const outcome = emptyOutcome();
+  if (!sandboxTarget) {
+    outcome.heldBack = `Refused - ${target} is outside this automation's folders.`;
+    outcome.refusals.push(outcome.heldBack);
+    return outcome;
+  }
+
+  const sections: string[] = [];
+  let characters = 0;
+  let filesRead = 0;
+  const walk = async (
+    path: string,
+    display: string,
+    depth: number
+  ): Promise<void> => {
+    if (filesRead >= SUMMARY_FILE_CAP || characters >= SUMMARY_CHAR_CAP) return;
+    let entries;
+    try {
+      entries = await readDir(path);
+    } catch {
+      try {
+        const read = await readAnyFile(path);
+        outcome.logLines.push(read.logLine);
+        if (!read.text.trim()) return;
+        const remaining = SUMMARY_CHAR_CAP - characters;
+        const kept = read.text.slice(0, remaining);
+        sections.push(`=== ${display} ===\n${kept}`);
+        characters += kept.length;
+        filesRead++;
+      } catch (error) {
+        outcome.logLines.push(`Skipped ${display} - ${String(error).slice(0, 100)}.`);
+      }
+      return;
+    }
+    if (depth > 4) return;
+    const sep = path.includes("\\") ? "\\" : "/";
+    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (filesRead >= SUMMARY_FILE_CAP || characters >= SUMMARY_CHAR_CAP) break;
+      if (entry.name.startsWith(".") || entry.name === ".pilot-versions") continue;
+      const childPath = `${path}${sep}${entry.name}`;
+      const childDisplay = `${display}/${entry.name}`;
+      if (entry.isDirectory) await walk(childPath, childDisplay, depth + 1);
+      else await walk(childPath, childDisplay, depth + 1);
+    }
+  };
+  await walk(sandboxTarget, target, 0);
+  outcome.corpus = sections.join("\n\n");
+  if (!outcome.corpus.trim()) {
+    outcome.heldBack = `Held back - I couldn't read any supported documents from ${target}.`;
+    return outcome;
+  }
+
+  onEvent({
+    text: `Fast file summary - read ${filesRead} file${filesRead === 1 ? "" : "s"}; writing one grounded answer...`,
+  });
+  const response = await chat({
+    model,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "Summarize only the supplied local files. Never invent a fact.",
+          "Start with one direct overview sentence.",
+          "Then group the useful details by filename using short Markdown bullets.",
+          "Call out deadlines, totals, statuses, blockers, and missing information when present.",
+          "Keep the answer easy to scan and end with: OUTPUTS: (none)",
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: `${outcome.corpus}\n\n---\nThe job: ${record.sentence}`,
+      },
+    ],
+    options: {
+      num_ctx: NUM_CTX_DRAFT,
+      max_tokens: 1000,
+      temperature: 0.1,
+      seed: 7,
+    },
+    think: false,
+  });
+  outcome.answer = response.content.trim();
+  outcome.turns = 1;
+  outcome.logLines.push(
+    `Read ${filesRead} file${filesRead === 1 ? "" : "s"} in code, then summarized them in one local-AI pass.`
+  );
+  return outcome;
+}
+
 export async function runToolLoop(
   record: AutomationRecord,
   model: string,
@@ -276,6 +401,15 @@ export async function runToolLoop(
   contextNote?: string
 ): Promise<LoopOutcome> {
   const startedAt = Date.now();
+  if (sandbox) {
+    const directSummary = await runDirectFileSummary(
+      record,
+      model,
+      sandbox,
+      onEvent
+    );
+    if (directSummary) return directSummary;
+  }
   const bound = bindTools(record, sandbox);
   // Online jobs carry no file corpus, so 16k is ample and substantially
   // quicker on CPU-only machines. File jobs retain the full 32k window.
@@ -307,20 +441,7 @@ export async function runToolLoop(
     },
     { role: "user", content: `Do the job now. ${record.sentence}` },
   ];
-  const outcome: LoopOutcome = {
-    answer: "",
-    turns: 0,
-    corpus: "",
-    contextTrimmed: false,
-    recoveredCalls: 0,
-    refusals: [],
-    logLines: [],
-    stalled: false,
-    heldBack: null,
-    handoffs: [],
-    appsRead: 0,
-    heavyRan: false,
-  };
+  const outcome = emptyOutcome();
   let filesRead = 0;
   let filesWritten = 0;
   const toolCtx: ToolContext = {
@@ -356,6 +477,41 @@ export async function runToolLoop(
         toSandbox: (display) => toSandboxPath(sandbox, display),
       }
     : null;
+
+  // Quick rename/move drafts encode one validated heavy call. Execute it
+  // directly in the sandbox instead of asking the model to rediscover the
+  // tool and arguments during a second slow request.
+  const encoded = parseQuickToolStep(record.steps[0] ?? "");
+  if (encoded) {
+    const spec = heavyByName.get(encoded.tool);
+    if (!spec || !heavyCtx) {
+      outcome.heldBack = heavyAllowed()
+        ? `Held back - ${encoded.tool} is not available for this automation.`
+        : "Turn on Heavy tasks in Settings to rename or move files. Changes still happen only in a copy.";
+      return outcome;
+    }
+    const checked = spec.params.safeParse(encoded.args);
+    if (!checked.success) {
+      outcome.heldBack = argError(spec, checked.error.issues);
+      return outcome;
+    }
+    onEvent({ text: `Running ${encoded.tool} in the sandbox copy...` });
+    const result = await spec.run(
+      checked.data as Record<string, unknown>,
+      heavyCtx
+    );
+    outcome.turns = 1;
+    outcome.logLines.push(result.logLine);
+    outcome.corpus = result.corpusText ?? result.text;
+    outcome.heavyRan = result.ok;
+    if (!result.ok) {
+      if (result.family === "on_purpose") outcome.refusals.push(result.text);
+      outcome.heldBack = result.text;
+      return outcome;
+    }
+    outcome.answer = `${result.text}\nOUTPUTS: (none)`;
+    return outcome;
+  }
   const boundNames = bound.defs.map((d) => d.function.name).join(", ");
   // A run that writes files needs room to emit whole-file content in one call.
   const writesFiles = (record.files?.writes?.length ?? 0) > 0;

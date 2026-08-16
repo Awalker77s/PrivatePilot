@@ -5,11 +5,13 @@
 import { getSettings } from "../storage/settings";
 import type { HeavyToolId, HeavyToolSpec } from "./types";
 import { bulkRenameTool } from "./bulkRename";
+import { moveFilesTool } from "./moveFiles";
 import { zipFolderTool, unzipTool } from "./archive";
 import { ocrPdfTool } from "./ocr";
 
 export const HEAVY_TOOLS: HeavyToolSpec[] = [
   bulkRenameTool,
+  moveFilesTool,
   zipFolderTool,
   unzipTool,
   ocrPdfTool,

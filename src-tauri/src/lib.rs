@@ -138,6 +138,43 @@ fn allow_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Register one exact path the person pasted into Chat. Native metadata is
+/// used because the webview cannot stat a brand-new path until it is in the fs
+/// scope. Returns the containing directory stored in the readable catalog.
+#[tauri::command]
+fn allow_exact_path(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let requested = PathBuf::from(path.trim());
+    if !requested.is_absolute() {
+        return Err("The pasted path is not absolute.".to_string());
+    }
+    let canonical = std::fs::canonicalize(&requested)
+        .map_err(|_| "The pasted file or folder does not exist.".to_string())?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|_| "The pasted file or folder could not be read.".to_string())?;
+    let directory = if metadata.is_dir() {
+        app.fs_scope()
+            .allow_directory(&canonical, true)
+            .map_err(|e| e.to_string())?;
+        canonical
+    } else if metadata.is_file() {
+        app.fs_scope()
+            .allow_file(&canonical)
+            .map_err(|e| e.to_string())?;
+        let parent = canonical
+            .parent()
+            .ok_or_else(|| "The pasted file has no containing folder.".to_string())?
+            .to_path_buf();
+        app.fs_scope()
+            .allow_directory(&parent, true)
+            .map_err(|e| e.to_string())?;
+        parent
+    } else {
+        return Err("The pasted path is not a regular file or folder.".to_string());
+    };
+    let display = directory.to_string_lossy().to_string();
+    Ok(display.strip_prefix(r"\\?\").unwrap_or(&display).to_string())
+}
+
 /// One attempt at an atomic write: temp file in the same directory, fsync,
 /// rename over the target. Retry policy (Defender/indexer lock backoff) lives
 /// in TypeScript where its failure state is designed UI.
@@ -356,6 +393,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             allow_folder,
             allow_file,
+            allow_exact_path,
             ollama_request,
             cancel_ollama_request,
             atomic_write,

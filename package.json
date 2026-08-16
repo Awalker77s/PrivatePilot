@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "test:quick": "node scripts/quick-regression.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "verify": "tsc --noEmit && node scripts/quick-regression.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
@@ -34,5 +35,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"
-  }
+  },
+  "license": "MIT",
+  "description": "Local-first desktop automation: a model on your machine compiles plain English into automation records you can read, then runs them behind a fence."
 }

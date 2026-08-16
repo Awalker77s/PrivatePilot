@@ -14,6 +14,11 @@ export class DirectEndpointError extends Error {
   }
 }
 
+function firstUrlIn(step: string): string | null {
+  const match = step.match(/https?:\/\/[^\s]+/);
+  return match ? match[0].replace(/[),.;]+$/, "") : null;
+}
+
 function firstUrl(record: AutomationRecord): string | null {
   for (const step of record.steps) {
     const match = step.match(/https?:\/\/[^\s]+/);
@@ -44,6 +49,18 @@ export async function runDirectEndpoint(
 ): Promise<DirectOutcome | null> {
   const url = firstUrl(record);
   if (!url) return null;
+
+  // This path formats ONE known response shape and cannot honour anything
+  // else the record asks for. A person who edits an automation to "also
+  // report the 24 hour change" gets a saved record, a changed card, and then
+  // the identical canned answer — the edit appears to work and does nothing.
+  // So the shortcut only applies while the record IS just the fetch: any
+  // instruction step beyond the URLs hands the job to the tool loop, which
+  // reads every step.
+  const instructionSteps = (record.steps ?? []).filter(
+    (step) => typeof step === "string" && step.trim() && !firstUrlIn(step)
+  );
+  if (instructionSteps.length > 0) return null;
 
   const kind = directKind(url);
   if (!kind) return null;

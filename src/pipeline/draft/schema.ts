@@ -152,6 +152,23 @@ export function buildWireSchema(catalog: Catalog) {
       const names = new Set(v.automations.map((a) => a.name));
       // Two automations sharing a name collapse at assemble (nameToId is
       // last-wins), so a chain runs one twice and orphans the other. Reject.
+      // The prompt says never re-create an existing automation; this is the
+      // enforcement. Without it a small model can echo a saved automation's
+      // name, the draft validates clean, and the person is handed the
+      // already-made one (two records sharing a name also make the older
+      // unreachable to name lookup).
+      const taken = new Set(
+        catalog.automationNames.map((existing) => existing.trim().toLowerCase())
+      );
+      v.automations.forEach((a, i) => {
+        if (taken.has(a.name.trim().toLowerCase())) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["automations", i, "name"],
+            message: `"${a.name}" already exists. This request is a DIFFERENT job — draft it from the request's own words and give it its own name.`,
+          });
+        }
+      });
       const lowerNames = v.automations.map((a) => a.name.trim().toLowerCase());
       v.automations.forEach((a, i) => {
         if (lowerNames.indexOf(a.name.trim().toLowerCase()) !== i) {
@@ -538,10 +555,24 @@ export function validateEditedAutomation(
     schedule: unknown;
     effort: string;
   },
-  catalog: Catalog
+  catalog: Catalog,
+  // The record BEFORE the patch. An edit is judged on what it changed — a
+  // flaw the record already had (a {token} with no fill-in, say) must not
+  // make every future edit of it fail with a complaint about something the
+  // person didn't touch.
+  before?: { steps: string[]; inputs: { name: string }[]; sources: string[] }
 ): { ok: boolean; issues: string[] } {
   const issues: string[] = [];
-  const single = buildWireSchema(catalog);
+  // The record being edited is itself in automationNames — building the
+  // schema from the unfiltered catalog would make every edit fail the new
+  // "already exists" check. Filtering it out also catches an edit that
+  // renames INTO another automation's name.
+  const single = buildWireSchema({
+    ...catalog,
+    automationNames: catalog.automationNames.filter(
+      (n) => n.trim().toLowerCase() !== record.name.trim().toLowerCase()
+    ),
+  });
   const probe = {
     automations: [
       {
@@ -570,7 +601,18 @@ export function validateEditedAutomation(
       issues.push(issue.message);
     }
   }
-  issues.push(...lintAutomation(record));
+  // Only lint problems this edit INTRODUCED block it — anything the record
+  // already had stays the record's problem, not this change's.
+  const wasWrong = before
+    ? new Set(
+        lintAutomation({
+          steps: before.steps,
+          inputs: before.inputs.map((i) => ({ name: i.name })),
+          sources: before.sources,
+        })
+      )
+    : new Set<string>();
+  issues.push(...lintAutomation(record).filter((issue) => !wasWrong.has(issue)));
   return { ok: issues.length === 0, issues };
 }
 

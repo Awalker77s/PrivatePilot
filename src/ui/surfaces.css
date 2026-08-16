@@ -1869,3 +1869,96 @@
   padding: 9px 2px;
   color: var(--green);
 }
+
+/* ---------- answer bubble: a run's reply, its own turn in the thread ----------
+   Two objects, two lifecycles: the card above is the receipt of what ran;
+   this is the assistant's answer. Flat prose on the canvas (a filled bubble
+   reads as a USER message) — it reads as a reply via position + label, and
+   the markdown gets room to breathe. Measure capped for readability. */
+.answer-bubble {
+  align-self: flex-start;
+  width: 100%;
+  max-width: 68ch;
+  padding: 2px 4px 6px;
+  margin-bottom: 8px;
+}
+
+.answer-bubble-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+}
+
+.answer-bubble-name {
+  font-size: 11px;
+  font-weight: 560;
+  color: var(--caption);
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.answer-bubble .formatted-answer {
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.answer-bubble .formatted-answer .answer-list {
+  margin: 7px 0;
+}
+
+.answer-bubble .formatted-answer .answer-list li {
+  margin: 0 0 7px;
+}
+
+.answer-bubble .formatted-answer .answer-list li:last-child {
+  margin-bottom: 0;
+}
+
+.answer-bubble .formatted-answer strong {
+  font-weight: 640;
+  color: #f2f4f6; /* bold values sit one step above body text */
+}
+
+.answer-bubble .formatted-answer a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.answer-bubble .formatted-answer a:hover,
+.answer-bubble .formatted-answer a:focus {
+  text-decoration-color: currentColor;
+}
+
+/* ---------- link chip: a URL as a small box, never a wall of characters ---- */
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 2px;
+  margin: 0 1px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--nested);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 560;
+  text-decoration: none !important;
+  vertical-align: baseline;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-chip:hover {
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--border));
+  text-decoration: none;
+}
+
+.link-chip-arrow {
+  font-size: 10px;
+  opacity: 0.7;
+}

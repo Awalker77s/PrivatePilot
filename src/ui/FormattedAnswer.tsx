@@ -4,12 +4,37 @@ import type { ReactNode } from "react";
 // useful but imperfect. Normalize the common "- **item** - value - **item**"
 // shape before rendering it as safe React elements (never injected HTML).
 export function normalizeAnswerText(text: string): string {
-  return text
-    .replace(/\r\n?/g, "\n")
-    .replace(/([:])\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "$1\n\n- ")
-    .replace(/\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "\n- ")
-    .replace(/\s+(?=\d+[.)]\s+\*\*[^*\n]+\*\*)/g, "\n")
-    .trim();
+  return (
+    text
+      .replace(/\r\n?/g, "\n")
+      // Small models open with filler despite instructions — strip the
+      // classic preamble line so the answer leads with the answer.
+      .replace(/^\s*(sure[,!.]?|okay[,!.]?|certainly[,!.]?|of course[,!.]?)\s+(here('s| is| are)\b[^\n]*[:.]\s*\n?)?/i, "")
+      .replace(/^here('s| is| are)\s[^\n]{0,60}[:.]\s*\n(?=\s*(\d+[.)]|[-*•])\s)/i, "")
+      .replace(/([:])\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "$1\n\n- ")
+      .replace(/\s+-\s+(?=\*\*[^*\n]+\*\*\s*[-—:])/g, "\n- ")
+      .replace(/\s+(?=\d+[.)]\s+\*\*[^*\n]+\*\*)/g, "\n")
+      .trim()
+  );
+}
+
+// A long raw URL is noise in an answer — render it as a small chip showing
+// just the domain; the click still goes to the full address.
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url.slice(0, 30);
+  }
+}
+
+function LinkChip({ href, keyId }: { href: string; keyId: string }) {
+  return (
+    <a key={keyId} className="link-chip" href={href} target="_blank" rel="noreferrer" title={href}>
+      {hostOf(href)}
+      <span className="link-chip-arrow">↗</span>
+    </a>
+  );
 }
 
 function inline(text: string, keyPrefix: string): ReactNode[] {
@@ -30,23 +55,27 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
       parts.push(<code key={key}>{token.slice(1, -1)}</code>);
     } else if (token.startsWith("[")) {
       const link = token.match(/^\[([^\]]+)]\((https?:\/\/[^)]+)\)$/);
-      parts.push(
-        link ? (
-          <a key={key} href={link[2]} target="_blank" rel="noreferrer">
-            {link[1]}
-          </a>
-        ) : (
-          token
-        )
-      );
+      if (link) {
+        // A link whose visible text is itself a URL (or absurdly long) reads
+        // as noise — collapse it to a domain chip. Short titled links stay.
+        const label = link[1];
+        if (/^https?:\/\//i.test(label) || label.length > 48) {
+          parts.push(<LinkChip key={key} keyId={key} href={link[2]} />);
+        } else {
+          parts.push(
+            <a key={key} href={link[2]} target="_blank" rel="noreferrer">
+              {label}
+            </a>
+          );
+        }
+      } else {
+        parts.push(token);
+      }
     } else if (token.startsWith("http")) {
       const clean = token.replace(/[),.;!?]+$/, "");
       const suffix = token.slice(clean.length);
-      parts.push(
-        <a key={key} href={clean} target="_blank" rel="noreferrer">
-          {clean}
-        </a>
-      );
+      // A bare URL never renders in full — a small domain chip carries it.
+      parts.push(<LinkChip key={key} keyId={key} href={clean} />);
       if (suffix) parts.push(suffix);
     } else {
       parts.push(<em key={key}>{token.slice(1, -1)}</em>);

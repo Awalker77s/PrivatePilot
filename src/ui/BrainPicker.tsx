@@ -5,11 +5,11 @@
 // chip turns blue with a cloud mark so the app never lies about where words
 // go. Choosing any local row turns borrowing off.
 import { useEffect, useRef, useState } from "react";
-import { localModels } from "../providers";
+import { localModels, useCloudBrain, useLocalBrain } from "../providers";
 import { RECOMMENDED_MODELS, friendlyName } from "../providers/ollama";
 import { CLOUD_MODELS, prewarm } from "../providers/featherless";
 import type { ModelInfo } from "../providers/types";
-import { getSettings, updateSettings } from "../storage/settings";
+import { getSettings } from "../storage/settings";
 
 export function BrainPicker({
   label,
@@ -51,19 +51,13 @@ export function BrainPicker({
   }, [open]);
 
   async function pickLocal(tag: string) {
-    await updateSettings((s) => {
-      s.localModel = tag || null;
-      s.featherless.enabled = false;
-    });
+    await useLocalBrain(tag);
     setOpen(false);
     onChanged();
   }
 
   async function pickCloud(id: string) {
-    await updateSettings((s) => {
-      s.featherless.model = id;
-      s.featherless.enabled = true;
-    });
+    await useCloudBrain(id);
     setOpen(false);
     onChanged();
     void prewarm(id); // cold cloud models add seconds — warm on switch

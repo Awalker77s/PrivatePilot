@@ -174,7 +174,13 @@ async function finishEdit(
       return { ok: true, patch, before: auto, after, changed, failSentence: null };
     }
     const catalog = await buildCatalog();
-    const verdict = validateEditedAutomation(after, catalog);
+    // Judge the edit on what IT changed — a flaw the record already had
+    // (a {token} with no fill-in) must not block every future edit of it.
+    const verdict = validateEditedAutomation(after, catalog, {
+      steps: auto.steps,
+      inputs: auto.inputs,
+      sources: auto.sources,
+    });
     if (!verdict.ok) {
       return {
         ok: false,

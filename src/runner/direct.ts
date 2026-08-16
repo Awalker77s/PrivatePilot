@@ -97,9 +97,10 @@ export async function runDirectEndpoint(
     };
   } catch (error) {
     if (error instanceof DirectEndpointError) throw error;
-    throw new DirectEndpointError(
-      `I reached ${new URL(url).hostname}, but couldn't read a verified answer from it.`
-    );
+    // A response this reader can't parse is not a broken run — it's a page
+    // the fast path doesn't understand. Fall back to the model tool loop,
+    // which can read it (or fail with its own designed sentence).
+    return null;
   }
 }
 
@@ -461,9 +462,10 @@ function formatAnswer(
       1,
       Math.min(20, Number(new URL(url).searchParams.get("hitsPerPage") ?? 10))
     );
+    const topic = new URL(url).searchParams.get("query");
     const stories = hits
       .slice(0, limit)
-      .map((raw) => {
+      .map((raw, i) => {
         const hit = raw as {
           title?: unknown;
           url?: unknown;
@@ -479,11 +481,21 @@ function formatAnswer(
               : typeof hit.objectID === "string"
                 ? `https://news.ycombinator.com/item?id=${hit.objectID}`
                 : null;
-        return `- **${hit.title.trim()}**${storyUrl ? ` — [Read story](${storyUrl})` : ""}`;
+        // Spec shape: numbered, bold title, publisher-name link at the END —
+        // a linked headline hides the destination; the domain is the trust
+        // signal.
+        let publisher = "news.ycombinator.com";
+        try {
+          if (storyUrl) publisher = new URL(storyUrl).hostname.replace(/^www\./, "");
+        } catch {
+          /* keep default */
+        }
+        return `${i + 1}. **${hit.title.trim()}**${storyUrl ? ` ([${publisher}](${storyUrl}))` : ""}`;
       })
       .filter((story): story is string => !!story);
     if (stories.length === 0) return null;
-    return `## Top tech news\n\n${stories.join("\n")}`;
+    const what = topic ? `stories about ${topic}` : "tech stories";
+    return `Here are today's top ${stories.length} ${what} from Hacker News:\n\n${stories.join("\n")}`;
   }
 
   const base = typeof body.base === "string" ? body.base : null;

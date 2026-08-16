@@ -305,6 +305,24 @@ export function buildWireSchema(catalog: Catalog) {
             'The person said the next automation depends on an earlier RESULT ("if…, otherwise…"). Express this with chain.steps (links MUST be []): the first job {"id": "s1", "after": [], …}; each branch after it with if_answer_contains or if_answer_lacks naming the word the result is tested for. Plain links would run every branch every time.',
         });
       }
+      // The person explicitly asked for ONE connected sequence ("as a
+      // chain", "connect them") — several jobs arriving unchained is the
+      // drafter dropping the ask. Insist. (Branch-intent wins when both
+      // fire: its steps ARE a chain.)
+      if (
+        catalog.chainIntent &&
+        !catalog.branchIntent &&
+        v.automations.length > 1 &&
+        (v.chain === null ||
+          (v.chain.links.length === 0 && v.chain.steps.length === 0))
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["chain"],
+          message:
+            'The person asked for these jobs to run as ONE connected sequence ("as a chain/sequence", "connect them"). Set chain.links joining the automations in the order stated — map outputs to inputs by name where one feeds the next; an empty map is allowed when nothing passes. Do not leave chain null.',
+        });
+      }
       // Independent automations are fine unchained — a chain is only for
       // hand-offs the person actually asked for.
       if (v.chain) {
@@ -425,7 +443,10 @@ export function buildWireSchema(catalog: Catalog) {
         const known = (n: string) =>
           names.has(n) || false; // existing automations join in later steps
         v.chain.links.forEach((l, i) => {
-          if (l.map.length === 0 && l.onlyWhen === null) {
+          // A link that carries nothing is usually the model inventing a
+          // chain — EXCEPT when the person explicitly asked for one
+          // ("run A then B as a sequence"): pure ordering is then the point.
+          if (!catalog.chainIntent && l.map.length === 0 && l.onlyWhen === null) {
             ctx.addIssue({
               code: "custom",
               path: ["chain", "links", i],

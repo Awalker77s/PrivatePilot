@@ -10,8 +10,10 @@ export const featherless = new FeatherlessProvider();
 
 export type Effort = "quick" | "thorough";
 
-// Stage-tuned context sizes: 16384 drafting/validator, 32768 tool loop.
-export const NUM_CTX_DRAFT = 16384;
+// The drafting prompt and its constrained JSON response fit below 8k for
+// ordinary requests. Reserving 16k made CPU-only Ollama allocate twice the KV
+// cache and pushed simple drafts past the two-minute ceiling.
+export const NUM_CTX_DRAFT = 8192;
 export const NUM_CTX_TOOLS = 32768;
 
 let cachedLocalModels: ModelInfo[] | null = null;
@@ -39,17 +41,23 @@ export async function activeLocalModel(): Promise<string | null> {
 // (composer picker, Settings model list, Settings cloud card) calls these, so
 // "cloud is on" always means exactly "a Featherless model is the brain".
 export async function useLocalBrain(tag: string): Promise<void> {
+  const previous = await activeLocalModel().catch(() => null);
   await updateSettings((s) => {
     s.localModel = tag || null;
     s.featherless.enabled = false;
   });
+  if (previous && previous !== tag) {
+    await ollama.unload(previous).catch(() => {});
+  }
 }
 
 export async function useCloudBrain(model: string): Promise<void> {
+  const previous = await activeLocalModel().catch(() => null);
   await updateSettings((s) => {
     s.featherless.model = model;
     s.featherless.enabled = true;
   });
+  if (previous) await ollama.unload(previous).catch(() => {});
 }
 
 // The toggle decides where compute happens — and the UI never lies about it.

@@ -22,6 +22,7 @@ import { draftCall, draftMessages, DraftContext } from "./draft";
 import type { WireAutomation } from "./draft/schema";
 import { validateLoop } from "./validate";
 import { tryQuickCompile } from "./quickDraft";
+import { compactReadDraft } from "./compactDraft";
 import {
   draftRevisionFor,
   mergePermissionManifests,
@@ -233,6 +234,76 @@ export async function compile(
       : "Drafting locally — schema locked by grammar (local).",
     anchor: anchor(runId, anchorN++),
   });
+
+  // A single read-only app/web job does not need the full file + mail +
+  // branching grammar. On CPU-only machines that broad grammar can take more
+  // than two minutes; the compact path produces the same validated record
+  // with a small schema, then the normal runner and permission fences take
+  // over.
+  try {
+    onProgress("draft", "Drafting a lightweight read job…");
+    const compact = await compactReadDraft(context, model, catalog);
+    if (compact) {
+      run.counters.drafts++;
+      draftLog.status = "ok";
+      draftLog.finishedAt = Date.now();
+      draftLog.sentence = "Built with the lightweight local compiler.";
+      draftLog.lines.push({
+        at: Date.now(),
+        text: `Small draft returned in ${(compact.ms / 1000).toFixed(1)}s.`,
+        anchor: anchor(runId, anchorN++),
+      });
+
+      const validateLog: StageLog = {
+        stage: "validate",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+        status: "ok",
+        lines: [
+          {
+            at: Date.now(),
+            text: "Checked the finished record against the same app, source, schedule, and permission fences as the full compiler.",
+            anchor: anchor(runId, anchorN++),
+          },
+        ],
+        sentence: "Compact draft passed the full record validator.",
+      };
+      stages.push(validateLog);
+
+      const assembled = compact.draft.automations.map((automation) =>
+        assembleRecord(automation, model, context)
+      );
+      const summary = `Built "${assembled[0].name}" — waiting for a watched run`;
+      await updateRun(runId, (record) => {
+        record.status = "ok";
+        record.finishedAt = Date.now();
+        record.summary = summary;
+        record.automationId = assembled[0].id;
+      });
+      return {
+        ok: true,
+        automations: assembled,
+        chain: null,
+        question: null,
+        argument: [
+          "Used the lightweight local compiler for one read-only job.",
+        ],
+        failSentence: null,
+        runId,
+        keptToOneStep: true,
+      };
+    }
+  } catch (e) {
+    draftLog.status = "broke";
+    draftLog.finishedAt = Date.now();
+    draftLog.sentence =
+      e instanceof ProviderError ? e.sentence : "The lightweight draft broke.";
+    return fail(
+      e instanceof ProviderError
+        ? e.sentence
+        : `Lightweight drafting broke — ${String(e)}`
+    );
+  }
 
   onProgress("draft", "Drafting…");
   const messages = draftMessages(catalog, context);

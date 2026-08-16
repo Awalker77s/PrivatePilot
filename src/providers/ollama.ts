@@ -140,7 +140,7 @@ async function ollamaFetch(
       (e instanceof Error && e.name === "TimeoutError");
     throw new ProviderError(
       timedOut
-        ? "The local AI took over two minutes — switch to Qwen 4B in Settings, or try again."
+        ? "The local AI took over two minutes on this CPU — split a complex request into smaller automations, then try again."
         : OLLAMA_DOWN_SENTENCE,
       String(e)
     );
@@ -171,6 +171,23 @@ export class OllamaProvider implements ModelProvider {
       label: friendlyName(m.name),
       sizeBytes: m.size ?? null,
     }));
+  }
+
+  // Ollama keeps models resident after a request. Explicitly evict the brain
+  // a person just switched away from so a 12B and 4B model do not compete for
+  // RAM on CPU-only Windows machines.
+  async unload(model: string): Promise<void> {
+    const res = await ollamaFetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, keep_alive: 0, stream: false }),
+    });
+    if (!res.ok) {
+      throw new ProviderError(
+        "The previous local model couldn't be unloaded.",
+        `POST /api/generate ${res.status}`
+      );
+    }
   }
 
   // Embed a batch of strings → one 768-vector each. num_ctx 8192 stops long

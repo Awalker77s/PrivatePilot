@@ -173,9 +173,15 @@ automation that reports and one that guesses.
 defined as "a Featherless model is the current brain."** There is no separate
 toggle that can drift out of sync with the model picker, because the two were
 one decision all along. `src/providers/featherless.ts` adds the parts a
-desktop app actually needs — key sealed with Windows DPAPI, concurrency-aware
-queueing, and the same `format`/structured-output contract the local path
-uses, so one pipeline serves both brains.
+desktop app actually needs — concurrency-aware queueing and the same
+`format` call shape the local path uses, so one pipeline serves both brains.
+
+Two honest caveats. The **interface** is shared but the **guarantee** is not:
+Featherless offers `response_format: json_object` and not `json_schema`, so
+`supportsSchemaFormat()` returns false and the validator loop — not a decoding
+grammar — is what holds shape in the cloud. And the API key is stored in
+`settings.json` in plain text; the DPAPI sealing in `src-tauri/src/secrets.rs`
+currently covers only the Gmail app password.
 
 Every run record stores `ranOn`, so the Activity feed can always answer "did
 this leave my computer?" after the fact.

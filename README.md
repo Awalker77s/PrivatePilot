@@ -74,7 +74,7 @@ ollama pull gemma4:12b          # better screen/image reading for "Watch me"
 
 - **Cloud compute:** paste a [Featherless.ai](https://featherless.ai) key in
   **Settings → Borrow cloud compute**, then pick a cloud model. Off by
-  default; the key is sealed with Windows DPAPI.
+  default; the key is stored in `settings.json` on this machine, unencrypted.
 - **Packaged build:** `npm run tauri build` produces an NSIS installer and an
   MSI under `src-tauri/target/release/bundle/`.
 - **PowerShell:** use `npm.cmd` if script execution is restricted.
@@ -176,8 +176,12 @@ That document *is* the security model, and every field in it is load-bearing:
   tool it was never handed.
 - **`permissions`** is the declared manifest the approval UI reads: changing
   what an automation is allowed to touch is a visible edit, not a silent one.
+  Honest limit — this manifest is bookkeeping the *person* reads, not a second
+  runtime gate. `evaluateAction()` has no callers yet; what actually stops a
+  run is the fence and the tool binding above.
 - **`compiledBy`** records which model wrote this, and **`revision.contentHash`**
-  is what makes a changed automation re-earn its approval.
+  changes whenever the automation does — which is what invalidates a stored
+  approval, and what lets a sequence pin the exact revision it was tested with.
 
 A person can read all of it before it ever runs — and so can a reviewer.
 
@@ -293,8 +297,12 @@ with the model picker.
   to `json_object`, and the **validator loop becomes the primary shape defense
   in the cloud** instead of the grammar. Same compiler, different guarantee —
   declared in code rather than hoped for.
-- The key is sealed with **Windows DPAPI** (`src-tauri/src/secrets.rs`) — it
-  never sits in a config file in plaintext.
+- **The Featherless key lives in `settings.json` on this machine, in plain
+  text.** It is never sent anywhere but Featherless and never leaves the
+  machine otherwise, but it is not encrypted at rest — the DPAPI sealing in
+  `src-tauri/src/secrets.rs` currently protects only the Gmail app password
+  ([`ConnectedAppsCard.tsx:191`](src/ui/ConnectedAppsCard.tsx#L191)). Sealing
+  the cloud key the same way is a small change we have not made yet.
 - Concurrency-aware queueing matched to Featherless's plan model.
 - Every run record stores `ranOn`, so Activity can always answer *"did this
   leave my computer?"* after the fact.
@@ -317,17 +325,27 @@ with it.
   live-verified catalog of keyless APIs (crypto, stocks, weather, alerts,
   earthquakes, air quality, FX, news from five publishers, Wikipedia,
   dictionary, holidays, recipes, package registries, service status).
-- **Watch me** — do the task once while narrating; local speech (whisper.cpp)
-  and a local vision model compile the same kind of readable skill. No video
-  is kept, and the UI shows the frames being deleted.
+- **Watch me** — do the task once while narrating; local speech and a local
+  vision model compile the same kind of readable skill. No video is kept, and
+  the UI shows the frames being deleted. **Reading the frames needs a vision
+  model** — pull `gemma4:12b` (Optional extras above); on the text-only default
+  it says so and compiles from your narration alone rather than pretending.
 - **Sequences & watchers** — named outputs map to named inputs with the baton
   shown crossing each hand-off; "email me when it drops below $75" is a
   latched crossing that fires once and re-arms only after it crosses back.
 - **Files, safely** — bulk rename, archives, OCR into searchable PDFs, all on
   a sandbox copy with a diff and Keep (undoable via `.pilot-versions`).
+  Readable formats are PDF, xlsx, csv and text; **`.docx` is not readable yet**
+  — that job compiles and then refuses at run time rather than guessing. The
+  OCR and archive toolkits (Tesseract, pdfium, 7za) are **not bundled** — they
+  install into `%APPDATA%`; only the speech binaries ship in the installer.
 - **Your apps, locally** — Outlook, Gmail (IMAP app password), Spotify, and
-  any open window through Windows' accessibility tree. Reading is the default;
-  the only writes are a **draft** you send yourself.
+  any open window through Windows' accessibility tree. Reading is the default,
+  and the only writes are **a draft you send yourself, and a pause or skip you
+  can undo** — Spotify transport is the one non-draft write, flagged
+  `writes: true` at [`spotify.ts:92`](src/connectors/spotify.ts#L92). A draft
+  can only be addressed to someone this run actually read from, to you, or to
+  an address you typed ([`gmail.ts:314`](src/connectors/gmail.ts#L314)).
 - **Editable in words** — "make it 7am" renders a before→after card with
   **Change it / Cancel** and ten versions of history.
 
@@ -387,15 +405,18 @@ file compiler are all exercised against the actual code, not mocks.
   — local models
 - [Tauri v2](https://tauri.app) · [React](https://react.dev) ·
   [Vite](https://vite.dev) · [zod v4](https://zod.dev) (`z.toJSONSchema`)
-- [jsdiff](https://github.com/kpdecker/jsdiff) ·
-  [dir-compare](https://github.com/gliviu/dir-compare) — diffs and sandbox
-  comparison
-- [defuddle](https://github.com/kepano/defuddle) +
-  [linkedom](https://github.com/WebReflection/linkedom) — page → clean text
+- [jsdiff](https://github.com/kpdecker/jsdiff) — text diffs. Folder comparison
+  is hand-rolled (size, then byte-by-byte) in
+  [`diff.ts:64`](src/runner/diff.ts#L64), following `dir-compare`'s semantics
+  without the dependency.
+- [defuddle](https://github.com/kepano/defuddle) — page → clean text, parsed
+  with the webview's own `DOMParser`
 - [unpdf](https://github.com/unjs/unpdf) · [exceljs](https://github.com/exceljs/exceljs)
   · [Tesseract](https://github.com/tesseract-ocr/tesseract) ·
   [pdfium](https://pdfium.googlesource.com/pdfium/) — documents
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — local speech
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and
+  [NVIDIA Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+  (CC-BY-4.0) — local speech; Parakeet runs whenever its model file is present
 - [nomic-embed-text](https://ollama.com/library/nomic-embed-text) — embeddings
 
 **Data sources** (all keyless, all live-verified before being baked in — a

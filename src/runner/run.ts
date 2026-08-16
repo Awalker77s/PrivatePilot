@@ -19,6 +19,7 @@ import { scanDiff, applyDiff, putBack } from "./diff";
 import { parseOutputs, thoroughPass, verifyNumbers } from "./verify";
 import { holdModelInMemory, OLLAMA_DOWN_SENTENCE } from "../providers/ollama";
 import { connectorById } from "../connectors/registry";
+import { parseQuickToolStep } from "./quickSteps";
 
 function appLabel(id: string): string {
   return connectorById(id)?.label ?? id;
@@ -246,6 +247,17 @@ async function runInner(
           handoffs: [],
           appsRead: 0,
         };
+    } else if (sandbox && parseQuickToolStep(auto.steps[0] ?? "")) {
+      // A machine-authored rename/move step is already fully specified and
+      // fenced. The tool loop executes it directly without requiring Ollama.
+      loop = await runToolLoop(
+        auto,
+        auto.model || "deterministic-file-action",
+        sandbox,
+        opts.inputValues ?? {},
+        (e) => onProgress(e.text),
+        opts.contextNote
+      );
     } else {
       model = cloudActive()
         ? getSettings().featherless.model

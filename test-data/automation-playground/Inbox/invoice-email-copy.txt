@@ -1,0 +1,20 @@
+SAMPLE DOCUMENT - NOT A REAL INVOICE
+
+HARBOR PRINT STUDIO
+Invoice: HP-3105
+Invoice date: 2026-08-12
+Due date: 2026-09-11
+Status: DUE
+Purchase order: Not supplied
+
+Bill to: Example Operations LLC
+
+Description                         Quantity   Unit price   Amount
+Conference handouts, full color          500       $0.82   $410.00
+Delivery and handling                       1      $35.00    $35.00
+Subtotal                                                   $445.00
+Sales tax                                                   $32.25
+Rush preparation                                            $40.00
+TOTAL DUE                                                  $517.25
+
+Payment terms: Net 30. Contact billing@harborprint.example with questions.

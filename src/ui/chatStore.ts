@@ -12,6 +12,7 @@ import {
   DEIXIS_RE,
   DELTA_VERB_RE,
   EditTarget,
+  MAKE_A_SEQUENCE_RE,
   NEW_TASK_RE,
   PLURAL_REF_RE,
   SCHEDULE_FIELD_RE,
@@ -999,8 +1000,11 @@ export async function sendText(text: string) {
     const chainNamed = findTargetsByName(text, thread, saved);
     // "make an automation that combines Top Tech News and Bitcoin Note into
     // one summary" asks for a NEW job that happens to mention two names —
-    // building it beats wiring the two together.
-    if (chainNamed.length >= 2 && !NEW_TASK_RE.test(text)) {
+    // building it beats wiring the two together. But "MAKE A SEQUENCE from
+    // A and B" is a connect request whose noun happens to follow "make a".
+    const asksNewAutomation =
+      NEW_TASK_RE.test(text) && !MAKE_A_SEQUENCE_RE.test(text);
+    if (chainNamed.length >= 2 && !asksNewAutomation) {
       // Existing automations, named: connect them in the order they were
       // said. Deterministic — no model, no re-drafting.
       const members = [...chainNamed]
@@ -1032,7 +1036,7 @@ export async function sendText(text: string) {
     // Exactly one name + chain talk ("combine the two steps in X") is about
     // THAT automation, not about connecting the thread's recent pair — only
     // a nameless plural pointer reaches for the thread.
-    if (chainNamed.length === 0 && PLURAL_REF_RE.test(text) && !NEW_TASK_RE.test(text)) {
+    if (chainNamed.length === 0 && PLURAL_REF_RE.test(text) && !asksNewAutomation) {
       // "connect these two" — the thread knows which ones.
       const recent = recentAutomationRecords(thread, saved);
       if (recent.length >= 2) {

@@ -133,6 +133,42 @@ function deterministicEditPatch(
     };
   }
 
+  // A bare hour — "every day at 10", "run it at 18:30". People drop the
+  // am/pm constantly, and the old code fell through to the every-day branch
+  // below and quietly used 8: you asked for 10 and got 8. Read it on a
+  // 24-hour clock and show it on the card, where a wrong read is visible
+  // before anything changes.
+  const bareHour = text.match(/\b(?:at|@)\s*(\d{1,2})(?::(\d{2}))?\b(?!\s*(?:am|pm))/i);
+  if (
+    bareHour &&
+    // "at 8 in the evening" carries more than an hour — let the part-of-day
+    // rule below read it, so evening/night can shift into the PM.
+    !/\b(morning|afternoon|evening|night)\b/i.test(text) &&
+    !/\b(sentence|description|steps?|name|title|minutes?|seconds?)\b/i.test(text) &&
+    /\b(schedule|reschedule|run|runs|set|move|switch|make|change|adjust|update|daily|every day|each day|morning|evening|night)\b/i.test(
+      text
+    )
+  ) {
+    const hour = Number(bareHour[1]);
+    if (Number.isFinite(hour) && hour >= 0 && hour <= 23) {
+      return { schedule: { trigger: "daily", hour } };
+    }
+  }
+
+  // "7 every morning", "8 in the evening" — the hour rides next to the part
+  // of day instead of after "at". Evening/night shift a 1-11 into the PM.
+  const partOfDay = text.match(
+    /\b(\d{1,2})(?::\d{2})?\s*(?:o'?clock\s*)?(?:at\s+|in the\s+|every\s+|each\s+)?(morning|afternoon|evening|night)\b/i
+  );
+  if (partOfDay && !/\b(sentence|description|steps?|name|title)\b/i.test(text)) {
+    let hour = Number(partOfDay[1]);
+    const part = partOfDay[2].toLowerCase();
+    if (part !== "morning" && hour < 12) hour += 12;
+    if (Number.isFinite(hour) && hour >= 0 && hour <= 23) {
+      return { schedule: { trigger: "daily", hour } };
+    }
+  }
+
   if (/\b(every day|daily|each morning|every morning)\b/i.test(text)) {
     return {
       schedule: {

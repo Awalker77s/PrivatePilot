@@ -149,6 +149,43 @@ try {
       mentionIndex("connect Solana Watcher and Bitcoin Price", "Solana Watcher"),
     "sequence order should follow the order the names were said"
   );
+  for (const said of [
+    "make a sequence from Solana Watcher and Solana Morning Check",
+    "make a chain out of Bitcoin Price Fetch and Bitcoin Alert Message",
+    "build a workflow from Bitcoin Price Check and Bitcoin Email Summary",
+  ]) {
+    assert(CHAIN_TALK_RE.test(said), `"make a sequence from A and B" should connect: ${said}`);
+  }
+  assert(
+    !CHAIN_TALK_RE.test("make an automation that checks the price of litecoin"),
+    "making an AUTOMATION must not read as making a sequence"
+  );
+
+  // ---- a stated hour is never quietly replaced ----
+  const { editAutomation } = await server.ssrLoadModule("/src/pipeline/edit.ts");
+  const baseRecord = {
+    id: "auto-test", name: "T", sentence: "s", category: "c", steps: ["x"],
+    inputs: [], outputs: [], files: { reads: [], writes: [] }, formats: {},
+    sources: ["api.coingecko.com"], apps: [], tools: [], knowledge: [],
+    delivers: "answer", schedule: { trigger: "manual" }, effort: "quick",
+    model: "m", compiledBy: "m", origin: { kind: "told", at: 0 }, lastRun: null,
+  };
+  const sched = async (text) =>
+    (await editAutomation({ ...baseRecord }, text)).after?.schedule;
+  for (const [text, want] of [
+    ["switch it to every day at 10", { trigger: "daily", hour: 10 }],
+    ["set it to 7 every morning", { trigger: "daily", hour: 7 }],
+    ["run it at 8 in the evening", { trigger: "daily", hour: 20 }],
+    ["run it at 9 at night", { trigger: "daily", hour: 21 }],
+    ["make it run every day at 9am", { trigger: "daily", hour: 9 }],
+    ["change it to every 45 minutes", { trigger: "watch", everyMinutes: 45 }],
+  ]) {
+    const got = await sched(text);
+    assert(
+      JSON.stringify(got) === JSON.stringify(want),
+      `"${text}" should schedule ${JSON.stringify(want)}, got ${JSON.stringify(got)}`
+    );
+  }
 
   console.log(`Quick regression suite passed (${assertionCount} assertions).`);
 } finally {

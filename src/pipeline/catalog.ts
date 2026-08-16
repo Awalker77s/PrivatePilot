@@ -70,6 +70,8 @@ export const CHAIN_REQUEST_RE = new RegExp(
   [
     // "…as a chain", "…into one sequence"
     String.raw`\b(?:as|into) (?:a |one )?(?:chain|sequence|workflow)\b`,
+    // "make a sequence from A and B" — the thing being made IS the chain.
+    String.raw`\b(?:make|build|create|set up) (?:me )?(?:a|one|an) (?:chain|sequence|workflow)\b`,
     // "make an automation for this and one for that a chain" — the ask
     // tacked onto the end, which is how people say it out loud.
     String.raw`\b(?:a|one) (?:chain|sequence|workflow)\b(?:\s+or\s+(?:a\s+)?(?:chain|sequence|workflow))?\s*[.!?]*\s*$`,

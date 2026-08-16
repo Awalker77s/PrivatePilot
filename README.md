@@ -28,23 +28,59 @@ no server.</sub>
 
 ---
 
+## What you actually do with it
+
+You type a sentence. You get back a small card describing a job — in plain
+English, with the exact websites and files it will touch — and a button to run
+it. Keep it, and it becomes an automation you can schedule, edit by talking to
+it, or chain onto others.
+
+| You say | You get |
+|---|---|
+| *"check the current price of bitcoin"* | a live answer, with every number checked against the page it came from |
+| *"every morning at 8, give me the top tech news"* | a scheduled job that greets you with a briefing |
+| *"email me when solana drops below $75"* | a watcher that fires **once** at the crossing, then re-arms when it crosses back |
+| *"summarize everything in my Downloads folder"* | PDFs, spreadsheets and documents read and summarised — on a copy, never the originals |
+| *"make a sequence of the bitcoin price and the weather in orlando"* | two automations **and** the hand-off between them, from one sentence |
+| *"actually make it 7am"* | a before → after card with **Change it** and **Cancel** |
+
+Six things it can do, in one line each:
+
+- **Read the web** — a catalog of live-verified, keyless public sources: crypto,
+  stocks, weather, earthquakes, air quality, currencies, news from five
+  publishers, Wikipedia, holidays, package registries, service status.
+- **Read your documents** — ask questions about a folder and get answers with
+  citations, including scans, which it OCRs into searchable PDFs first.
+- **Handle files safely** — rename in bulk, zip, convert. Always on a copy, with
+  a diff and a **Keep** button, so a mistake costs a click.
+- **Watch and wait** — schedules from a minute upward, and threshold alerts that
+  don't spam you.
+- **Reach your apps** — Gmail over IMAP and any open window on the machine.
+  Reading is the default; the only write is a draft you send yourself.
+- **Learn by watching** — do the task once while narrating, and it compiles what
+  you did into the same kind of readable automation.
+
+![The Automations tab: saved automations and sequences with their last results](docs/img/automations.png)
+
+---
+
 ## Why it exists
 
-Automation makes you choose: wire a node graph on a server you maintain, or
-hand your files and your inbox to a cloud you can't inspect. Either way you end
-up trusting something you can't read.
+Automation makes you choose: wire a node graph on a server you maintain, or hand
+your files and your inbox to a cloud you can't inspect. Either way you end up
+trusting something you can't read.
 
-Doing it locally isn't hard because small models are weak. It's hard because
-you get no **guarantees** — a 4B model will invent a filename without
-hesitating. So this app doesn't ask it to behave. It removes the option:
+Running the model on your own machine solves the privacy half. The hard half is
+**trust**: a small model will happily invent a filename that doesn't exist. So
+this app doesn't ask it to behave — it removes the option.
 
-> **The only filenames in the model's decoding grammar are the ones actually on
-> your disk.** A hallucinated path isn't discouraged, it's *unsampleable*. With
-> nothing indexed, the field it would name a file in compiles to `{"not": {}}` —
-> a type no string inhabits.
+> **The only filenames the model can produce are the ones actually on your
+> disk.** Not "discouraged from inventing" — *unable to*. The list of real files
+> is compiled into the grammar it writes with, so a made-up path is not a
+> mistake it might make; it is a sentence it cannot form.
 
-Three more guarantees work the same way — each one a function in the codebase
-rather than a sentence in a prompt. They are the whole project:
+Three more guarantees work that way, each one a function in the codebase rather
+than a line in a prompt. That is the whole project:
 [**How it works ↓**](#how-it-works)
 
 ---
@@ -111,10 +147,17 @@ green on a clean Linux runner in under 30 seconds.
 
 ## How it works
 
-A sentence becomes a **record**; the record — not the model — decides what runs.
+A sentence becomes a **record** — a short, strict document listing what the job
+does, which websites it may reach, and which files it may touch. From then on
+the *record* decides what runs, not the model. The model's only job was writing
+it down, and you can read what it wrote before anything happens.
 
-Here is a real one out of `automations.json` on the machine this was built on.
-*"Fetch the current Bitcoin price from CoinGecko"* compiled to this:
+That one design choice is what makes the rest possible: an automation can be
+checked, edited, versioned, scheduled and chained, because it's a document
+rather than a prompt.
+
+<details>
+<summary><b>See a real record</b> — "fetch the current Bitcoin price from CoinGecko", straight out of <code>automations.json</code></summary>
 
 ```json
 {
@@ -165,24 +208,24 @@ Here is a real one out of `automations.json` on the machine this was built on.
 <sub>Formatting only — object literals collapsed onto single lines, and
 `origin`/`library` (timestamps and tags) dropped. No field values changed.</sub>
 
-That document *is* the security model, and every field in it is load-bearing:
+</details>
 
-- **`sources`** is the fence. `fenceAllows()`
-  ([src/runner/fetchPage.ts:32](src/runner/fetchPage.ts#L32)) checks every
-  outbound request against this list, matching a host or a subdomain of it — so
-  `evil-coingecko.com` fails the suffix test rather than sneaking through.
-- **`files.reads` / `files.writes` are empty**, so no sandbox is staged, and
-  `bindTools()` never puts `read_file` or `write_file` in front of the model at
-  all ([src/runner/loop.ts:143](src/runner/loop.ts#L143)). It cannot misuse a
-  tool it was never handed.
-- **`permissions`** is the declared manifest, written at compile time and shown
-  in the approval sheet: changing what an automation may touch is a visible
-  edit, never a silent one.
-- **`compiledBy`** records which model wrote this, and **`revision.contentHash`**
-  changes whenever the automation does — which invalidates a stored approval,
-  and lets a sequence pin the exact revision it was tested against.
+That document *is* the security model. Four fields carry it:
 
-A person can read all of it before it ever runs — and so can a reviewer.
+- **`sources`** is the fence — the only websites this job may reach. Every
+  request is checked against it in code before it leaves the app, and a
+  lookalike host like `evil-coingecko.com` fails the check
+  ([`fetchPage.ts:32`](src/runner/fetchPage.ts#L32)).
+- **`files`** is empty here, so the file tools are **never handed to the model
+  at all** ([`loop.ts:143`](src/runner/loop.ts#L143)). It can't misuse a tool it
+  was never given.
+- **`permissions`** is the plain-language list you approve, so changing what an
+  automation may touch is always a visible edit.
+- **`revision.contentHash`** changes whenever the automation does — which is how
+  an edited automation has to re-earn its approval, and how a sequence pins the
+  exact version it was tested against.
+
+A person can read all of that before anything runs. So can a reviewer.
 
 ![The compile-and-run pipeline: plain English through a closed catalog, constrained drafting and a validator loop into a readable automation record, then a fenced tool loop and grounded verification](docs/img/architecture.png)
 
@@ -207,232 +250,46 @@ flowchart LR
 
 Four ideas do the work:
 
-1. **A closed catalog.** Before the model is asked anything, the app lists the
-   real folders, files and existing automations and bakes them into the JSON
-   schema as enums. The model isn't *asked* to avoid inventing a filename — it
-   is structurally unable to emit one. This is the schema the model actually
-   receives, generated by `wireJsonSchema()`:
+**1 · It can only name things that exist.** Before the model is asked anything,
+the app takes an inventory of your real folders, files and automations, and
+builds those names *into the grammar the model writes with*. Picking a filename
+becomes multiple-choice over things that are actually there.
 
-   ```json
-   "reads": {
-     "type": "array",
-     "items": { "type": "string", "enum": ["~/Downloads", "~/Downloads/invoice-jan.pdf"] }
-   }
-   ```
+<details>
+<summary>What that looks like in the schema</summary>
 
-   Two real paths, and no way to sample a third. With nothing indexed, the same
-   field compiles to `"items": { "not": {} }` — a type inhabited by no string at
-   all, so the grammar cannot produce a filename because none exists.
-2. **Constrained decoding, then correction.** The schema is sent as Ollama's
-   `format`, which llama.cpp compiles into a decoding grammar, so malformed
-   JSON is unrepresentable. A zod validator then re-checks meaning and hands
-   the model exactly what was wrong, up to three passes, with an escape hatch
-   that lets it reason in plain words and transcribes the result.
-3. **The fence is a function.** `fenceAllows()` compares a request's hostname
-   to the record's own `sources` before anything leaves the app; file work
-   happens on a sandbox copy with a diff and a **Keep** button.
-4. **Numbers are checked against the source.** Every figure in an answer is
-   looked for in the data that was actually fetched (allowing honest rounding
-   and sums). A number that appears nowhere stops the run.
+```json
+"reads": {
+  "type": "array",
+  "items": { "type": "string", "enum": ["~/Downloads", "~/Downloads/invoice-jan.pdf"] }
+}
+```
+
+Two real paths and no way to write a third. With nothing indexed, the same field
+compiles to `"items": { "not": {} }` — a type no string satisfies — so the model
+cannot name a file because there is no file to name.
+
+</details>
+
+**2 · It gets corrected, not trusted.** The record has to survive a validator
+that re-checks meaning, and it gets up to three tries with the exact problems
+handed back to it. Slips the app can safely fix itself — a full web address
+where a site name belongs, a hand-off naming a value the next job doesn't take —
+are repaired outright rather than bounced. If the meaning is genuinely unclear,
+it asks you instead of guessing.
+
+**3 · The fence is code, not instructions.** A prompt saying "only visit these
+sites" is a suggestion. Here, every outbound request is compared against the
+record's own list *before it leaves the app* — and file work happens on a copy,
+so you approve a diff before anything real changes.
+
+**4 · Numbers have to come from somewhere.** Every figure in an answer is looked
+for in the data actually fetched, allowing honest rounding and sums. A number
+that appears nowhere stops the run instead of reaching you. This is the
+difference between an automation that reports and one that guesses.
 
 **Full architecture, with sequence diagrams and a file map:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).**
-
----
-
-## The engineering worth reading
-
-- **An inference pipeline, not a prompt.** Four compile paths race by cost:
-  verified templates (no model, ~1s) → a compact single-job drafter → the full
-  schema-constrained compiler → a plan-then-transcribe escape hatch. Bad
-  drafts are corrected, and rules a small model can't always satisfy degrade
-  to a nudge instead of dead-ending a draft.
-- **Blocked is not an answer.** When a site pushes back, a run walks a ladder:
-  the same page in a real cloaked offscreen browser → a curated same-fact
-  alternative (CoinGecko ↔ Coinbase ↔ Kraken, Nasdaq ↔ Yahoo, Google News ↔
-  HN/BBC) → only then a sentence naming every host tried. Substitutions come
-  from a hand-written table, never a search result, and are logged into the run.
-- **Sequences you can say out loud.** "connect these two", "a sequence of the
-  meta price and the orlando weather" — the second builds *both* automations
-  and the link between them from one sentence.
-- **Reads pages like a person when it must.** A real WebView2 window, kept
-  invisible with DWM cloaking, runs the page's JavaScript; if the answer only
-  exists as pixels, a local vision model reads it twice and must agree.
-- **Your documents, answered with citations.** OCR (Tesseract + pdfium) →
-  local embeddings → a plain-file vector store, answering only from your files
-  or saying it couldn't find it.
-- **Never silent.** Every failure is a designed sentence in one of three
-  families: stopped on purpose (gray), needs you (amber), broke (red). A
-  rate-limited API says "asked us to slow down" — never a price of 0.
-
----
-
-## Which brain, and why it matters
-
-One pipeline, two brains. The abstraction is `ModelProvider`, and the routing
-lives in exactly one function — `chat()` in
-[`providers/index.ts`](src/providers/index.ts) — which checks `cloudActive()`
-and forwards to Featherless or falls through to Ollama. Every consumer above
-it (draft, validate, verify, edit, the tool loop) calls `chat()` and never
-names a provider.
-
-### The default was chosen by measurement, not vibes
-
-Five local models, the **same eight drafting tasks**, run through the app's own
-compile path and scored by its own wire schema. On this machine — Intel Core
-Ultra 9 185H, 31 GB RAM, RTX 3500 Ada, model fully GPU-offloaded at 8k context:
-
-| Model | Median draft | Structural checks | Valid JSON |
-|---|---|---|---|
-| qwen3.5:2b | 6.3s | 21/25 | 6/8 |
-| **qwen3.5:4b** ← default | **12.6s** | **25/25** | **7/8** |
-| qwen3.5:9b | 15.0s | 23/25 | 7/8 |
-| gemma4:12b | 28.8s | 25/25 | 6/8 |
-| ministral-3:14b | 58.1s | 25/25 | 8/8 |
-
-4b is the only model that took every structural check in under 15 seconds. 2b
-is twice as fast and drops four. **9b is slower *and* less accurate**, which is
-the result that settled it — more local parameters did not buy drafting
-quality. 14b has the best JSON validity and costs 4.6× the latency.
-
-### What only local can give
-
-- **A decoding grammar, not a polite request.** `supportsSchemaFormat()`
-  returns true only for Ollama — the JSON Schema goes on the wire as `format`
-  and llama.cpp compiles it to a sampling grammar, so invalid JSON is
-  *unrepresentable*. Cloud degrades to `response_format: json_object`
-  ("some JSON object"), and the app says so in the run log at the moment it
-  applies: *"Drafting on the borrowed computer — validated after (cloud), not
-  grammar-locked."*
-- **Some data physically cannot leave.** Every vision call goes straight to
-  Ollama, bypassing the provider switch, and the Featherless wire builder
-  *drops* `images` when composing messages. RAG embedding is pinned to
-  `nomic-embed-text` with no cloud path at all. Your screenshots and your
-  documents' vectors have no code path off the machine.
-- **No key, no subscription, no rate limit, no per-token bill.** This is the
-  one that compounds: an automation on a 2-minute watch is ~720 model calls a
-  day, *forever*. Metered, an agentic loop is the expensive shape — many turns,
-  growing context, every run. Here the marginal cost of the 721st run is
-  electricity.
-- **Residency you control.** A holds counter pins the model in RAM for a whole
-  run and while any watcher is armed, so a heartbeat never pays a cold load;
-  switching brains explicitly evicts the previous model so a 12B and a 4B
-  don't fight over RAM.
-
-### What only cloud can give
-
-- **Context far past what a local default holds.** Local drafts at 8,192 and
-  runs tools at 32,768; the cloud roster is picked for long-context work, so a
-  corpus a 4B physically cannot fit still has somewhere to go.
-- **Room past the local time ceiling** on a heavy request — and if a local run
-  does hit it, you get a designed sentence telling you to split the job, never
-  a hang.
-- **A same-weights control.** `Qwen2.5-7B-Instruct` is pinned as "the mirror" —
-  identical weights to a local model, which isolates *compute* from *behaviour*
-  when comparing the two paths.
-
-### Designed around what a small model is good at
-
-A 4B model is a superb compiler and a poor calculator, so the architecture
-gives it only the first job. Each of these is a deliberate boundary, and each
-one is enforced in code:
-
-- **Arithmetic belongs to the code, never the model.** Number-checking is a
-  subset-sum, and document totals are extract-then-sum-in-TypeScript. The model
-  identifies the figures; the machine adds them.
-- **Vision reads twice and must agree.** Every screen read runs at two scales
-  and the numbers have to match exactly — the app would rather tell you it
-  couldn't confirm a digit than deliver a coin flip.
-- **Structure is taught by example.** Splitting *"…and then email me"* into a
-  second automation is carried by a worked example in the prompt, which lands
-  where a rule alone does not.
-- **Context is sized to the job.** Drafting runs at the window the prompt
-  actually needs, keeping simple requests fast instead of paying for KV cache
-  nothing will use.
-
-**Every run stamps `ranOn`** — `local` or `featherless:<model>` — at record
-creation. That is what makes "did this leave my computer?" a checkable fact
-after the fact instead of a promise in a README.
-
----
-
-## Cloud compute: Featherless.ai (opt-in)
-
-`src/providers/index.ts` is the single source of truth, and **"cloud is on" is
-defined as "a Featherless model is the current brain"** — there is no second
-toggle that can drift out of sync with the model picker.
-
-- OpenAI-compatible chat completions with the same structured-output contract
-  the local path uses, so one compiler serves both.
-- **Five cloud models, each with a declared role** (`CLOUD_MODELS`,
-  [`featherless.ts:23`](src/providers/featherless.ts)) — so picking a brain is
-  a choice with a stated reason, not a dropdown of opaque IDs:
-
-  | Model | Role |
-  |---|---|
-  | `Qwen/Qwen3-32B` | cloud default — native tool calling |
-  | `zai-org/GLM-4.7-Flash` | long-context thorough mode (202k) — a corpus the local 4B physically cannot hold |
-  | `Qwen/Qwen3-VL-8B-Instruct` | vision |
-  | `Qwen/Qwen2.5-7B-Instruct` | the mirror — same weights as the local model, which isolates *compute* from *behaviour* when comparing |
-  | `moonshotai/Kimi-K2.6` | showcase (262k context) |
-
-- **The providers are not equally capable, and the pipeline knows it.**
-  Ollama compiles a JSON Schema into a decoding grammar; Featherless offers
-  `response_format: json_object` but not `json_schema`. So
-  `supportsSchemaFormat()` returns `false` for cloud
-  ([`featherless.ts:100`](src/providers/featherless.ts)), the request degrades
-  to `json_object`, and the **validator loop becomes the primary shape defense
-  in the cloud** instead of the grammar. Same compiler, different guarantee —
-  declared in code rather than hoped for.
-- **Credentials stay on the machine.** The Gmail app password is sealed with
-  **Windows DPAPI** in Rust (`src-tauri/src/secrets.rs`), so it is never
-  readable outside your Windows account and never crosses into the webview.
-  The Featherless key is held in local settings and goes exactly one place —
-  Featherless.
-- Concurrency-aware queueing matched to Featherless's plan model.
-- Every run record stores `ranOn`, so Activity can always answer *"did this
-  leave my computer?"* after the fact.
-
-![The Activity tab: 238 delivered results, an amber card holding 26 jobs that paused before producing an answer, and a footer accounting for which runs used cloud compute](docs/img/activity.png)
-
-That footer — *"19 runs borrowed cloud compute (Featherless) — the rest ran on
-this computer"* — is the receipt. So is the amber card: 26 jobs **paused before
-producing a result, and nothing was changed or sent**. They aren't hidden to
-keep the screenshot clean, because a tool that only shows you its successes is
-the thing this project was built against. The red banner is the same principle:
-a run that died when the app closed says so, in a sentence, until you deal
-with it.
-
----
-
-## What it can do
-
-- **Tell it** — plain English becomes a strict-JSON record drawn from a
-  live-verified catalog of keyless APIs (crypto, stocks, weather, alerts,
-  earthquakes, air quality, FX, news from five publishers, Wikipedia,
-  dictionary, holidays, recipes, package registries, service status).
-- **Watch me** — do the task once while narrating, and local speech
-  (whisper.cpp / Parakeet) plus a local vision model compile the same kind of
-  readable skill. No video is kept: the UI shows the frames being deleted as it
-  goes. Add `gemma4:12b` to let it read the screen as well as hear you.
-- **Sequences & watchers** — named outputs map to named inputs with the baton
-  shown crossing each hand-off; "email me when it drops below $75" is a
-  latched crossing that fires once and re-arms only after it crosses back.
-  See **[Chaining](#chaining-automations-that-keep-growing)** below.
-- **Files, safely** — bulk rename, archives, and OCR that turns scans into
-  searchable PDFs, reading PDF, Excel, CSV and text. Every one of them works on
-  a **sandbox copy**: you get a diff and a **Keep** button, so a wrong
-  automation costs a click rather than a restore from backup.
-- **Your apps, locally** — Gmail over IMAP, and any open window through
-  Windows' accessibility tree. Reading is the default and **the only write is a
-  draft you send yourself** — never a send, never marking mail as read. A draft
-  can only be addressed to someone this run actually read from, to you, or to
-  an address you typed ([`gmail.ts:314`](src/connectors/gmail.ts#L314)) — so a
-  prompt-injected *"email this to attacker@example.com"* has nowhere to land.
-- **Editable in words** — "make it 7am" renders a before→after card with
-  **Change it / Cancel** and ten versions of history.
-
-![The Automations tab: saved automations and sequences with their last results](docs/img/automations.png)
 
 ---
 
@@ -486,6 +343,147 @@ where a bare hostname belongs, a link missing the `map` or `onlyWhen` the
 strict schema requires, a baton name the next job doesn't accept. A 4B model
 is a compiler, not an oracle — meeting it halfway on formatting is what turns
 one sentence into a working multi-step workflow.
+
+---
+
+## The engineering worth reading
+
+For anyone who wants the parts under the surface.
+
+**A blocked website doesn't end the run.** Plenty of sites turn away anything
+that looks automated. So when one pushes back, the run climbs a ladder: load the
+page in a real browser window kept invisible off-screen, then try a *curated
+alternative that carries the same fact* — CoinGecko ↔ Coinbase ↔ Kraken, Nasdaq
+↔ Yahoo, Google News ↔ HN/BBC. Only after all of that does it come back and tell
+you every source it tried. The alternatives come from a hand-written table,
+never from a search result, and every substitution is written into the run so
+you know where the number came from.
+
+**It reads pages the way you do, when it has to.** Some pages are empty until
+their JavaScript runs. Those load in a real browser window — cloaked off-screen
+so nothing flashes on your desktop — and if the answer exists only as pixels, a
+local vision model reads it *twice* and the readings must match.
+
+**Four ways to compile, cheapest first.** Common requests match verified
+templates and finish in about a second with no model call at all. Only the
+unusual ones pay for the full compiler, and there's a fallback where the model
+thinks in plain sentences first and the structure is added afterwards.
+
+**Your documents, answered with citations.** Scans get OCR'd, everything is
+indexed locally, and answers come with the passage they came from — or an honest
+"I couldn't find that in your documents."
+
+**It is never silent.** Every failure is a written sentence in one of three
+tones: stopped on purpose, needs you, or broke. A rate-limited API says *"asked
+us to slow down"*. It never quietly reports a price of $0.
+
+---
+
+## Which brain, and why it matters
+
+By default the AI runs on your computer, and that's the whole product. Cloud is
+there for the rare job that genuinely needs a bigger model — and it's a switch
+you flip, per model, knowingly.
+
+One pipeline serves both. Every part of the app asks for "the model" and never
+knows or cares which one answered, so the two paths can't drift apart.
+
+### The default was chosen by measurement
+
+Five local models, the **same eight jobs**, run through the app's own compiler
+and scored by its own rules. On this machine — Intel Core Ultra 9 185H, 31 GB
+RAM, RTX 3500 Ada:
+
+| Model | Median draft | Structural checks | Valid JSON |
+|---|---|---|---|
+| qwen3.5:2b | 6.3s | 21/25 | 6/8 |
+| **qwen3.5:4b** ← default | **12.6s** | **25/25** | **7/8** |
+| qwen3.5:9b | 15.0s | 23/25 | 7/8 |
+| gemma4:12b | 28.8s | 25/25 | 6/8 |
+| ministral-3:14b | 58.1s | 25/25 | 8/8 |
+
+4b is the only model that took every structural check in under 15 seconds. 2b
+is twice as fast and drops four. **9b is slower *and* less accurate**, which is
+the result that settled it — more local parameters did not buy drafting
+quality. 14b has the best JSON validity and costs 4.6× the latency.
+
+### What running locally actually buys you
+
+- **Nothing to sign up for, and nothing metered.** This is the one that
+  compounds. An automation checking something every two minutes is roughly 720
+  model calls a day, forever — and agentic work is the expensive shape when
+  billed per token, because each run is many turns. Here the 721st run costs
+  electricity.
+- **Some things simply cannot leave.** Screen reading and document indexing have
+  no cloud path in the code at all — not a setting that defaults to off, but no
+  route out of the machine. Your screenshots and the index of your documents
+  stay put whatever else you turn on.
+- **A stronger guarantee on the output.** Locally, the shape of the answer is
+  enforced while the model writes, so malformed output isn't just unlikely, it's
+  impossible. Cloud APIs can only promise "valid JSON of some kind", so there
+  the validator does that work instead — and the run log says which one you got,
+  when you got it.
+- **It works when the internet doesn't.** The thinking part, anyway. A job that
+  fetches a website still needs a website.
+
+### What cloud is genuinely better at
+
+- **Far more context** — a pile of documents too large for a small local model
+  still has somewhere to go.
+- **Room past the local time limit** on a heavy request. And if a local run does
+  hit that limit, it tells you to split the job rather than hanging.
+- **A fair comparison.** One cloud option runs the *same weights* as a local
+  model, so you can tell the difference between "a bigger computer helped" and
+  "a bigger model helped".
+
+### Designed around what a small model is good at
+
+A 4B model is a superb compiler and a poor calculator, so the architecture
+gives it only the first job. Each of these is a deliberate boundary, and each
+one is enforced in code:
+
+- **Arithmetic belongs to the code, never the model.** Number-checking is a
+  subset-sum, and document totals are extract-then-sum-in-TypeScript. The model
+  identifies the figures; the machine adds them.
+- **Vision reads twice and must agree.** Every screen read runs at two scales
+  and the numbers have to match exactly — the app would rather tell you it
+  couldn't confirm a digit than deliver a coin flip.
+- **Structure is taught by example.** Splitting *"…and then email me"* into a
+  second automation is carried by a worked example in the prompt, which lands
+  where a rule alone does not.
+- **Context is sized to the job.** Drafting runs at the window the prompt
+  actually needs, keeping simple requests fast instead of paying for KV cache
+  nothing will use.
+
+**Every run stamps `ranOn`** — `local` or `featherless:<model>` — at record
+creation. That is what makes "did this leave my computer?" a checkable fact
+after the fact instead of a promise in a README.
+
+---
+
+### Turning cloud on is one decision, not a hidden setting
+
+Paste a [Featherless.ai](https://featherless.ai) key and pick a cloud model —
+that *is* the switch. There's no second toggle that can drift out of sync with
+the picker, because choosing the brain and choosing where compute happens were
+always the same choice. Each cloud model is listed with the reason it's there,
+rather than as a dropdown of opaque IDs: a tool-calling default, a long-context
+option, a vision option, and a same-weights mirror of a local model for
+comparing the two paths honestly.
+
+**Every run records where it ran.** Which is what turns "nothing leaves your
+computer" from a promise into something you can check afterwards:
+
+![The Activity tab: delivered results, an amber card holding jobs that paused before producing an answer, and a footer accounting for which runs used cloud compute](docs/img/activity.png)
+
+That footer — *"19 runs borrowed cloud compute (Featherless) — the rest ran on
+this computer"* — is the receipt. So is the amber card: jobs that **paused
+before producing a result, changing and sending nothing**. They're shown rather
+than tidied away, because a tool that only displays its successes is the thing
+this was built against.
+
+---
+
 
 ## Project layout
 

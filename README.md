@@ -19,6 +19,7 @@ about where compute happened.
 | **Size** | ~26,000 lines across 100 source files |
 | **Platform** | Windows 11 (WebView2) |
 | **License** | [MIT](LICENSE) |
+| **Built** | entirely inside the 48-hour window — first commit [`54ec863`](https://github.com/Awalker77s/PrivatePilot/commit/54ec863) at 6:27 PM CST, 27 minutes after kickoff; 97 commits, [full history](https://github.com/Awalker77s/PrivatePilot/commits/main) |
 
 ---
 
@@ -82,6 +83,11 @@ detection, schedule parsing, and the file compiler).
 
 A sentence becomes a **record**; the record — not the model — decides what runs.
 
+![The compile-and-run pipeline: plain English through a closed catalog, constrained drafting and a validator loop into a readable automation record, then a fenced tool loop and grounded verification](docs/img/architecture.png)
+
+<details>
+<summary>Diagram source (Mermaid)</summary>
+
 ```mermaid
 flowchart LR
     A["Plain English"] --> B["Closed catalog<br/>real files + hosts"]
@@ -95,6 +101,8 @@ flowchart LR
     C -.-> M(["Ollama local · Featherless cloud"])
     F -.-> M
 ```
+
+</details>
 
 Four ideas do the work:
 
@@ -155,6 +163,18 @@ with the model picker.
 
 - OpenAI-compatible chat completions with the same structured-output contract
   the local path uses, so one compiler serves both.
+- **Five cloud models, each with a declared role** (`CLOUD_MODELS`,
+  [`featherless.ts:23`](src/providers/featherless.ts)) — so picking a brain is
+  a choice with a stated reason, not a dropdown of opaque IDs:
+
+  | Model | Role |
+  |---|---|
+  | `Qwen/Qwen3-32B` | cloud default — native tool calling |
+  | `zai-org/GLM-4.7-Flash` | long-context thorough mode (202k) — a corpus the local 4B physically cannot hold |
+  | `Qwen/Qwen3-VL-8B-Instruct` | vision |
+  | `Qwen/Qwen2.5-7B-Instruct` | the mirror — same weights as the local model, which isolates *compute* from *behaviour* when comparing |
+  | `moonshotai/Kimi-K2.6` | showcase (262k context) |
+
 - **The providers are not equally capable, and the pipeline knows it.**
   Ollama compiles a JSON Schema into a decoding grammar; Featherless offers
   `response_format: json_object` but not `json_schema`. So

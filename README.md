@@ -300,6 +300,10 @@ a Zap *succeeded*, not what it *found*).
 
 ---
 
+## Team
+
+Built by **Alexander Walker**, **Mustapha324**, and **Ryan Schlosbon**.
+
 ## License
 
-[MIT](LICENSE) © 2026 Alexander Walker
+[MIT](LICENSE) © 2026 Alexander Walker, Mustapha324, and Ryan Schlosbon

@@ -648,14 +648,60 @@ function WatchMeCard({ item }: { item: ChatItem & { kind: "watchme" } }) {
   );
 }
 
-// The before→after card: field-level diffs against the current version,
-// Keep it / Put it back.
+// What the automation is NOW, as a sentence — "now uses When: Every day at
+// 7:00" is field-dump English; a person reads "now runs every day at 7:00".
+function appliedSentence(
+  changed: { key: string; to: string }[],
+  wasCalled: string
+): string {
+  const lower = (s: string) => (s ? s[0].toLowerCase() + s.slice(1) : s);
+  const clauses = changed.map((c) => {
+    switch (c.key) {
+      case "name":
+        return `is now called "${c.to}"`;
+      case "schedule":
+        return `now runs ${lower(c.to)}`;
+      case "sources":
+        return `now reaches ${c.to}`;
+      case "steps":
+        return "now has updated steps";
+      case "sentence":
+        return `now describes itself as "${c.to}"`;
+      case "files":
+        return `now works on ${c.to}`;
+      default:
+        return `now uses ${c.key} ${c.to}`;
+    }
+  });
+  const joined =
+    clauses.length <= 1
+      ? clauses[0] ?? "was changed"
+      : `${clauses.slice(0, -1).join(", ")} and ${clauses[clauses.length - 1]}`;
+  return `Changed — ${wasCalled} ${joined}.`;
+}
+
+// The before→after card. The green button DOES the change and the grey one
+// walks away — "Keep it" read as "keep it as it is" (leave it alone), which
+// is the opposite of what it did. And applying used to say nothing at all:
+// the green button just vanished, which reads as "nothing happened".
 function EditCard({ item }: { item: ChatItem & { kind: "edit" } }) {
   const { result, state } = item;
+  const applied = state === "kept";
   return (
     <div className="built-card card" data-testid="edit-card">
-      <div className="caption">Changing "{result.before.name}":</div>
-      {result.changed.map((c) => (
+      <div className="caption">
+        {applied
+          ? `Changed "${result.before.name}":`
+          : state === "reverted"
+            ? `Put "${result.before.name}" back:`
+            : `Change "${result.before.name}"?`}
+      </div>
+      {/* Undone, the arrow points the other way — the card must never keep
+          claiming a direction that is no longer true. */}
+      {(state === "reverted"
+        ? result.changed.map((c) => ({ ...c, from: c.to, to: c.from }))
+        : result.changed
+      ).map((c) => (
         <div key={c.key} className="edit-row">
           <span className="sheet-row-label">{c.key === "schedule" ? "When" : c.key}</span>
           <span className="edit-from">{c.from}</span>
@@ -670,28 +716,42 @@ function EditCard({ item }: { item: ChatItem & { kind: "edit" } }) {
             onClick={() => keepEdit(item.id)}
             data-testid="keep-edit"
           >
-            Keep it
+            Change it
           </button>
           <button
             className="btn btn-ghost"
             onClick={() => dropEdit(item.id)}
             data-testid="drop-edit"
           >
-            Put it back
+            Cancel
           </button>
         </div>
       )}
-      {state === "kept" && (
-        <button
-          className="btn btn-ghost btn-sm"
-          onClick={() => revertEdit(item.id)}
-          data-testid="revert-edit"
-        >
-          Put it back the way it was ›
-        </button>
+      {applied && (
+        <>
+          {/* Say it landed, and say what it IS now — the version bump on the
+              tile is not something a person reads as confirmation. */}
+          <div className="run-answer" data-testid="edit-applied">
+            <span className="dot dot-green" />
+            <span className="caption">
+              {appliedSentence(result.changed, result.before.name)}
+            </span>
+          </div>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => revertEdit(item.id)}
+            data-testid="revert-edit"
+          >
+            Undo this change ›
+          </button>
+        </>
       )}
-      {state === "reverted" && <div className="caption">Put back.</div>}
-      {state === "dropped" && <div className="caption">Left as it was.</div>}
+      {state === "reverted" && (
+        <div className="caption">Undone — it is back the way it was.</div>
+      )}
+      {state === "dropped" && (
+        <div className="caption">Cancelled — nothing changed.</div>
+      )}
       {state === "stale" && (
         <div className="caption">Outdated — the automation changed after this card.</div>
       )}

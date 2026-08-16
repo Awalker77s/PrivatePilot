@@ -6,23 +6,31 @@ import { invoke } from "@tauri-apps/api/core";
 import { readChatFile, writeChatFile } from "../storage/chat";
 import {
   ADD_SHAPE_RE,
+  CHAIN_TALK_RE,
   CHANGE_NOUN_RE,
   COPY_INTENT_RE,
   DEIXIS_RE,
   DELTA_VERB_RE,
   EditTarget,
   NEW_TASK_RE,
+  PLURAL_REF_RE,
   SCHEDULE_FIELD_RE,
+  SEQUENCE_NAME_RE,
   TIMEY_RE,
+  describeChain,
+  findChainByName,
   findTargetNamed,
   findTargetsByName,
   focusTargets,
   isQuestionAbout,
+  mentionIndex,
   nameAfterPreposition,
+  recentAutomationRecords,
   renderHistory,
   rewriteDeixis,
   splitCoordination,
 } from "./memory";
+import { CHAIN_REQUEST_RE } from "../pipeline/catalog";
 import { explainAutomation } from "../pipeline/explain";
 import {
   ELLIPTICAL_RE,
@@ -35,16 +43,27 @@ import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
 import { keepRun, putBackRun, runAutomation } from "../runner/run";
 import {
+  appendRun,
   getRun,
   getState,
+  newId,
   saveAutomation,
   saveChain,
 } from "../storage/stores";
 import { editAutomation, EditResult } from "../pipeline/edit";
 import { activeLocalModel } from "../providers";
 import { ChainCycleError, assertNoCycle, runChain } from "../dispatcher";
-import type { AutomationRecord, AutomationReference } from "../storage/types";
-import { automationContentHash, normalizeAutomation } from "../storage/revisions";
+import type {
+  AutomationRecord,
+  AutomationReference,
+  ChainLink,
+  ChainRecord,
+} from "../storage/types";
+import {
+  automationContentHash,
+  mergePermissionManifests,
+  normalizeAutomation,
+} from "../storage/revisions";
 
 type ChatItemVariant =
   | { id: number; kind: "user"; text: string; references?: AutomationReference[] }
@@ -715,6 +734,114 @@ export async function revertEdit(itemId: number) {
   replace(itemId, { ...item, state: "reverted" });
 }
 
+// "Connect A and B" — a sequence built deterministically from records that
+// already exist, exactly the way the Library's Sequence builder would:
+// sequential links, outputs auto-wired to same-named inputs, permissions
+// merged, member revisions pinned. No model call — nothing is re-drafted.
+function buildSequenceRecord(
+  members: AutomationRecord[],
+  name: string | null
+): ChainRecord {
+  // The same automation twice is a cycle the dispatcher would refuse — and
+  // never what "connect A and A" meant anyway. Keep the first mention.
+  const unique = members.filter(
+    (m, i) => members.findIndex((x) => x.id === m.id) === i
+  );
+  const normalized = unique.map((m) => normalizeAutomation(m));
+  const links: ChainLink[] = [];
+  for (let i = 0; i < normalized.length - 1; i++) {
+    const from = normalized[i];
+    const to = normalized[i + 1];
+    links.push({
+      from: from.id,
+      to: to.id,
+      map: Object.fromEntries(
+        to.inputs
+          .filter((input) => from.outputs.some((o) => o.name === input.name))
+          .map((input) => [input.name, input.name])
+      ),
+      onlyWhen: null,
+    });
+  }
+  return {
+    id: newId("chain"),
+    name: name ?? normalized.map((m) => m.name).join(" → "),
+    links,
+    timeoutMinutes: 30,
+    createdAt: Date.now(),
+    components: normalized.map((m) => ({
+      automationId: m.id,
+      revisionId: m.revision!.id,
+      revisionNumber: m.revision!.number,
+    })),
+    permissions: mergePermissionManifests(normalized),
+  };
+}
+
+// The connected sequence lands as a normal built card: Try it once runs the
+// whole line watched (each step answers in its own bubble), Save keeps it.
+// Connecting is itself a recorded action — Activity shows it like any other,
+// and the card's runId points at a REAL record rather than a minted id.
+async function pushSequenceCard(input: AutomationRecord[], text: string) {
+  const members = input.filter(
+    (m, i) => input.findIndex((x) => x.id === m.id) === i
+  );
+  if (members.length < 2) {
+    push({
+      kind: "note",
+      tone: "amber",
+      text: "A sequence needs two different automations — name the second one and I'll connect them.",
+    });
+    return;
+  }
+  const custom = text.match(SEQUENCE_NAME_RE)?.[1]?.trim() ?? null;
+  const chain = buildSequenceRecord(members, custom);
+  const order = members.map((m) => m.name).join(" → ");
+  const summary = `Connected ${order} into "${chain.name}" — no automation was re-drafted.`;
+  const runId = newId("run");
+  const at = Date.now();
+  await appendRun({
+    id: runId,
+    automationId: members[0].id,
+    chainId: chain.id,
+    stepIndex: null,
+    cause: "you asked to connect automations",
+    startedAt: at,
+    finishedAt: at,
+    status: "ok",
+    ranOn: "local",
+    sandbox: null,
+    baton: null,
+    summary,
+    stages: [],
+    events: [],
+    counters: { drafts: 0, fieldsFixed: 0, questionCard: false },
+    didNotDo: [],
+    diff: null,
+    answer: null,
+  });
+  push({
+    kind: "built",
+    result: {
+      ok: true,
+      automations: members,
+      chain,
+      question: null,
+      argument: [
+        `Connected ${order} — nothing was re-drafted. Try it once to watch the whole sequence run, then Save keeps it in the Library.`,
+      ],
+      failSentence: null,
+      runId,
+      keptToOneStep: false,
+    },
+    state: "fresh",
+    runId: null,
+    chainRunIds: null,
+    progress: null,
+    keepSentence: null,
+  });
+}
+
 // A one-tap "Which one?" card — a delta with an ambiguous target never
 // guesses and never falls through to a fresh build.
 function askWhichOne(targets: EditTarget[], request: string) {
@@ -834,6 +961,105 @@ export async function sendText(text: string) {
       }
       return;
     }
+  }
+
+  // A named SEQUENCE is a thing you can talk to as well: "what does the
+  // Bitcoin Morning Briefing do?" is answered from the record itself — no
+  // model, no guessing. Without this the message names nothing the
+  // automation tiers recognize and compiles a junk lookalike.
+  const namedChain = findChainByName(text, getState().chains.records);
+  if (namedChain && !NEW_TASK_RE.test(text)) {
+    if (isQuestionAbout(text)) {
+      push({
+        kind: "explain",
+        autoName: namedChain.name,
+        text: describeChain(namedChain, saved),
+      });
+      return;
+    }
+    // A change aimed at the sequence itself. Chat can't rewire sequences
+    // yet — say where it CAN be done rather than compiling something new.
+    if (DELTA_VERB_RE.test(text) || ADD_SHAPE_RE.test(text)) {
+      push({
+        kind: "note",
+        tone: "amber",
+        text: `Changing "${namedChain.name}" isn't something I can do from chat yet — open it in the Library's Sequence builder. I can build you a fresh sequence though: name the automations and say "connect them".`,
+      });
+      return;
+    }
+  }
+
+  // ---- sequences by talking ----
+  // "connect A and B", "put these together", "make an automation for X and
+  // one for Y as a chain" — every wording of "these should run as one
+  // connected thing". A chain WORD alone proves nothing ("supply chain
+  // news"); it starts meaning something next to two named automations, a
+  // plural pointer, or an explicit as-a-chain shape.
+  if (CHAIN_TALK_RE.test(text)) {
+    const chainNamed = findTargetsByName(text, thread, saved);
+    // "make an automation that combines Top Tech News and Bitcoin Note into
+    // one summary" asks for a NEW job that happens to mention two names —
+    // building it beats wiring the two together.
+    if (chainNamed.length >= 2 && !NEW_TASK_RE.test(text)) {
+      // Existing automations, named: connect them in the order they were
+      // said. Deterministic — no model, no re-drafting.
+      const members = [...chainNamed]
+        .sort(
+          (a, b) =>
+            mentionIndex(text, a.record.name) - mentionIndex(text, b.record.name)
+        )
+        .map((t) => t.record);
+      await pushSequenceCard(members, text);
+      return;
+    }
+    // "connect this to the Bitcoin Morning Briefing" — pointing INTO an
+    // existing sequence. Chat can't edit sequences yet; say so instead of
+    // compiling junk.
+    const chainMention = getState().chains.records.find((c) =>
+      new RegExp(
+        `\\b${c.name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\b`,
+        "i"
+      ).test(text)
+    );
+    if (chainMention && chainNamed.length >= 1) {
+      push({
+        kind: "note",
+        tone: "amber",
+        text: `Adding to "${chainMention.name}" isn't chat-editable yet — open it in the Library's Sequence builder. Or name all the automations and I'll build a fresh sequence.`,
+      });
+      return;
+    }
+    // Exactly one name + chain talk ("combine the two steps in X") is about
+    // THAT automation, not about connecting the thread's recent pair — only
+    // a nameless plural pointer reaches for the thread.
+    if (chainNamed.length === 0 && PLURAL_REF_RE.test(text) && !NEW_TASK_RE.test(text)) {
+      // "connect these two" — the thread knows which ones.
+      const recent = recentAutomationRecords(thread, saved);
+      if (recent.length >= 2) {
+        await pushSequenceCard(recent, text);
+        return;
+      }
+      push({
+        kind: "note",
+        tone: "amber",
+        text: 'Tell me which automations to connect — like "connect Bitcoin Price Check and Bitcoin Email Summary".',
+      });
+      return;
+    }
+    if (CHAIN_REQUEST_RE.test(text)) {
+      // A BUILD request that wants its jobs connected ("make an automation
+      // for X and one for Y, as a chain") — compile the whole text as one
+      // call, never split into independent jobs: the drafter sees the chain
+      // ask (chainIntent) and must join what it drafts.
+      await runCompile({
+        userText: `${text}${referenceContext(references, saved)}`,
+        answers: [],
+        history,
+      });
+      return;
+    }
+    // A chain word with no other evidence — a topic, not a request. Fall
+    // through to normal routing.
   }
 
   // "…and another automation to check meta" = independent jobs. Split before

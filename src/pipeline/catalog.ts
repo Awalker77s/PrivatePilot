@@ -42,6 +42,10 @@ export interface Catalog {
   // The person's words route on a result ("if…, otherwise…") — the validator
   // insists on chain.steps when multiple jobs arrive unchained.
   branchIntent?: boolean;
+  // The person explicitly asked for ONE connected sequence ("as a chain",
+  // "connect them", "one after the other") — the validator then insists
+  // multi-job drafts arrive chained, and allows pure-ordering links.
+  chainIntent?: boolean;
   // This request is ONE job by construction (a coordination-split segment) —
   // the validator refuses drafts with more than one automation.
   singleJob?: boolean;
@@ -58,12 +62,39 @@ const FILE_INTENT =
 const BRANCH_INTENT =
   /\b(otherwise|or else|if not\b|if it (does not|doesn't)|depending on (what|the|that|it)|if the \w+ (fails|breaks|is down|works|succeeds)|if the (result|answer|outcome|check)|if (it|that|this)(\s+\w+)? (fails|breaks|finds|says|mentions|succeeds|is down|works))\b/i;
 
+// An explicit ask that the jobs be CONNECTED, in any of the words people use
+// for it — chain, sequence, connect, put together, one after the other.
+// Deliberately shaped (not a bare \bchain\b): "supply chain news" is a topic,
+// not a request to link jobs.
+export const CHAIN_REQUEST_RE = new RegExp(
+  [
+    // "…as a chain", "…into one sequence"
+    String.raw`\b(?:as|into) (?:a |one )?(?:chain|sequence|workflow)\b`,
+    // "make an automation for this and one for that a chain" — the ask
+    // tacked onto the end, which is how people say it out loud.
+    String.raw`\b(?:a|one) (?:chain|sequence|workflow)\b(?:\s+or\s+(?:a\s+)?(?:chain|sequence|workflow))?\s*[.!?]*\s*$`,
+    String.raw`\b(?:chain|sequence|connect|link|combine|join) (?:them|these|those|both|the two|together)\b`,
+    String.raw`\b(?:make|turn) (?:it|this|them|these|those)?\s*(?:in)?to (?:a |one )?(?:chain|sequence|workflow)\b`,
+    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with) (?:them|these|those)\b`,
+    String.raw`\bfeeds? (?:it |that |the result )?into\b`,
+    String.raw`\bone after (?:the other|another)\b`,
+    String.raw`\bback to back\b`,
+    String.raw`\bput (?:them|these|those|the two)\b[^.]{0,40}?\btogether\b`,
+    String.raw`\bput\s+(?!together\b)[^.]{1,60}?\s+and\s+[^.]{1,60}?\s+together\b`,
+    String.raw`\bstring (?:them|these|those) together\b`,
+    String.raw`\bhook (?:them|these|those) (?:up|together)\b`,
+  ].join("|"),
+  "i"
+);
+
 export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
   const branchIntent = BRANCH_INTENT.test(userText);
-  if (FILE_INTENT.test(userText)) return { ...catalog, branchIntent };
+  const chainIntent = CHAIN_REQUEST_RE.test(userText);
+  if (FILE_INTENT.test(userText)) return { ...catalog, branchIntent, chainIntent };
   return {
     ...catalog,
     branchIntent,
+    chainIntent,
     files: [],
     readTargets: [],
     writeTargets: [],

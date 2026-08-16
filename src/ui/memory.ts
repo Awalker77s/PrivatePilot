@@ -4,7 +4,7 @@
 // errors; template-rendering from typed cards can't hallucinate). The model
 // also never resolves a pronoun: "this automation" is rewritten to the real
 // name app-side before any call.
-import type { AutomationRecord } from "../storage/types";
+import type { AutomationRecord, ChainRecord } from "../storage/types";
 import type { ChatItem } from "./chatStore";
 
 export interface EditTarget {
@@ -48,6 +48,182 @@ export const CHANGE_NOUN_RE =
 // an edit of it, even though bare "add…" (no name) is usually a new build.
 export const ADD_SHAPE_RE =
   /^(?:(?:please|can you|could you|would you)\s+)*(?:also\s+)?(?:add|include|append|attach)\b/i;
+
+// Every word people use for "put these automations together" — chain,
+// sequence, connect, link, combine, one after the other. Alone it's only a
+// WORD ("supply chain news"); the chat tier requires two named automations
+// or a plural pointer before it means anything.
+// A chain WORD is not a chain REQUEST: "supply chain news" is a topic. Each
+// alternative below is a shape people use to ASK for connection — an
+// imperative connect verb, a chain noun in an asking position, or a phrase
+// that only means sequencing.
+export const CHAIN_TALK_RE = new RegExp(
+  [
+    // "connect A and B", "i want to connect these", "let's chain them"
+    String.raw`^(?:\s*(?:please|can you|could you|would you|i want (?:you )?to|i'd like (?:you )?to|let'?s|now|also)\s+)*(?:connect|chain|link|combine|join|merge|string|hook)\b`,
+    // "…as a chain", "…into one sequence"
+    String.raw`\b(?:as|into) (?:a |one )?(?:chain|sequence|workflow)\b`,
+    // "…make an automation for this a chain or a sequence" — the noun lands
+    // at the end, which is how people actually tack the ask on.
+    String.raw`\b(?:a|one) (?:chain|sequence|workflow)\b(?:\s+or\s+(?:a\s+)?(?:chain|sequence|workflow))?\s*[.!?]*\s*$`,
+    // "chain them", "connect these", "link the two"
+    String.raw`\b(?:chain|sequence|connect|link|combine|join|merge) (?:them|these|those|both|the two|together)\b`,
+    // "make it a sequence", "turn these into a chain"
+    String.raw`\b(?:make|turn|build|create) (?:it|this|them|these|those)?\s*(?:in)?to (?:a |one )?(?:chain|sequence|workflow)\b`,
+    String.raw`\bmake (?:it|this|them|these) (?:a |one )?(?:chain|sequence)\b`,
+    // "a chain of these", "a sequence out of them"
+    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with) (?:them|these|those)\b`,
+    // phrases that can only mean sequencing
+    // "put them together" and "put Tesla Stock Check and Bitcoin Price
+    // Fetch together" — but never "put together a summary of my invoices",
+    // where `together` follows `put` directly and no "and" joins two things.
+    String.raw`\bput (?:them|these|those|the two)\b[^.]{0,40}?\btogether\b`,
+    String.raw`\bput\s+(?!together\b)[^.]{1,60}?\s+and\s+[^.]{1,60}?\s+together\b`,
+    String.raw`\bstring (?:them|these|those) together\b`,
+    String.raw`\bhook (?:them|these|those) (?:up|together)\b`,
+    String.raw`\bone after (?:the other|another)\b`,
+    String.raw`\bback to back\b`,
+    String.raw`\bfeeds? (?:it |that |the result )?into\b`,
+  ].join("|"),
+  "i"
+);
+// "them / these / both / together" — the message points at automations the
+// thread already knows instead of naming them.
+export const PLURAL_REF_RE = /\b(?:them|these|those|both|the two|together)\b/i;
+// "…and call it Morning Combo" — a name for the sequence, said in passing.
+export const SEQUENCE_NAME_RE =
+  /\b(?:call|name) (?:it|this|the (?:chain|sequence|workflow))\s+["']?(.+?)["']?[.!]?\s*$/i;
+
+// A sequence named in the message ("what does the Bitcoin Morning Briefing
+// do?"). Longest name first so "Solana Watch and Alert Chain" wins over a
+// shorter sequence whose name is a prefix of it.
+export function findChainByName(
+  text: string,
+  chains: ChainRecord[]
+): ChainRecord | null {
+  const hits = chains.filter((c) => {
+    const n = c.name.trim();
+    if (!n) return false;
+    const escaped = n
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replace(/\s+/g, "\\s+");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(text);
+  });
+  return hits.sort((a, b) => b.name.length - a.name.length)[0] ?? null;
+}
+
+// What a sequence IS, straight from the record — the members in run order,
+// what each hand-off carries, and where it reaches. No model: a sequence
+// question is answered by reading, not by generating.
+export function describeChain(
+  chain: ChainRecord,
+  saved: AutomationRecord[]
+): string {
+  const nameOf = (id: string) =>
+    saved.find((r) => r.id === id)?.name ?? id;
+  const lines: string[] = [];
+  if (chain.steps?.length) {
+    const order = chain.steps.map((s) => nameOf(s.automationId));
+    lines.push(
+      `**${chain.name}** routes on results across ${order.length} automations: ${order.join(", ")}.`
+    );
+    for (const s of chain.steps) {
+      if (s.after.length === 0) {
+        lines.push(`- Starts with **${nameOf(s.automationId)}**.`);
+        continue;
+      }
+      const afterNames = s.after
+        .map((id) => chain.steps!.find((x) => x.id === id))
+        .map((x) => (x ? nameOf(x.automationId) : "an earlier step"))
+        .join(" and ");
+      const when =
+        s.when === "failed"
+          ? "if that doesn't work"
+          : s.when === "broke"
+            ? "if that breaks"
+            : s.when === "held"
+              ? "if that is held back"
+              : s.when === "always"
+                ? "either way"
+                : "once that runs";
+      const test = s.ifAnswerContains
+        ? `, and only when the result mentions “${s.ifAnswerContains}”`
+        : s.ifAnswerLacks
+          ? `, and only when the result does NOT mention “${s.ifAnswerLacks}”`
+          : "";
+      lines.push(
+        `- Then **${nameOf(s.automationId)}** — after ${afterNames}, ${when}${test}.`
+      );
+    }
+  } else {
+    const order: string[] = [];
+    for (const l of chain.links) {
+      if (order.length === 0) order.push(l.from);
+      order.push(l.to);
+    }
+    lines.push(
+      `**${chain.name}** runs ${order.map(nameOf).join(" → ")}, one after the other.`
+    );
+    for (const l of chain.links) {
+      const carried = Object.keys(l.map);
+      lines.push(
+        `- **${nameOf(l.from)}** hands **${nameOf(l.to)}** ${carried.length ? carried.join(", ") : "nothing — it just runs next"}${
+          l.onlyWhen
+            ? `, and only when ${l.onlyWhen.field} ${l.onlyWhen.op.replace(/_/g, " ")} ${l.onlyWhen.value ?? ""}`
+            : ""
+        }.`
+      );
+    }
+  }
+  const hosts = chain.permissions?.network.hosts ?? [];
+  lines.push(
+    hosts.length
+      ? `It reaches ${hosts.join(", ")}. Run it from the Automations tab; it stops after ${chain.timeoutMinutes} minutes.`
+      : `No external access. Run it from the Automations tab; it stops after ${chain.timeoutMinutes} minutes.`
+  );
+  return lines.join("\n");
+}
+
+// Where a name first appears in the text — orders "connect B and A" as
+// B-then-A. Names absent from the text sort last, keeping their given order.
+export function mentionIndex(text: string, name: string): number {
+  const escaped = name
+    .trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s+");
+  const m = new RegExp(`\\b${escaped}\\b`, "i").exec(text);
+  return m ? m.index : Number.MAX_SAFE_INTEGER;
+}
+
+// The automations the thread was just working with, oldest first — what
+// "connect these" points at. The newest multi-automation card is already a
+// group and wins outright; otherwise the two newest distinct records.
+export function recentAutomationRecords(
+  items: ChatItem[],
+  saved: AutomationRecord[]
+): AutomationRecord[] {
+  const seen: AutomationRecord[] = [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "built" && it.state !== "discarded") {
+      const records = it.result.automations.map(
+        (a) => saved.find((r) => r.id === a.id) ?? a
+      );
+      if (records.length >= 2 && seen.length === 0) return records;
+      for (const r of records) {
+        if (!seen.some((x) => x.id === r.id)) seen.push(r);
+      }
+    } else if (it.kind === "edit" && it.result.after) {
+      const r = saved.find((x) => x.id === it.autoId) ?? it.result.after;
+      if (!seen.some((x) => x.id === r.id)) seen.push(r);
+    } else if (it.kind === "answer") {
+      const r = saved.find((x) => x.name === it.autoName);
+      if (r && !seen.some((x) => x.id === r.id)) seen.push(r);
+    }
+    if (seen.length >= 2) break;
+  }
+  return seen.slice(0, 2).reverse();
+}
 
 // "…to <Name>" / "…on <Name>": the name sits behind a preposition, so the
 // sentence acts ON that automation rather than merely mentioning its topic.

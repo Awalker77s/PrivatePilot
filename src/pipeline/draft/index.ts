@@ -76,6 +76,11 @@ export function draftSystemPrompt(catalog: Catalog): string {
     "",
     "- One automation unless the person's words name two distinct jobs (shortest chain wins).",
     "- Two SEPARATE jobs with no hand-off ('and another automation that…', 'also make one that…', 'and then one to check…') = draft BOTH automations and leave chain null. Only set chain.links when one job's outputs actually feed the next — a link whose map is empty and whose onlyWhen is null is invalid. EXCEPTION: 'if the result…, otherwise…' / 'depending on what it finds…' is NEVER independent jobs — that is ONE chain with steps (see BRANCHING below).",
+    ...(catalog.chainIntent
+      ? [
+          "- THIS request explicitly asks for ONE connected sequence ('as a chain', 'as a sequence', 'connect them', 'one after the other'): draft each job AND set chain.links joining them in the order stated — never leave chain null here. Map outputs to inputs by name where one job's result feeds the next; when nothing passes between two jobs, a link with an empty map is allowed for pure ordering.",
+        ]
+      : []),
     `- The request below is ALWAYS a NEW job — draft it from the request's own words. These automations ALREADY EXIST: ${existing}. Never output one of those as a name, never copy its steps; a request that merely resembles one is still a different job (changes to an existing automation never reach you).`,
     "- 'then email me…', 'then text me…', 'then message me a summary' is ALWAYS its own second automation (the message-drafting job), chained after the data job — set chain.links mapping the first job's outputs to the second job's inputs by name.",
     '- "when it drops below N" / "when it crosses above N" / "alert me if…" is ALWAYS two automations: the first watches (trigger watch) and outputs the value; the second acts; the link between them carries onlyWhen {"field": <that output name>, "op": "crosses_below" or "crosses_above", "value": N}. Never fold the condition into the sentence alone.',

@@ -3,13 +3,15 @@
 [![verify](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml/badge.svg)](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Automations that never leave your computer.** Describe a job in plain
-English; a model running on your own machine compiles it into an **automation
-record you can read**, then runs it behind a fence written in code — not in a
-prompt.
+**A model running here cannot invent a file that isn't on your disk** — not
+because it's told not to, but because the only filenames in its decoding
+grammar are the real ones. Describe a job in plain English; the model compiles
+it into an **automation record you can read**, and that record runs behind a
+fence written in code, not in a prompt.
 
-Local by default (Ollama). Cloud by choice (Featherless.ai). The UI never lies
-about where compute happened.
+Nothing leaves the machine by default (Ollama). Cloud is an explicit choice you
+make per model (Featherless.ai), and the UI never lies about where compute
+happened.
 
 ![Private Pilot — a request compiled into a readable automation, run, and answered in the chat](docs/img/chat-answer.png)
 
@@ -22,7 +24,7 @@ about where compute happened.
 | **Platform** | Windows 11 (WebView2) |
 | **Team** | Alexander Walker · Mustapha324 · Ryan Schlosbon |
 | **License** | [MIT](LICENSE) |
-| **Built** | entirely inside the 48-hour window — first commit [`54ec863`](https://github.com/Awalker77s/PrivatePilot/commit/54ec863) at 6:27 PM CST, 27 minutes after kickoff; 97 commits, [full history](https://github.com/Awalker77s/PrivatePilot/commits/main) |
+| **Built** | entirely inside the 48-hour window — first commit [`54ec863`](https://github.com/Awalker77s/PrivatePilot/commit/54ec863) at 6:27 PM CST, 27 minutes after kickoff — [full history](https://github.com/Awalker77s/PrivatePilot/commits/main) |
 
 ---
 
@@ -86,6 +88,75 @@ detection, schedule parsing, and the file compiler).
 
 A sentence becomes a **record**; the record — not the model — decides what runs.
 
+Here is a real one out of `automations.json` on the machine this was built on.
+*"Fetch the current Bitcoin price from CoinGecko"* compiled to this:
+
+```json
+{
+  "id": "auto-th55fia",
+  "name": "Bitcoin Price Fetch",
+  "sentence": "Fetch the current Bitcoin price from CoinGecko and determine if it mentions 'bitcoin'.",
+  "category": "Web",
+  "steps": [
+    "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true",
+    "answer with the price and state whether it mentions 'bitcoin'"
+  ],
+  "inputs": [],
+  "outputs": [
+    { "name": "price" },
+    { "name": "mentions_bitcoin" }
+  ],
+  "files": { "reads": [], "writes": [] },
+  "sources": ["api.coingecko.com"],
+  "apps": [],
+  "tools": [],
+  "knowledge": [],
+  "delivers": "answer",
+  "schedule": { "trigger": "manual" },
+  "model": "qwen3.5:4b",
+  "effort": "quick",
+  "compiledBy": "qwen3.5:4b",
+  "permissions": {
+    "filesystem": { "mode": "none", "reads": [], "writes": [] },
+    "network": { "hosts": ["api.coingecko.com"] },
+    "commands": [],
+    "applications": [],
+    "capabilities": []
+  },
+  "lastRun": {
+    "at": 1786847506986,
+    "status": "ok",
+    "summary": "Bitcoin is $63,058. It is up 0.02% over 24 hours."
+  },
+  "revision": {
+    "id": "rev-auto-th55fia-6-08ehie5",
+    "number": 6,
+    "contentHash": "08ehie5",
+    "status": "published"
+  }
+}
+```
+
+<sub>Formatting only — object literals collapsed onto single lines, and
+`origin`/`library` (timestamps and tags) dropped. No field values changed.</sub>
+
+That document *is* the security model, and every field in it is load-bearing:
+
+- **`sources`** is the fence. `fenceAllows()`
+  ([src/runner/fetchPage.ts:32](src/runner/fetchPage.ts#L32)) checks every
+  outbound request against this list, matching a host or a subdomain of it — so
+  `evil-coingecko.com` fails the suffix test rather than sneaking through.
+- **`files.reads` / `files.writes` are empty**, so no sandbox is staged, and
+  `bindTools()` never puts `read_file` or `write_file` in front of the model at
+  all ([src/runner/loop.ts:143](src/runner/loop.ts#L143)). It cannot misuse a
+  tool it was never handed.
+- **`permissions`** is the declared manifest the approval UI reads: changing
+  what an automation is allowed to touch is a visible edit, not a silent one.
+- **`compiledBy`** records which model wrote this, and **`revision.contentHash`**
+  is what makes a changed automation re-earn its approval.
+
+A person can read all of it before it ever runs — and so can a reviewer.
+
 ![The compile-and-run pipeline: plain English through a closed catalog, constrained drafting and a validator loop into a readable automation record, then a fenced tool loop and grounded verification](docs/img/architecture.png)
 
 <details>
@@ -112,7 +183,19 @@ Four ideas do the work:
 1. **A closed catalog.** Before the model is asked anything, the app lists the
    real folders, files and existing automations and bakes them into the JSON
    schema as enums. The model isn't *asked* to avoid inventing a filename — it
-   is structurally unable to emit one.
+   is structurally unable to emit one. This is the schema the model actually
+   receives, generated by `wireJsonSchema()`:
+
+   ```json
+   "reads": {
+     "type": "array",
+     "items": { "type": "string", "enum": ["~/Downloads", "~/Downloads/invoice-jan.pdf"] }
+   }
+   ```
+
+   Two real paths, and no way to sample a third. With nothing indexed, the same
+   field compiles to `"items": { "not": {} }` — a type inhabited by no string at
+   all, so the grammar cannot produce a filename because none exists.
 2. **Constrained decoding, then correction.** The schema is sent as Ollama's
    `format`, which llama.cpp compiles into a decoding grammar, so malformed
    JSON is unrepresentable. A zod validator then re-checks meaning and hands
@@ -191,6 +274,16 @@ with the model picker.
 - Concurrency-aware queueing matched to Featherless's plan model.
 - Every run record stores `ranOn`, so Activity can always answer *"did this
   leave my computer?"* after the fact.
+
+![The Activity tab: 238 delivered results, an amber card holding 26 jobs that paused before producing an answer, and a footer accounting for which runs used cloud compute](docs/img/activity.png)
+
+That footer — *"19 runs borrowed cloud compute (Featherless) — the rest ran on
+this computer"* — is the receipt. So is the amber card: 26 jobs **paused before
+producing a result, and nothing was changed or sent**. They aren't hidden to
+keep the screenshot clean, because a tool that only shows you its successes is
+the thing this project was built against. The red banner is the same principle:
+a run that died when the app closed says so, in a sentence, until you deal
+with it.
 
 ---
 

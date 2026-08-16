@@ -8,11 +8,10 @@ leaves the computer unless you flip a labelled switch.
 [![verify](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml/badge.svg)](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-![Private Pilot — a request compiled into a readable automation, run, and answered in the chat](docs/img/chat-answer.png)
+![Chat: one sentence becomes an automation you can read, with Try it once before anything is saved](docs/img/chat-answer.png)
 
-<sub>One sentence → a record you can audit → a watched run → an answer whose
-every number was checked against the page it came from. No API key, no account,
-no server.</sub>
+<sub>One sentence becomes an automation you can read — the exact sites it will
+touch, and a Try it once button before anything is saved.</sub>
 
 <!-- After recording the demo, paste the PUBLIC video URL here as:
      > **Demo video:** https://... -->
@@ -60,7 +59,10 @@ Six things it can do, in one line each:
 - **Learn by watching** — do the task once while narrating, and it compiles what
   you did into the same kind of readable automation.
 
-![The Automations tab: saved automations and sequences with their last results](docs/img/automations.png)
+![Automations: three scheduled workflows with their real results, a conditional edge, and every saved automation](docs/img/automations.png)
+
+<sub>Scheduled workflows with their real results — a conditional edge (only
+under 75.5), and a step that stopped rather than guess.</sub>
 
 ---
 
@@ -388,6 +390,11 @@ you flip, per model, knowingly.
 One pipeline serves both. Every part of the app asks for "the model" and never
 knows or cares which one answered, so the two paths can't drift apart.
 
+![Settings: ten local models detected, described in plain language, with the one in use showing its real state](docs/img/settings.png)
+
+<sub>Ten local models detected and described in plain language. No API key, no
+account, no subscription — cloud is opt-in and off by default.</sub>
+
 ### The default was chosen by measurement
 
 Five local models, the **same eight jobs**, run through the app's own compiler
@@ -474,7 +481,10 @@ comparing the two paths honestly.
 **Every run records where it ran.** Which is what turns "nothing leaves your
 computer" from a promise into something you can check afterwards:
 
-![The Activity tab: delivered results, an amber card holding jobs that paused before producing an answer, and a footer accounting for which runs used cloud compute](docs/img/activity.png)
+![Activity: 290 results with their sources, 53 jobs paused without sending, and a cloud-compute footer](docs/img/activity.png)
+
+<sub>A receipt for every run: results with their sources, jobs that paused
+without sending, and which runs used cloud compute.</sub>
 
 That footer — *"19 runs borrowed cloud compute (Featherless) — the rest ran on
 this computer"* — is the receipt. So is the amber card: jobs that **paused

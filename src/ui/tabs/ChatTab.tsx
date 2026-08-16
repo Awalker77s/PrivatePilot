@@ -232,7 +232,6 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
             ))}
             {items.length === 0 && !studio && (
               <div className="chat-welcome" data-testid="chat-welcome">
-                <span className="brand-glyph chat-welcome-glyph">P</span>
                 <div className="empty-status">What would you like to automate?</div>
                 <div className="empty-what">
                   Ask for a live answer, a schedule, or something to watch.

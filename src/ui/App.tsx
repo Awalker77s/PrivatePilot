@@ -10,6 +10,7 @@ import { ChatTab } from "./tabs/ChatTab";
 import { AutomationsTab } from "./tabs/AutomationsTab";
 import { ActivityTab } from "./tabs/ActivityTab";
 import { SettingsSheet } from "./SettingsSheet";
+import privatePilotLogo from "../assets/private-pilot-logo.png";
 
 export type TabId = "chat" | "automations" | "activity";
 
@@ -60,7 +61,12 @@ export default function App() {
     <div className="shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-glyph">P</span>
+          <img
+            className="brand-logo"
+            src={privatePilotLogo}
+            alt=""
+            aria-hidden="true"
+          />
           Private Pilot
         </div>
         <nav className="tabs">

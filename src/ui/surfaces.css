@@ -111,13 +111,6 @@
   gap: 7px;
 }
 
-.chat-welcome-glyph {
-  width: 30px;
-  height: 30px;
-  margin-bottom: 5px;
-  font-size: 14px;
-}
-
 .chat-starters {
   width: min(100%, 470px);
   margin-top: 12px;

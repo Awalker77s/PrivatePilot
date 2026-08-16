@@ -98,12 +98,13 @@ network at test time, and none of the Tauri prerequisites — which is why
 [CI runs the same command on every push](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml),
 green on a clean Linux runner in under 30 seconds.
 
-**Then try these three in the app** — they exercise the three hardest paths:
+**Then try these in the app** — they exercise the hardest paths:
 
 | Type this | What it proves |
 |---|---|
-| `check the current price of bitcoin` | compile → readable record → watched run → verified answer |
-| `connect Bitcoin Price Fetch and Bitcoin Morning Note` | sequences built by talking, output→input hand-off |
+| `check the current price of bitcoin` | compile → readable record → watched run → verified answer (instant — a verified template, no model turn) |
+| `make a sequence of the bitcoin price and the weather in orlando` | two automations *and* the link between them, from one sentence |
+| `connect Bitcoin Price Fetch and Bitcoin Morning Note` | connecting saved automations — deterministic, no model call |
 | `summarize everything in my Downloads folder` | sandboxed file reading, PDFs included |
 
 ---

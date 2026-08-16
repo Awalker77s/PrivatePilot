@@ -81,6 +81,26 @@ export async function validateLoop(
       if (Array.isArray(a.sources)) {
         a.sources = a.sources.map((s) => (typeof s === "string" ? bareHost(s) : s));
       }
+      // The schema allows 1–6 steps. A branchy request ("check my gmail, if
+      // someone wrote summarize it, if not check again") pushes the model past
+      // six, and re-prompting does not shrink it — the request really does have
+      // that many parts. Fold the overflow into the last step so every
+      // instruction survives, rather than losing the tail to a truncation or
+      // the whole draft to a refusal.
+      const steps = (a as { steps?: unknown }).steps;
+      if (Array.isArray(steps)) {
+        const text = steps.filter((s): s is string => typeof s === "string");
+        if (text.length > 6) {
+          (a as { steps: string[] }).steps = [
+            ...text.slice(0, 5),
+            text.slice(5).join("; "),
+          ];
+        } else if (text.length === 0) {
+          const sentence = (a as { sentence?: unknown }).sentence;
+          if (typeof sentence === "string" && sentence.trim())
+            (a as { steps: string[] }).steps = [sentence.trim()];
+        }
+      }
       // When the request touched no files the catalog carries no file targets,
       // so files.reads/writes compile to z.never(). A model that names a file
       // anyway has invented one — the closed catalog's whole point — and

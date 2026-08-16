@@ -305,6 +305,13 @@ export function buildWireSchema(catalog: Catalog) {
             'The person said the next automation depends on an earlier RESULT ("if…, otherwise…"). Express this with chain.steps (links MUST be []): the first job {"id": "s1", "after": [], …}; each branch after it with if_answer_contains or if_answer_lacks naming the word the result is tested for. Plain links would run every branch every time.',
         });
       }
+      // NOTE: a rule insisting on the split when chainIntent AND branchIntent
+      // both fire ("make a sequence to check my gmail, if…, if not…") was tried
+      // and removed. The 4B does not comply even with the branching example
+      // above in the prompt, so it only bought two failed passes and ~15s
+      // before the lenient pass let the folded draft through anyway. A watcher
+      // that polls and summarises is a defensible reading of that sentence;
+      // splitting it wants a stronger drafting model, not another rule.
       // The person explicitly asked for ONE connected sequence ("as a
       // chain", "connect them") — several jobs arriving unchained is the
       // drafter dropping the ask. Insist. (Branch-intent wins when both

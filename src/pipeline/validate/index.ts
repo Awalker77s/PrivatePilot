@@ -98,27 +98,66 @@ export async function validateLoop(
       }
     }
 
-    // A link may only carry an output the next job actually takes as an input.
-    // The model reliably invents one plausible extra pair ("price" into a
-    // weather job), and an unmatched name is not a smaller hand-off — it is a
-    // name for nothing. Dropping it leaves the ORDER, which is what a sequence
-    // request asks for, and is exactly what sequenceFrom() builds by hand.
-    const chain = (value as { chain?: { links?: unknown } }).chain;
-    const links = chain?.links;
-    if (Array.isArray(links)) {
-      const inputsOf = (name: string): Set<string> => {
-        const found = (draft.automations as { name?: string; inputs?: { name?: string }[] }[])
-          .find((a) => a?.name === name);
-        return new Set((found?.inputs ?? []).map((i) => i?.name).filter(Boolean) as string[]);
-      };
-      for (const link of links) {
-        const l = link as { to?: string; map?: Record<string, string> };
-        if (!l?.map || typeof l.map !== "object" || !l.to) continue;
-        const allowed = inputsOf(l.to);
-        for (const key of Object.keys(l.map)) {
-          if (!allowed.has(key)) delete l.map[key];
-        }
+    // A chain the model got slightly wrong in SHAPE should not cost the whole
+    // draft — the automations are the expensive part and are usually right.
+    // "Invalid input → at chain" ran three passes deep on "watch solana and
+    // tell me if it drops below 75" because chainDraft is a strictObject: a
+    // link is required to carry `map` (an ARRAY of {output,input} pairs, not a
+    // record) and an explicit `onlyWhen`. Fill the missing pieces instead of
+    // re-prompting, and only drop the chain when a link has no from/to at all,
+    // since without those there is nothing to keep.
+    const chainValue = (value as { chain?: unknown }).chain as
+      | { name?: unknown; links?: unknown }
+      | null
+      | undefined;
+    if (chainValue && typeof chainValue === "object") {
+      if (typeof chainValue.name !== "string" || !chainValue.name.trim()) {
+        const names = (draft.automations as { name?: string }[])
+          .map((a) => a?.name)
+          .filter(Boolean);
+        chainValue.name = names.join(" → ") || "Sequence";
       }
+      if (!Array.isArray(chainValue.links)) chainValue.links = [];
+      const usable = (chainValue.links as unknown[]).filter(
+        (l) =>
+          l &&
+          typeof l === "object" &&
+          typeof (l as { from?: unknown }).from === "string" &&
+          typeof (l as { to?: unknown }).to === "string"
+      );
+      // A link may only carry an output the next job actually takes as an
+      // input. The model reliably invents one plausible extra pair ("price"
+      // into a weather job); an unmatched name is a name for nothing. Dropping
+      // it leaves the ORDER, which is what a sequence request asks for.
+      const inputsOf = (name: string): Set<string> =>
+        new Set(
+          ((draft.automations as { name?: string; inputs?: { name?: string }[] }[])
+            .find((a) => a?.name === name)?.inputs ?? [])
+            .map((i) => i?.name)
+            .filter(Boolean) as string[]
+        );
+      for (const link of usable) {
+        const l = link as {
+          to: string;
+          map?: unknown;
+          onlyWhen?: unknown;
+        };
+        if (l.onlyWhen === undefined) l.onlyWhen = null;
+        if (!Array.isArray(l.map)) {
+          l.map = [];
+          continue;
+        }
+        const allowed = inputsOf(l.to);
+        l.map = (l.map as { output?: unknown; input?: unknown }[]).filter(
+          (pair) =>
+            pair &&
+            typeof pair.output === "string" &&
+            typeof pair.input === "string" &&
+            allowed.has(pair.input)
+        );
+      }
+      chainValue.links = usable;
+      if (!usable.length) (value as { chain: unknown }).chain = null;
     }
     return value;
   };

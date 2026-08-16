@@ -483,13 +483,21 @@ exist**, by name, is deterministic — no model call, no re-drafting:
 connect Bitcoin Price Fetch and Bitcoin Morning Note
 ```
 
-Building several **brand-new** automations and chaining them from a single
-sentence works, but is not dependable on a 4B model: the same sentence
-sometimes yields the pair plus the link, sometimes folds both jobs into one
-automation. The validator repairs what it safely can — a full URL where a
-hostname belongs, an invented file path in a job that touches no files, a baton
-name the next job doesn't take — and asks rather than guessing when it can't.
-Reach for the two-step version when it matters.
+Building several **brand-new** automations and chaining them from one sentence
+also works — *"make a sequence of the bitcoin price and the weather in
+orlando"*, *"watch solana and tell me if it drops below 75"*, *"connect the
+tesla price and the top tech news"* each compile to two automations and the
+link between them, in 50–85s on a 4B. The honest caveat: a minority of
+phrasings still fold both jobs into a single automation instead of two. It no
+longer *fails* — it occasionally under-decomposes.
+
+That reliability is mostly repair, not prompting. The validator fixes what the
+model got right in the wrong shape, rather than spending a pass to say so: a
+full URL where a bare hostname belongs, an invented file path in a job that
+touches no files, a link missing the `map`/`onlyWhen` the strict schema
+requires, a baton name the next job doesn't accept. Before those repairs, the
+four sentences above died after three drafts and ~55 seconds and became a
+question card.
 
 ## Project layout
 

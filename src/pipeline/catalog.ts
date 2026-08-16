@@ -82,6 +82,11 @@ export const CHAIN_REQUEST_RE = new RegExp(
     // tacked onto the end, which is how people say it out loud.
     String.raw`\b(?:a|one) (?:chain|sequence|workflow)\b(?:\s+or\s+(?:a\s+)?(?:chain|sequence|workflow))?\s*[.!?]*\s*$`,
     String.raw`\b(?:chain|sequence|connect|link|combine|join) (?:them|these|those|both|the two|together)\b`,
+    // "connect the tesla price and the top tech news" — an imperative connect
+    // verb leading the sentence, naming two jobs that do not exist yet. The
+    // chat tier already understood this shape for SAVED automations; without
+    // it here the compiler built both jobs and left them unlinked.
+    String.raw`^(?:\s*(?:please|can you|could you|would you|i want (?:you )?to|i'?d like (?:you )?to|let'?s|now|also)\s+)*(?:connect|chain|link|combine|join|merge)\b`,
     String.raw`\b(?:make|turn) (?:it|this|them|these|those)?\s*(?:in)?to (?:a |one )?(?:chain|sequence|workflow)\b`,
     // "a sequence of them" AND "a sequence of the meta price and the orlando
     // weather" — the jobs named after "of" may not exist yet, which is the

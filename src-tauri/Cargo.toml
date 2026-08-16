@@ -33,6 +33,7 @@ chrono = "0.4"
 # encodes the frames. Both permissive-licensed.
 pdfium-render = "0.9"
 png = "0.17"
+tokio = { version = "1", features = ["sync"] }
 
 [target.'cfg(windows)'.dependencies]
 # Pinned to what wry already links — 0.39 pulls windows 0.62 and won't unify.

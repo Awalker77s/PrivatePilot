@@ -51,6 +51,7 @@ export interface CompileResult {
   failSentence: string | null;
   runId: string; // the compile's record in runs.json (ids double as anchors)
   keptToOneStep: boolean;
+  cancelled?: boolean;
 }
 
 export type ProgressFn = (stage: "draft" | "validate", text: string) => void;
@@ -61,7 +62,8 @@ function anchor(runId: string, n: number): string {
 
 export async function compile(
   context: DraftContext,
-  onProgress: ProgressFn
+  onProgress: ProgressFn,
+  signal?: AbortSignal
 ): Promise<CompileResult> {
   const runId = newId("run");
   const startedAt = Date.now();
@@ -190,6 +192,31 @@ export async function compile(
     };
   };
 
+  const stopped = async (stage?: StageLog): Promise<CompileResult> => {
+    const sentence = "Stopped by you. Nothing was saved.";
+    if (stage) {
+      stage.status = "held";
+      stage.finishedAt = Date.now();
+      stage.sentence = sentence;
+    }
+    await updateRun(runId, (r) => {
+      r.status = "held";
+      r.finishedAt = Date.now();
+      r.summary = sentence;
+    });
+    return {
+      ok: false,
+      automations: [],
+      chain: null,
+      question: null,
+      argument: [],
+      failSentence: null,
+      runId,
+      keptToOneStep: false,
+      cancelled: true,
+    };
+  };
+
   // ---- stage 1 · schema-constrained drafting ----
   onProgress("draft", "Reading your folders…");
   const draftLog: StageLog = {
@@ -242,7 +269,7 @@ export async function compile(
   // over.
   try {
     onProgress("draft", "Drafting a lightweight read job…");
-    const compact = await compactReadDraft(context, model, catalog);
+    const compact = await compactReadDraft(context, model, catalog, signal);
     if (compact) {
       run.counters.drafts++;
       draftLog.status = "ok";
@@ -294,6 +321,7 @@ export async function compile(
       };
     }
   } catch (e) {
+    if (signal?.aborted) return stopped(draftLog);
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();
     draftLog.sentence =
@@ -309,7 +337,7 @@ export async function compile(
   const messages = draftMessages(catalog, context);
   let firstContent: string;
   try {
-    const res = await draftCall(model, catalog, messages);
+    const res = await draftCall(model, catalog, messages, signal);
     firstContent = res.content;
     run.counters.drafts++;
     draftLog.lines.push({
@@ -318,6 +346,7 @@ export async function compile(
       anchor: anchor(runId, anchorN++),
     });
   } catch (e) {
+    if (signal?.aborted) return stopped(draftLog);
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();
     draftLog.sentence =
@@ -349,9 +378,11 @@ export async function compile(
       messages,
       firstContent,
       context,
-      (text) => onProgress("validate", text)
+      (text) => onProgress("validate", text),
+      signal
     );
   } catch (e) {
+    if (signal?.aborted) return stopped(valLog);
     valLog.status = "broke";
     valLog.finishedAt = Date.now();
     valLog.sentence =

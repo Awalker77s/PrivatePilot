@@ -112,7 +112,8 @@ function uniqueName(name: string, catalog: Catalog): string {
 export async function compactReadDraft(
   context: DraftContext,
   model: string,
-  catalog: Catalog
+  catalog: Catalog,
+  signal?: AbortSignal
 ): Promise<{ draft: WireDraft; ms: number } | null> {
   if (!isCompactReadRequest(context)) return null;
 
@@ -143,6 +144,7 @@ export async function compactReadDraft(
       seed: 7,
     },
     think: false,
+    signal,
   });
 
   let parsed: {

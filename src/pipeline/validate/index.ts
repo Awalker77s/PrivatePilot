@@ -25,7 +25,8 @@ export async function validateLoop(
   baseMessages: ChatMessage[],
   firstContent: string,
   context: DraftContext,
-  onProgress: (text: string) => void
+  onProgress: (text: string) => void,
+  signal?: AbortSignal
 ): Promise<ValidateOutcome> {
   const schema = buildWireSchema(catalog);
   const argument: string[] = [];
@@ -90,7 +91,7 @@ export async function validateLoop(
       usedEscapeHatch = true;
       onProgress("Validator — letting it think in plain words first…");
       try {
-        const res = await planFreeThenTranscribe(model, catalog, context);
+        const res = await planFreeThenTranscribe(model, catalog, context, signal);
         content = res.content;
         attempts++;
         argument.push("Tried again the long way — plan first, then transcribe.");
@@ -120,6 +121,7 @@ export async function validateLoop(
         max_tokens: 2048,
       },
       think: false,
+      signal,
     });
     content = res.content;
     attempts++;

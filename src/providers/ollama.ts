@@ -109,20 +109,36 @@ async function ollamaFetch(
   // long ceiling.
   const timeoutMs =
     path === "/api/embed" ? 300_000 : path === "/api/chat" ? 120_000 : 20_000;
-  const signal = AbortSignal.timeout(timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal;
   try {
+    if (signal.aborted) throw signal.reason;
     // A wedged request must become a designed sentence, never a forever-hang
     // (the tool loop's 30-min stall check only runs between turns).
     if (isDesktopApp()) {
-      const native = await invoke<{ status: number; body: string }>(
-        "ollama_request",
-        {
-          path,
-          method: init?.method ?? "GET",
-          body: typeof init?.body === "string" ? init.body : null,
-          timeoutMs,
-        }
-      );
+      const requestId = crypto.randomUUID();
+      const cancelNative = () => {
+        void invoke("cancel_ollama_request", { requestId }).catch(() => {});
+      };
+      signal.addEventListener("abort", cancelNative, { once: true });
+      let native: { status: number; body: string };
+      try {
+        native = await invoke<{ status: number; body: string }>(
+          "ollama_request",
+          {
+            path,
+            method: init?.method ?? "GET",
+            body: typeof init?.body === "string" ? init.body : null,
+            timeoutMs,
+            requestId,
+          }
+        );
+      } finally {
+        signal.removeEventListener("abort", cancelNative);
+      }
+      if (signal.aborted) throw signal.reason;
       return new Response(native.body, {
         status: native.status,
         headers: { "Content-Type": "application/json" },
@@ -130,8 +146,8 @@ async function ollamaFetch(
     }
     const request = globalThis.fetch.bind(globalThis);
     return await request(`${OLLAMA}${path}`, {
-      signal,
       ...init,
+      signal,
     });
   } catch (e) {
     const timedOut =
@@ -236,6 +252,7 @@ export class OllamaProvider implements ModelProvider {
     const res = await ollamaFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: req.signal,
       body: JSON.stringify({
         model: req.model,
         messages: req.messages,

@@ -2145,3 +2145,22 @@
   font-size: 10px;
   opacity: 0.7;
 }
+
+/* Activity header: the result count and the Clear control sit together on the
+   right, and the confirm row replaces the button in place so the header never
+   changes height. */
+.activity-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.activity-clear-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.activity-clear-confirm .caption {
+  white-space: nowrap;
+}

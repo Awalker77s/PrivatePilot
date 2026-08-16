@@ -3,7 +3,7 @@
 // stay behind an explicit "View run details" action.
 import { useState } from "react";
 import type { TabId } from "../App";
-import { getAutomation, getState } from "../../storage/stores";
+import { clearRuns, getAutomation, getState } from "../../storage/stores";
 import { useStoreVersion } from "../../storage/useStore";
 import type { RunRecord } from "../../storage/types";
 import { clockTime, dayLabel, relTime } from "../fmt";
@@ -31,6 +31,9 @@ export function ActivityTab(props: { goTo: (tab: TabId) => void }) {
   useStoreVersion();
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [showNeeds, setShowNeeds] = useState(false);
+  // Two taps to wipe history: the same arm-then-confirm the chat uses, because
+  // this is the one control in the app that destroys records.
+  const [clearArmed, setClearArmed] = useState(false);
   const { runs, automations } = getState();
   const all = [...runs.records].reverse();
 
@@ -104,9 +107,45 @@ export function ActivityTab(props: { goTo: (tab: TabId) => void }) {
             Finished answers only. Run steps stay hidden unless you ask for them.
           </div>
         </div>
-        <span className="chip chip-gray">
-          {completed.length} result{completed.length === 1 ? "" : "s"}
-        </span>
+        <div className="activity-head-actions">
+          <span className="chip chip-gray">
+            {completed.length} result{completed.length === 1 ? "" : "s"}
+          </span>
+          {runs.records.length > 0 &&
+            (clearArmed ? (
+              <div className="activity-clear-confirm">
+                <span className="caption">
+                  Clear {runs.records.length} run
+                  {runs.records.length === 1 ? "" : "s"}?
+                </span>
+                <button
+                  className="btn btn-danger btn-sm"
+                  onClick={async () => {
+                    setClearArmed(false);
+                    await clearRuns();
+                  }}
+                  data-testid="clear-activity-confirm"
+                >
+                  Clear history
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setClearArmed(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                className="btn btn-ghost btn-sm"
+                title="Remove every run receipt. Your automations and sequences stay exactly as they are."
+                onClick={() => setClearArmed(true)}
+                data-testid="clear-activity"
+              >
+                Clear history
+              </button>
+            ))}
+        </div>
       </div>
 
       {latestResults.length > 0 ? (

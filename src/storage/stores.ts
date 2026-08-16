@@ -383,6 +383,19 @@ export async function appendRun(run: RunRecord): Promise<void> {
   emit();
 }
 
+// Wipe the run history. The only thing in this app that removes records
+// rather than adding them, so it is deliberately its own function and the
+// surface asks twice before calling it. Automations, sequences and their
+// version history live in other stores and are untouched — what goes is the
+// record of what ran, which is exactly what the Activity tab shows.
+export async function clearRuns(): Promise<number> {
+  const removed = state.runs.records.length;
+  state.runs.records = [];
+  await persistStore("runs", state.runs);
+  emit();
+  return removed;
+}
+
 // A run's own record accumulates while it executes — appended, updated in
 // place, never removed. Persist on meaningful transitions.
 export async function updateRun(

@@ -77,7 +77,10 @@ export const CHAIN_REQUEST_RE = new RegExp(
     String.raw`\b(?:a|one) (?:chain|sequence|workflow)\b(?:\s+or\s+(?:a\s+)?(?:chain|sequence|workflow))?\s*[.!?]*\s*$`,
     String.raw`\b(?:chain|sequence|connect|link|combine|join) (?:them|these|those|both|the two|together)\b`,
     String.raw`\b(?:make|turn) (?:it|this|them|these|those)?\s*(?:in)?to (?:a |one )?(?:chain|sequence|workflow)\b`,
-    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with) (?:them|these|those)\b`,
+    // "a sequence of them" AND "a sequence of the meta price and the orlando
+    // weather" — the jobs named after "of" may not exist yet, which is the
+    // whole point: one sentence builds both and joins them.
+    String.raw`\b(?:a|one) (?:chain|sequence|workflow) (?:of|from|out of|with)\b`,
     String.raw`\bfeeds? (?:it |that |the result )?into\b`,
     String.raw`\bone after (?:the other|another)\b`,
     String.raw`\bback to back\b`,

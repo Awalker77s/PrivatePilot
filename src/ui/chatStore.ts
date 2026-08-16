@@ -32,6 +32,7 @@ import {
   splitCoordination,
 } from "./memory";
 import { CHAIN_REQUEST_RE } from "../pipeline/catalog";
+import { sequenceFrom } from "../pipeline/sequence";
 import { explainAutomation } from "../pipeline/explain";
 import {
   ELLIPTICAL_RE,
@@ -57,12 +58,10 @@ import { ChainCycleError, assertNoCycle, runChain } from "../dispatcher";
 import type {
   AutomationRecord,
   AutomationReference,
-  ChainLink,
   ChainRecord,
 } from "../storage/types";
 import {
   automationContentHash,
-  mergePermissionManifests,
   normalizeAutomation,
 } from "../storage/revisions";
 
@@ -739,44 +738,14 @@ export async function revertEdit(itemId: number) {
 // already exist, exactly the way the Library's Sequence builder would:
 // sequential links, outputs auto-wired to same-named inputs, permissions
 // merged, member revisions pinned. No model call — nothing is re-drafted.
+// One shared builder (pipeline/sequence.ts) so a sequence made by naming
+// saved automations and one made from a single "a sequence of X and Y"
+// sentence are the same object, built the same way.
 function buildSequenceRecord(
   members: AutomationRecord[],
   name: string | null
-): ChainRecord {
-  // The same automation twice is a cycle the dispatcher would refuse — and
-  // never what "connect A and A" meant anyway. Keep the first mention.
-  const unique = members.filter(
-    (m, i) => members.findIndex((x) => x.id === m.id) === i
-  );
-  const normalized = unique.map((m) => normalizeAutomation(m));
-  const links: ChainLink[] = [];
-  for (let i = 0; i < normalized.length - 1; i++) {
-    const from = normalized[i];
-    const to = normalized[i + 1];
-    links.push({
-      from: from.id,
-      to: to.id,
-      map: Object.fromEntries(
-        to.inputs
-          .filter((input) => from.outputs.some((o) => o.name === input.name))
-          .map((input) => [input.name, input.name])
-      ),
-      onlyWhen: null,
-    });
-  }
-  return {
-    id: newId("chain"),
-    name: name ?? normalized.map((m) => m.name).join(" → "),
-    links,
-    timeoutMinutes: 30,
-    createdAt: Date.now(),
-    components: normalized.map((m) => ({
-      automationId: m.id,
-      revisionId: m.revision!.id,
-      revisionNumber: m.revision!.number,
-    })),
-    permissions: mergePermissionManifests(normalized),
-  };
+): ChainRecord | null {
+  return sequenceFrom(members, name);
 }
 
 // The connected sequence lands as a normal built card: Try it once runs the
@@ -797,6 +766,7 @@ async function pushSequenceCard(input: AutomationRecord[], text: string) {
   }
   const custom = text.match(SEQUENCE_NAME_RE)?.[1]?.trim() ?? null;
   const chain = buildSequenceRecord(members, custom);
+  if (!chain) return; // guarded above; belt and braces for the shared builder
   const order = members.map((m) => m.name).join(" → ");
   const summary = `Connected ${order} into "${chain.name}" — no automation was re-drafted.`;
   const runId = newId("run");

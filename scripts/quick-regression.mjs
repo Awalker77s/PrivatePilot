@@ -161,6 +161,45 @@ try {
     "making an AUTOMATION must not read as making a sequence"
   );
 
+  // ---- sequences of automations that do not exist yet ----
+  for (const said of [
+    "I want a sequence of the price of meta and the weather of orlando",
+    "i want a chain of the tesla stock price and the top tech news",
+    "give me a chain of the apple stock price and the seattle weather",
+    "a sequence of the bitcoin price and the solana price",
+  ]) {
+    assert(
+      CHAIN_REQUEST_RE.test(said),
+      `a sequence of NEW jobs must set chain intent: ${said}`
+    );
+  }
+  assert(
+    !isCompactReadRequest({
+      userText: "check the nvidia stock price and the weather in denver, as a sequence",
+      answers: [],
+    }),
+    "the one-automation compact path must step aside for a sequence request"
+  );
+  const { orderByMention } = await server.ssrLoadModule("/src/pipeline/sequence.ts");
+  const named = (name) => ({ id: name, name, inputs: [], outputs: [] });
+  assert(
+    orderByMention(
+      [named("Top Tech News"), named("Tesla Stock Price")],
+      "i want a chain of the tesla stock price and the top tech news"
+    )
+      .map((r) => r.name)
+      .join(",") === "Tesla Stock Price,Top Tech News",
+    "a sequence runs in the order the person said it, not template order"
+  );
+  const quickSeq = compile(
+    "i want a sequence of the bitcoin price, the ethereum price and the solana price"
+  );
+  assert(quickSeq?.kind === "draft", "a 3-item sequence should still compile locally");
+  assert(
+    quickSeq.draft.automations.length === 3,
+    "a sequence of three named things is three automations"
+  );
+
   // ---- a stated hour is never quietly replaced ----
   const { editAutomation } = await server.ssrLoadModule("/src/pipeline/edit.ts");
   const baseRecord = {

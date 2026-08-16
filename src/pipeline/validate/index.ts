@@ -29,6 +29,15 @@ export async function validateLoop(
   signal?: AbortSignal
 ): Promise<ValidateOutcome> {
   const schema = buildWireSchema(catalog);
+  // The sequence-shape rules ("don't fold the jobs together", "join them")
+  // are worth two nudges, never a dead end: on the last pass they come off,
+  // because a draft that answers the request imperfectly beats "the local AI
+  // couldn't safely finish this". Whatever shape survives, session.ts draws
+  // the missing links itself.
+  const lenientSchema = buildWireSchema({
+    ...catalog,
+    chainIntent: false,
+  });
   const argument: string[] = [];
   let fieldsFixed = 0;
   let content = firstContent;
@@ -40,7 +49,7 @@ export async function validateLoop(
     let prettified: string;
     try {
       parsed = JSON.parse(content);
-      const result = schema.safeParse(parsed);
+      const result = (pass === 3 ? lenientSchema : schema).safeParse(parsed);
       if (result.success) {
         argument.push(
           pass === 1

@@ -15,6 +15,7 @@ import {
   buildCatalog,
   catalogForRequest,
   Catalog,
+  CHAIN_REQUEST_RE,
   formatForPath,
   matchCatalog,
 } from "./catalog";
@@ -24,6 +25,7 @@ import { validateLoop } from "./validate";
 import { tryQuickCompile } from "./quickDraft";
 import { compactReadDraft } from "./compactDraft";
 import { mirrorHostsFor } from "../runner/mirrors";
+import { orderByMention, sequenceFrom } from "./sequence";
 import {
   draftRevisionFor,
   mergePermissionManifests,
@@ -96,7 +98,19 @@ export async function compile(
   // Stable public-data requests do not need a model to decide their shape.
   // This makes the everyday path (news, prices, service status) effectively
   // instant while preserving the full compiler for ambiguous or file work.
-  const quick = tryQuickCompile(context);
+  let quick = tryQuickCompile(context);
+  // The templates answer one job at a time. When the person asked for a
+  // SEQUENCE and the templates only covered one of the jobs, taking the fast
+  // path would quietly answer half the request — hand it to the model, which
+  // can split the sentence into a job per item and join them.
+  if (
+    quick &&
+    quick.kind === "draft" &&
+    quick.draft.automations.length < 2 &&
+    CHAIN_REQUEST_RE.test(context.userText)
+  ) {
+    quick = null;
+  }
   if (quick) {
     onProgress("draft", "Matching a verified quick request…");
     const quickStarted = Date.now();
@@ -153,10 +167,24 @@ export async function compile(
       sentence: "Verified template — no model correction pass needed.",
     };
     stages.push(validateLog);
+    // "a sequence of the price of meta and the weather of orlando" — the
+    // jobs are new AND the person asked for one connected thing. The
+    // templates build the jobs; the line joining them is drawn here, so a
+    // sequence of brand-new automations arrives from a single sentence.
+    // Order the members the way the request said them, so the card lists
+    // them in the order they will run.
+    const ordered = CHAIN_REQUEST_RE.test(context.userText)
+      ? orderByMention(assembled, context.userText)
+      : assembled;
+    const quickChain = CHAIN_REQUEST_RE.test(context.userText)
+      ? sequenceFrom(ordered)
+      : null;
     const summary =
       assembled.length === 1
         ? `Built "${assembled[0].name}" — waiting for a watched run`
-        : `Built ${assembled.length} independent automations — waiting for a watched run`;
+        : quickChain
+          ? `Built ${assembled.length} automations joined into "${quickChain.name}" — waiting for a watched run`
+          : `Built ${assembled.length} independent automations — waiting for a watched run`;
     await updateRun(runId, (r) => {
       r.status = "ok";
       r.finishedAt = Date.now();
@@ -165,10 +193,14 @@ export async function compile(
     });
     return {
       ok: true,
-      automations: assembled,
-      chain: null,
+      automations: ordered,
+      chain: quickChain,
       question: null,
-      argument: ["Matched a verified template — skipped the local AI wait."],
+      argument: [
+        quickChain
+          ? `Matched verified templates and joined them in the order you said — ${ordered.map((a) => a.name).join(" → ")}.`
+          : "Matched a verified template — skipped the local AI wait.",
+      ],
       failSentence: null,
       runId,
       keptToOneStep: assembled.length === 1,
@@ -522,6 +554,14 @@ export async function compile(
       })),
       permissions: mergePermissionManifests(assembled),
     };
+  }
+
+  // The person asked for a sequence and the drafter produced the jobs but no
+  // line between them. Drawing that line is arithmetic, not judgement — do it
+  // here rather than spending another model pass (or failing the draft) on
+  // something the order of the sentence already decided.
+  if (!chain && assembled.length > 1 && CHAIN_REQUEST_RE.test(context.userText)) {
+    chain = sequenceFrom(orderByMention(assembled, context.userText));
   }
 
   const summary =

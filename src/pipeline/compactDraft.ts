@@ -7,6 +7,7 @@
 import { chat } from "../providers";
 import { ENDPOINTS } from "./endpoints";
 import type { Catalog } from "./catalog";
+import { CHAIN_REQUEST_RE } from "./catalog";
 import type { DraftContext } from "./draft";
 import {
   buildWireSchema,
@@ -53,6 +54,10 @@ export function isCompactReadRequest(context: DraftContext): boolean {
   if (context.demo || context.answers.length > 0) return false;
   const text = context.userText.trim();
   if (!READ_REQUEST.test(text) || COMPLEX_REQUEST.test(text)) return false;
+  // This path builds exactly ONE automation, so it can never answer "a
+  // sequence of X and Y" — which needs a job per item plus the line joining
+  // them. Step aside and let the full drafter have it.
+  if (CHAIN_REQUEST_RE.test(text)) return false;
   return SCREEN_REQUEST.test(text) || endpointHints(text).length > 0;
 }
 

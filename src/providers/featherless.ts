@@ -60,8 +60,9 @@ export function cloudCallsInFlight(): number {
   return inFlight;
 }
 
-function enqueue<T>(work: () => Promise<T>): Promise<T> {
+function enqueue<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const run = queueTail.then(async () => {
+    if (signal?.aborted) throw signal.reason;
     setInFlight(1);
     try {
       return await work();
@@ -73,7 +74,21 @@ function enqueue<T>(work: () => Promise<T>): Promise<T> {
     () => undefined,
     () => undefined
   );
-  return run;
+  if (!signal) return run;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    run.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -173,7 +188,9 @@ export class FeatherlessProvider implements ModelProvider {
             "Content-Type": "application/json",
             Authorization: `Bearer ${key}`,
           },
-          signal: AbortSignal.timeout(180_000),
+          signal: req.signal
+            ? AbortSignal.any([req.signal, AbortSignal.timeout(180_000)])
+            : AbortSignal.timeout(180_000),
           body: JSON.stringify({
             model: req.model,
             messages: wireMessages,
@@ -236,7 +253,7 @@ export class FeatherlessProvider implements ModelProvider {
         };
       }
       throw new ProviderError(QUEUE_SENTENCE, "unreachable");
-    });
+    }, req.signal);
   }
 }
 

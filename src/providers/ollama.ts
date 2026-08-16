@@ -109,20 +109,36 @@ async function ollamaFetch(
   // long ceiling.
   const timeoutMs =
     path === "/api/embed" ? 300_000 : path === "/api/chat" ? 120_000 : 20_000;
-  const signal = AbortSignal.timeout(timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal;
   try {
+    if (signal.aborted) throw signal.reason;
     // A wedged request must become a designed sentence, never a forever-hang
     // (the tool loop's 30-min stall check only runs between turns).
     if (isDesktopApp()) {
-      const native = await invoke<{ status: number; body: string }>(
-        "ollama_request",
-        {
-          path,
-          method: init?.method ?? "GET",
-          body: typeof init?.body === "string" ? init.body : null,
-          timeoutMs,
-        }
-      );
+      const requestId = crypto.randomUUID();
+      const cancelNative = () => {
+        void invoke("cancel_ollama_request", { requestId }).catch(() => {});
+      };
+      signal.addEventListener("abort", cancelNative, { once: true });
+      let native: { status: number; body: string };
+      try {
+        native = await invoke<{ status: number; body: string }>(
+          "ollama_request",
+          {
+            path,
+            method: init?.method ?? "GET",
+            body: typeof init?.body === "string" ? init.body : null,
+            timeoutMs,
+            requestId,
+          }
+        );
+      } finally {
+        signal.removeEventListener("abort", cancelNative);
+      }
+      if (signal.aborted) throw signal.reason;
       return new Response(native.body, {
         status: native.status,
         headers: { "Content-Type": "application/json" },
@@ -130,8 +146,8 @@ async function ollamaFetch(
     }
     const request = globalThis.fetch.bind(globalThis);
     return await request(`${OLLAMA}${path}`, {
-      signal,
       ...init,
+      signal,
     });
   } catch (e) {
     const timedOut =
@@ -140,7 +156,7 @@ async function ollamaFetch(
       (e instanceof Error && e.name === "TimeoutError");
     throw new ProviderError(
       timedOut
-        ? "The local AI took over two minutes — switch to Qwen 4B in Settings, or try again."
+        ? "The local AI took over two minutes on this CPU — split a complex request into smaller automations, then try again."
         : OLLAMA_DOWN_SENTENCE,
       String(e)
     );
@@ -171,6 +187,23 @@ export class OllamaProvider implements ModelProvider {
       label: friendlyName(m.name),
       sizeBytes: m.size ?? null,
     }));
+  }
+
+  // Ollama keeps models resident after a request. Explicitly evict the brain
+  // a person just switched away from so a 12B and 4B model do not compete for
+  // RAM on CPU-only Windows machines.
+  async unload(model: string): Promise<void> {
+    const res = await ollamaFetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, keep_alive: 0, stream: false }),
+    });
+    if (!res.ok) {
+      throw new ProviderError(
+        "The previous local model couldn't be unloaded.",
+        `POST /api/generate ${res.status}`
+      );
+    }
   }
 
   // Embed a batch of strings → one 768-vector each. num_ctx 8192 stops long
@@ -219,6 +252,7 @@ export class OllamaProvider implements ModelProvider {
     const res = await ollamaFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: req.signal,
       body: JSON.stringify({
         model: req.model,
         messages: req.messages,

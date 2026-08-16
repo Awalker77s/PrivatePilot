@@ -22,6 +22,7 @@ import { draftCall, draftMessages, DraftContext } from "./draft";
 import type { WireAutomation } from "./draft/schema";
 import { validateLoop } from "./validate";
 import { tryQuickCompile } from "./quickDraft";
+import { compactReadDraft } from "./compactDraft";
 import {
   draftRevisionFor,
   mergePermissionManifests,
@@ -50,6 +51,7 @@ export interface CompileResult {
   failSentence: string | null;
   runId: string; // the compile's record in runs.json (ids double as anchors)
   keptToOneStep: boolean;
+  cancelled?: boolean;
 }
 
 export type ProgressFn = (stage: "draft" | "validate", text: string) => void;
@@ -60,7 +62,8 @@ function anchor(runId: string, n: number): string {
 
 export async function compile(
   context: DraftContext,
-  onProgress: ProgressFn
+  onProgress: ProgressFn,
+  signal?: AbortSignal
 ): Promise<CompileResult> {
   const runId = newId("run");
   const startedAt = Date.now();
@@ -189,6 +192,31 @@ export async function compile(
     };
   };
 
+  const stopped = async (stage?: StageLog): Promise<CompileResult> => {
+    const sentence = "Stopped by you. Nothing was saved.";
+    if (stage) {
+      stage.status = "held";
+      stage.finishedAt = Date.now();
+      stage.sentence = sentence;
+    }
+    await updateRun(runId, (r) => {
+      r.status = "held";
+      r.finishedAt = Date.now();
+      r.summary = sentence;
+    });
+    return {
+      ok: false,
+      automations: [],
+      chain: null,
+      question: null,
+      argument: [],
+      failSentence: null,
+      runId,
+      keptToOneStep: false,
+      cancelled: true,
+    };
+  };
+
   // ---- stage 1 · schema-constrained drafting ----
   onProgress("draft", "Reading your folders…");
   const draftLog: StageLog = {
@@ -234,11 +262,82 @@ export async function compile(
     anchor: anchor(runId, anchorN++),
   });
 
+  // A single read-only app/web job does not need the full file + mail +
+  // branching grammar. On CPU-only machines that broad grammar can take more
+  // than two minutes; the compact path produces the same validated record
+  // with a small schema, then the normal runner and permission fences take
+  // over.
+  try {
+    onProgress("draft", "Drafting a lightweight read job…");
+    const compact = await compactReadDraft(context, model, catalog, signal);
+    if (compact) {
+      run.counters.drafts++;
+      draftLog.status = "ok";
+      draftLog.finishedAt = Date.now();
+      draftLog.sentence = "Built with the lightweight local compiler.";
+      draftLog.lines.push({
+        at: Date.now(),
+        text: `Small draft returned in ${(compact.ms / 1000).toFixed(1)}s.`,
+        anchor: anchor(runId, anchorN++),
+      });
+
+      const validateLog: StageLog = {
+        stage: "validate",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+        status: "ok",
+        lines: [
+          {
+            at: Date.now(),
+            text: "Checked the finished record against the same app, source, schedule, and permission fences as the full compiler.",
+            anchor: anchor(runId, anchorN++),
+          },
+        ],
+        sentence: "Compact draft passed the full record validator.",
+      };
+      stages.push(validateLog);
+
+      const assembled = compact.draft.automations.map((automation) =>
+        assembleRecord(automation, model, context)
+      );
+      const summary = `Built "${assembled[0].name}" — waiting for a watched run`;
+      await updateRun(runId, (record) => {
+        record.status = "ok";
+        record.finishedAt = Date.now();
+        record.summary = summary;
+        record.automationId = assembled[0].id;
+      });
+      return {
+        ok: true,
+        automations: assembled,
+        chain: null,
+        question: null,
+        argument: [
+          "Used the lightweight local compiler for one read-only job.",
+        ],
+        failSentence: null,
+        runId,
+        keptToOneStep: true,
+      };
+    }
+  } catch (e) {
+    if (signal?.aborted) return stopped(draftLog);
+    draftLog.status = "broke";
+    draftLog.finishedAt = Date.now();
+    draftLog.sentence =
+      e instanceof ProviderError ? e.sentence : "The lightweight draft broke.";
+    return fail(
+      e instanceof ProviderError
+        ? e.sentence
+        : `Lightweight drafting broke — ${String(e)}`
+    );
+  }
+
   onProgress("draft", "Drafting…");
   const messages = draftMessages(catalog, context);
   let firstContent: string;
   try {
-    const res = await draftCall(model, catalog, messages);
+    const res = await draftCall(model, catalog, messages, signal);
     firstContent = res.content;
     run.counters.drafts++;
     draftLog.lines.push({
@@ -247,6 +346,7 @@ export async function compile(
       anchor: anchor(runId, anchorN++),
     });
   } catch (e) {
+    if (signal?.aborted) return stopped(draftLog);
     draftLog.status = "broke";
     draftLog.finishedAt = Date.now();
     draftLog.sentence =
@@ -278,9 +378,11 @@ export async function compile(
       messages,
       firstContent,
       context,
-      (text) => onProgress("validate", text)
+      (text) => onProgress("validate", text),
+      signal
     );
   } catch (e) {
+    if (signal?.aborted) return stopped(valLog);
     valLog.status = "broke";
     valLog.finishedAt = Date.now();
     valLog.sentence =

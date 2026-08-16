@@ -45,6 +45,7 @@ export interface ChatRequest {
   tools?: ToolDef[]; // stage 3 — NEVER together with format
   options: ChatOptions;
   think?: boolean; // thinking models: off for grammar-locked drafting
+  signal?: AbortSignal; // composer Stop button; never shared with scheduled runs
 }
 
 export interface ChatResponse {

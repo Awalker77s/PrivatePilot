@@ -3036,6 +3036,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-http",
  "tauri-plugin-opener",
+ "tokio",
  "uiautomation",
  "webview2-com",
  "windows",

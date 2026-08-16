@@ -132,6 +132,7 @@ export type ChatItem = ChatItemVariant & {
 let items: ChatItem[] = [];
 let nextId = 1;
 let busy = false;
+let activePromptController: AbortController | null = null;
 // The conversation context carried across question cards.
 let pending: DraftContext | null = null;
 let activeAutomationId: string | null = null;
@@ -179,6 +180,18 @@ export function chatItems(): ChatItem[] {
 }
 export function chatBusy(): boolean {
   return busy;
+}
+export function chatCanCancel(): boolean {
+  return activePromptController !== null;
+}
+export function chatCancelling(): boolean {
+  return activePromptController?.signal.aborted ?? false;
+}
+
+export function cancelChatPrompt(): void {
+  if (!activePromptController || activePromptController.signal.aborted) return;
+  activePromptController.abort(new DOMException("Stopped by you", "AbortError"));
+  emit();
 }
 
 function emit() {
@@ -366,6 +379,25 @@ export function removeAutomationReference(automationId: string): void {
   emit();
 }
 
+export function detachLibraryFromChat(): void {
+  if (busy) return;
+  saveActiveThreadState();
+  activeAutomationId = null;
+  threadStates.general = {
+    pending: null,
+    pendingEditRequest: null,
+    pendingReferences: [],
+  };
+  pending = null;
+  pendingEditRequest = null;
+  pendingReferences = [];
+  composerSeed = null;
+  for (const state of Object.values(threadStates)) {
+    state.pendingReferences = [];
+  }
+  emit();
+}
+
 function referenceContext(
   references: AutomationReference[],
   records: AutomationRecord[]
@@ -392,6 +424,8 @@ function replace(id: number, item: ChatItem | null) {
 }
 
 async function runCompile(context: DraftContext) {
+  const controller = new AbortController();
+  activePromptController = controller;
   busy = true;
   const progress = push({
     kind: "progress",
@@ -406,9 +440,12 @@ async function runCompile(context: DraftContext) {
         stage,
         text,
       });
-    });
+    }, controller.signal);
     replace(progress.id, null);
-    if (result.failSentence) {
+    if (result.cancelled) {
+      push({ kind: "note", tone: "gray", text: "Stopped by you. Nothing was saved." });
+      pending = null;
+    } else if (result.failSentence) {
       push({ kind: "note", tone: "red", text: result.failSentence });
       pending = null;
     } else if (result.question) {
@@ -433,9 +470,14 @@ async function runCompile(context: DraftContext) {
     }
   } catch (e) {
     replace(progress.id, null);
-    push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+    push(
+      controller.signal.aborted
+        ? { kind: "note", tone: "gray", text: "Stopped by you. Nothing was saved." }
+        : { kind: "note", tone: "red", text: `Broke: ${String(e)}` }
+    );
     pending = null;
   } finally {
+    if (activePromptController === controller) activePromptController = null;
     busy = false;
     emit();
   }
@@ -460,6 +502,8 @@ async function runEdit(target: EditTarget, request: string) {
     auto = getState().automations.records.find((r) => r.id === auto.id) ?? auto;
   }
 
+  const controller = new AbortController();
+  activePromptController = controller;
   busy = true;
   const progress = push({
     kind: "progress",
@@ -468,7 +512,7 @@ async function runEdit(target: EditTarget, request: string) {
     startedAt: Date.now(),
   });
   try {
-    const result = await editAutomation(auto, request);
+    const result = await editAutomation(auto, request, undefined, controller.signal);
     replace(progress.id, null);
     if (!result.ok || !result.after) {
       push({
@@ -489,8 +533,13 @@ async function runEdit(target: EditTarget, request: string) {
     }
   } catch (e) {
     replace(progress.id, null);
-    push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+    push(
+      controller.signal.aborted
+        ? { kind: "note", tone: "gray", text: "Stopped by you. Nothing was changed." }
+        : { kind: "note", tone: "red", text: `Broke: ${String(e)}` }
+    );
   } finally {
+    if (activePromptController === controller) activePromptController = null;
     busy = false;
     emit();
   }
@@ -500,6 +549,8 @@ async function runEdit(target: EditTarget, request: string) {
 // This is what makes an automation something you can TALK to: open it from
 // the Library, ask "what can this do?", then keep upgrading it in words.
 async function runExplain(record: AutomationRecord, question: string, history?: string) {
+  const controller = new AbortController();
+  activePromptController = controller;
   busy = true;
   const progress = push({
     kind: "progress",
@@ -510,7 +561,7 @@ async function runExplain(record: AutomationRecord, question: string, history?: 
   try {
     const model = await activeLocalModel();
     if (!model) throw new Error("No local model.");
-    const result = await explainAutomation(record, question, model, history);
+    const result = await explainAutomation(record, question, model, history, controller.signal);
     replace(progress.id, null);
     if (!result.ok) {
       push({
@@ -523,8 +574,13 @@ async function runExplain(record: AutomationRecord, question: string, history?: 
     }
   } catch (e) {
     replace(progress.id, null);
-    push({ kind: "note", tone: "red", text: `Broke: ${String(e)}` });
+    push(
+      controller.signal.aborted
+        ? { kind: "note", tone: "gray", text: "Stopped by you." }
+        : { kind: "note", tone: "red", text: `Broke: ${String(e)}` }
+    );
   } finally {
+    if (activePromptController === controller) activePromptController = null;
     busy = false;
     emit();
   }

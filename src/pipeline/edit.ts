@@ -293,7 +293,8 @@ async function finishEdit(
 export async function editAutomation(
   auto: AutomationRecord,
   request: string,
-  model?: string
+  model?: string,
+  signal?: AbortSignal
 ): Promise<EditResult> {
   const editable: Record<string, unknown> = {};
   for (const k of PATCHABLE) {
@@ -338,6 +339,7 @@ export async function editAutomation(
     format: { type: "object" },
     options: { num_ctx: NUM_CTX_DRAFT, temperature: 0, seed: 7 },
     think: false,
+    signal,
   });
 
   let patch: Record<string, unknown>;

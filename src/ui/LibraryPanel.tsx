@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  clearLibrary,
   deleteChain,
   getAutomationRevision,
   getState,
@@ -32,6 +33,8 @@ import { CategoryGlyph } from "./glyphs";
 import { ArrowRightIcon, LinkIcon, PlusIcon, SearchIcon } from "./icons";
 import {
   addAutomationReference,
+  chatBusy,
+  detachLibraryFromChat,
   openAutomationStudio,
 } from "./chatStore";
 import { chainOrder } from "../dispatcher";
@@ -43,6 +46,8 @@ export function LibraryPanel() {
   const storeVersion = useStoreVersion();
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(false);
+  const [clearArmed, setClearArmed] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [kind, setKind] = useState<"all" | "automations" | "sequences">("all");
   const [building, setBuilding] = useState(false);
   const [sequence, setSequence] = useState<string[]>([]);
@@ -61,6 +66,7 @@ export function LibraryPanel() {
   const [editingWorkflowId, setEditingWorkflowId] = useState<string | null>(null);
   const [, refreshPermissions] = useState(0);
   const { automations, chains } = getState();
+  const libraryCount = automations.records.length + chains.records.length;
 
   const records = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -279,6 +285,15 @@ export function LibraryPanel() {
             >
               <LinkIcon size={12} /> Sequence
             </button>
+            <button
+              className="btn btn-sm btn-ghost library-clear"
+              disabled={libraryCount === 0 || chatBusy() || clearing}
+              title="Remove saved automations and sequences. Activity stays."
+              onClick={() => setClearArmed(true)}
+              data-testid="clear-library"
+            >
+              Clear
+            </button>
           </>
         )}
         <button
@@ -292,6 +307,50 @@ export function LibraryPanel() {
 
       {!collapsed && (
         <>
+      {clearArmed && (
+        <div
+          className="library-clear-confirm"
+          role="group"
+          aria-label="Confirm clear Library"
+          data-testid="clear-library-confirmation"
+        >
+          <div>
+            <strong>Clear {libraryCount} saved item{libraryCount === 1 ? "" : "s"}?</strong>
+            <span className="caption">Activity history stays.</span>
+          </div>
+          <div className="library-clear-actions">
+            <button
+              className="btn btn-danger btn-sm"
+              disabled={clearing}
+              onClick={async () => {
+                setClearing(true);
+                try {
+                  await clearLibrary();
+                  detachLibraryFromChat();
+                  clearSequenceEditor();
+                  setBuilding(false);
+                  setQuery("");
+                  setKind("all");
+                  setClearArmed(false);
+                } finally {
+                  setClearing(false);
+                }
+              }}
+              data-testid="confirm-clear-library"
+            >
+              {clearing ? "Clearingâ€¦" : "Clear all"}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              disabled={clearing}
+              onClick={() => setClearArmed(false)}
+              data-testid="cancel-clear-library"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       <div className="library-search searchbox">
         <SearchIcon size={13} />
         <input

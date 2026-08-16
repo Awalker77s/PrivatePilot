@@ -78,7 +78,8 @@ export async function explainAutomation(
   auto: AutomationRecord,
   question: string,
   model: string,
-  history?: string
+  history?: string,
+  signal?: AbortSignal
 ): Promise<ExplainResult> {
   const runs = getState()
     .runs.records.filter((r) => r.automationId === auto.id)
@@ -105,6 +106,7 @@ export async function explainAutomation(
       ],
       options: { num_ctx: NUM_CTX_DRAFT, temperature: 0.3 },
       think: false,
+      signal,
     });
     const answer = res.content.trim();
     if (!answer) {
@@ -112,6 +114,7 @@ export async function explainAutomation(
     }
     return { ok: true, answer, failSentence: null };
   } catch (e) {
+    if (signal?.aborted) throw e;
     const sentence =
       e instanceof Error && "sentence" in e
         ? (e as { sentence: string }).sentence

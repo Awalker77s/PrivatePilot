@@ -6,6 +6,9 @@ import { BrainPicker } from "../BrainPicker";
 import { loadSettings } from "../../storage/settings";
 import {
   ChatItem,
+  cancelChatPrompt,
+  chatCanCancel,
+  chatCancelling,
   chatBusy,
   chatItems,
   chatVersion,
@@ -98,6 +101,8 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
   const micHeldAt = useRef(0);
   const items = chatItems();
   const busy = chatBusy();
+  const canCancel = chatCanCancel();
+  const cancelling = chatCancelling();
   const watching = isWatching();
   const references = composerReferences();
   const studioId = activeStudioAutomationId();
@@ -382,14 +387,26 @@ export function ChatTab(_props: { goTo: (t: TabId) => void }) {
                     <MicIcon size={13} />
                   )}
                 </button>
-                <button
-                  className="btn btn-primary btn-sm"
-                  disabled={busy || !draft.trim()}
-                  onClick={submit}
-                  data-testid="send"
-                >
-                  Send
-                </button>
+                {busy && canCancel ? (
+                  <button
+                    className="btn btn-danger btn-sm"
+                    disabled={cancelling}
+                    onClick={cancelChatPrompt}
+                    title="Stop the current local-AI request"
+                    data-testid="cancel-prompt"
+                  >
+                    {cancelling ? "Stoppingâ€¦" : "Stop"}
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={busy || !draft.trim()}
+                    onClick={submit}
+                    data-testid="send"
+                  >
+                    Send
+                  </button>
+                )}
               </>
             )}
           </div>

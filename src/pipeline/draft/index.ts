@@ -152,7 +152,8 @@ export function draftMessages(
 export async function draftCall(
   model: string,
   catalog: Catalog,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  signal?: AbortSignal
 ): Promise<{ content: string; ms: number }> {
   const res = await chat({
     model,
@@ -165,6 +166,7 @@ export async function draftCall(
       max_tokens: 2048,
     },
     think: false, // thinking models spend the whole response thinking otherwise
+    signal,
   });
   return { content: res.content, ms: res.totalMs };
 }
@@ -175,7 +177,8 @@ export async function draftCall(
 export async function planFreeThenTranscribe(
   model: string,
   catalog: Catalog,
-  context: DraftContext
+  context: DraftContext,
+  signal?: AbortSignal
 ): Promise<{ content: string; ms: number }> {
   const plan = await chat({
     model,
@@ -206,6 +209,7 @@ export async function planFreeThenTranscribe(
       max_tokens: 1024,
     },
     think: false,
+    signal,
   });
   const transcribe = await chat({
     model,
@@ -225,6 +229,7 @@ export async function planFreeThenTranscribe(
       max_tokens: 2048,
     },
     think: false,
+    signal,
   });
   return { content: transcribe.content, ms: plan.totalMs + transcribe.totalMs };
 }

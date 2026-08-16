@@ -4,8 +4,19 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri_plugin_fs::FsExt;
+
+#[derive(Default)]
+struct OllamaRequestRegistry {
+    active: HashMap<String, tokio::sync::oneshot::Sender<()>>,
+    cancelled: HashSet<String>,
+}
+
+#[derive(Default)]
+struct OllamaRequests(Mutex<OllamaRequestRegistry>);
 
 #[derive(serde::Serialize)]
 struct LocalHttpResponse {
@@ -17,12 +28,21 @@ struct LocalHttpResponse {
 // native escape hatch loopback-only and limited to the four APIs the app uses.
 #[tauri::command]
 async fn ollama_request(
+    requests: tauri::State<'_, OllamaRequests>,
     path: String,
     method: String,
     body: Option<String>,
     timeout_ms: u64,
+    request_id: String,
 ) -> Result<LocalHttpResponse, String> {
-    const ALLOWED_PATHS: [&str; 5] = ["/api/tags", "/api/show", "/api/ps", "/api/chat", "/api/embed"];
+    const ALLOWED_PATHS: [&str; 6] = [
+        "/api/tags",
+        "/api/show",
+        "/api/ps",
+        "/api/chat",
+        "/api/embed",
+        "/api/generate",
+    ];
     if !ALLOWED_PATHS.contains(&path.as_str()) {
         return Err("Refused: unsupported Ollama endpoint".to_string());
     }
@@ -44,10 +64,50 @@ async fn ollama_request(
     } else {
         request
     };
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    {
+        let mut registry = requests
+            .0
+            .lock()
+            .map_err(|_| "Ollama request registry is unavailable".to_string())?;
+        if registry.cancelled.remove(&request_id) {
+            return Err("Cancelled".to_string());
+        }
+        registry.active.insert(request_id.clone(), cancel_tx);
+    }
+    let response = tokio::select! {
+        response = request.send() => response.map_err(|e| e.to_string()),
+        _ = cancel_rx => Err("Cancelled".to_string()),
+    };
+    requests
+        .0
+        .lock()
+        .map_err(|_| "Ollama request registry is unavailable".to_string())?
+        .active
+        .remove(&request_id);
+    let response = response?;
     let status = response.status().as_u16();
     let body = response.text().await.map_err(|e| e.to_string())?;
     Ok(LocalHttpResponse { status, body })
+}
+
+#[tauri::command]
+fn cancel_ollama_request(
+    requests: tauri::State<'_, OllamaRequests>,
+    request_id: String,
+) -> Result<bool, String> {
+    let mut registry = requests
+        .0
+        .lock()
+        .map_err(|_| "Ollama request registry is unavailable".to_string())?;
+    if let Some(sender) = registry.active.remove(&request_id) {
+        Ok(sender.send(()).is_ok())
+    } else {
+        // The cancel IPC can beat the request IPC to this registry. Remember
+        // it so the request exits before opening a two-minute Ollama call.
+        registry.cancelled.insert(request_id);
+        Ok(true)
+    }
 }
 
 #[cfg(windows)]
@@ -288,6 +348,7 @@ pub fn run() {
         }
     }
     tauri::Builder::default()
+        .manage(OllamaRequests::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -296,6 +357,7 @@ pub fn run() {
             allow_folder,
             allow_file,
             ollama_request,
+            cancel_ollama_request,
             atomic_write,
             walk_stats,
             copy_dir,

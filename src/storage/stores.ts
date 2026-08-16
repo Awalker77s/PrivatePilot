@@ -277,6 +277,25 @@ export async function deleteAutomation(id: string): Promise<void> {
   emit();
 }
 
+// Clear the saved building blocks as one deliberate Library action. Activity
+// is append-only and intentionally untouched, so the person keeps the record
+// of what previously ran even after cleaning out their Library.
+export async function clearLibrary(): Promise<{
+  automations: number;
+  sequences: number;
+}> {
+  const counts = {
+    automations: state.automations.records.length,
+    sequences: state.chains.records.length,
+  };
+  state.chains = { records: [], versions: {} };
+  state.automations = { records: [], versions: {} };
+  await persistStore("chains", state.chains);
+  await persistStore("automations", state.automations);
+  emit();
+  return counts;
+}
+
 export function getAutomation(id: string): AutomationRecord | undefined {
   return state.automations.records.find((r) => r.id === id);
 }

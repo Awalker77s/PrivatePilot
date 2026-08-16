@@ -15,8 +15,12 @@ export interface EditTarget {
 // A follow-up that tweaks something, not a request for something new.
 export const DELTA_VERB_RE =
   /\b(schedule|reschedule|rename|change|adjust|update|set|make it|move|switch|pause|resume|turn (it |this )?(on|off)|remove|delete|run (it|this|that)|use)\b/i;
+// Anaphora aimed at the focus card. A BARE "that" is a relative pronoun far
+// more often than a demonstrative ("a job THAT moves old downloads"), and a
+// trailing "it" is usually a new object ("put it on my drive") — so a bare
+// pronoun only counts when it is the change-verb's object.
 export const DEIXIS_RE =
-  /\b(this|that|it|that one|the (first|second|last) one|them|both)\b/i;
+  /\b(?:this|that)\s+(?:automation|one|chain)\b|\b(?:the (?:first|second|last) one|them|both)\b|\b(?:schedule|reschedule|rename|change|adjust|update|set|move|switch|pause|resume|remove|delete|run|use|make|keep)\s+(?:it|this|that)\b/i;
 export const TIMEY_RE =
   /\b(time|schedule|daily|hourly|every (day|morning|evening|night|hour|week)|at \d{1,2}(:\d{2})?\s*(am|pm)?|\d{1,2}\s*(am|pm))\b/i;
 // A reference to an existing SCHEDULE FIELD (not a new object) — this is what
@@ -28,7 +32,7 @@ export const SCHEDULE_FIELD_RE =
   /\b(the |its )?(time|schedule|hour|day|frequency|cadence)\b/i;
 // Words that mean "something new", which must never be hijacked into an edit.
 export const NEW_TASK_RE =
-  /\b(another automation|a new automation|an automation (that|to|which|for|about)|a second automation|one more automation|make me (an|a new)|create (an|a new)|build (me )?(an|a)|a copy of|a version of|duplicate)\b/i;
+  /\b(another automation|a new automation|an automation (that|to|which|for|about)|a second automation|one more automation|make (me )?(an?|a new)|create (me )?(an?|a new)|build (me )?(an?)|set up (an?|a new)|a copy of|a version of|duplicate)\b/i;
 // "Make a VARIANT of an existing automation" — meaningful only when a real
 // automation name is also present (otherwise "a second batch of scans" is just
 // an object). Used to send "create a second Morning Brief" to a fresh compile
@@ -41,7 +45,7 @@ export const COPY_INTENT_RE =
 // "Can you change the time?" is still an edit: a delta verb wins over the
 // question form, because the person wants the change, not an essay.
 const QUESTION_FORM_RE =
-  /^(what|what's|whats|how|why|when|where|which|who|does|do|did|can|could|is|are|was|will|would|should|tell me|explain|describe|walk me through|help me understand|show me what|summarize)\b|\?\s*$/i;
+  /^(what|what's|whats|how|why|when|where|which|who|tell me|explain|describe|walk me through|help me understand|show me what|summarize)\b|^(does|do|did|can|could|is|are|was|will|would|should)\s+(i|you|it|this|that|they|we)\b|\?\s*$/i;
 export function isQuestionAbout(text: string): boolean {
   const t = text.trim();
   if (NEW_TASK_RE.test(t)) return false;
@@ -176,7 +180,9 @@ export function rewriteDeixis(text: string, name: string): string {
     phrase
   );
   if (out !== text) return out;
-  return text.replace(/\b(?:this|that|it)\b/i, phrase);
+  // NOT "that": anaphoric "that" is handled by the phrase branch above, while
+  // relativizer "that" ("a digest that tracks papers") would be mangled.
+  return text.replace(/\b(?:this|it)\b/i, phrase);
 }
 
 // The digest that rides into DraftContext.history — template-rendered from

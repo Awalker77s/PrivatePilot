@@ -289,10 +289,14 @@ export function tryQuickCompile(context: DraftContext): QuickCompileMatch | null
     consumed.push(topic);
   }
 
-  const wantsStock = /\b(stock|share price|market price|stock price|quote)\b/i.test(text);
+  // NOT a bare "quote" — "a motivational quote", "a shipping quote" are not
+  // stock asks, and the zero-ticker branch below would hijack the message.
+  const wantsStock = /\b(stock|share price|market price|stock price|stock quote)\b/i.test(text);
   if (wantsStock) {
     const stocks = aliasesIn(lower, STOCKS);
-    if (stocks.length === 0) {
+    // Only ASK when the stock request is the whole message — returning here
+    // would throw away automations other templates already matched.
+    if (stocks.length === 0 && automations.length === 0) {
       return {
         kind: "question",
         matched: ["stock price"],

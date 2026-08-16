@@ -152,7 +152,11 @@ export async function editAutomation(
   // an unfenced host, an uncataloged path, or a dangling {fill_in}.
   try {
     const catalog = await buildCatalog();
-    const verdict = validateEditedAutomation(after, catalog);
+    const verdict = validateEditedAutomation(after, catalog, {
+      steps: auto.steps,
+      inputs: auto.inputs,
+      sources: auto.sources,
+    });
     if (!verdict.ok) {
       return {
         ok: false,

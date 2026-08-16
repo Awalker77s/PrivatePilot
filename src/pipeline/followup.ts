@@ -20,6 +20,46 @@ export type FollowUpIntent = "edit" | "question" | "new";
 export const FOLLOWUP_HINT_RE =
   /^(can|could|would|will) (you|it|we)\b|^(also|and|now|then|plus|please|actually|instead)\b|^(add|include|give|show|make|put|use|keep|have|sort|format|shorten|expand|summariz\w*)\b/i;
 
+// Words that carry no subject — a shared "the" proves nothing.
+const STOP = new Set(
+  `the a an and or of to in on for with from into at by is are was be it its
+   this that these those my me i you your we us they them their some any all
+   every each get give show make add also please can could would will just
+   want need new now today daily morning every day week time about over under
+   more less than then there here what when where how why who which do does
+   did have has had not no yes one two three top best`.split(/\s+/)
+);
+
+// Does the message actually TALK ABOUT this automation? A small model asked
+// "edit or new?" leans EDIT (the prompt names an automation, so it primes
+// one), and an unchallenged EDIT on a genuinely new request is exactly the
+// "it brought up an already-made one" failure. A pronoun aimed at it, or one
+// real content word in common with what it does, is the evidence required.
+// An ELLIPTICAL follow-up is incomplete without the previous turn ("also
+// include the race results", "add the humidity"), so it is about the focus by
+// grammar alone — no subject overlap needed. A self-contained request ("make a
+// daily rundown of AI papers") must prove it refers to the card.
+export const ELLIPTICAL_RE =
+  /^(also|and|plus|then)\b|^(can|could|would|will) (you|we) (also|add|include|throw|put)\b|^(add|include|append|attach|throw in|put in)\b/i;
+
+export function refersToFocus(
+  text: string,
+  focus: { name: string; sentence: string; steps?: string[]; sources?: string[] }
+): boolean {
+  const words = (s: string) =>
+    new Set(
+      s
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 4 && !STOP.has(w))
+    );
+  const theirs = words(
+    [focus.name, focus.sentence, ...(focus.steps ?? []), ...(focus.sources ?? [])].join(" ")
+  );
+  for (const word of words(text)) if (theirs.has(word)) return true;
+  return false;
+}
+
 export async function classifyFollowUp(
   text: string,
   focus: { name: string; sentence: string },

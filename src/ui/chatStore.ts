@@ -21,7 +21,12 @@ import {
   splitCoordination,
 } from "./memory";
 import { explainAutomation } from "../pipeline/explain";
-import { FOLLOWUP_HINT_RE, classifyFollowUp } from "../pipeline/followup";
+import {
+  ELLIPTICAL_RE,
+  FOLLOWUP_HINT_RE,
+  classifyFollowUp,
+  refersToFocus,
+} from "../pipeline/followup";
 import { compile, CompileResult, CompileQuestion } from "../pipeline/session";
 import type { DraftContext } from "../pipeline/draft";
 import { updateSettings } from "../storage/settings";
@@ -633,7 +638,7 @@ export async function sendText(text: string) {
   // An Automation Studio is an explicit scope for THIS record: a question
   // answers from it, an instruction edits it — but "make me a NEW automation"
   // is never an edit of this one; it falls through to a fresh compile.
-  if (activeAutomationId && !NEW_TASK_RE.test(text)) {
+  if (activeAutomationId && !NEW_TASK_RE.test(text) && !COPY_INTENT_RE.test(text)) {
     const record = saved.find((candidate) => candidate.id === activeAutomationId);
     if (record) {
       if (isQuestionAbout(text)) {
@@ -647,7 +652,7 @@ export async function sendText(text: string) {
 
   // A single structured reference: questions answer from it, instructions
   // edit it — no need to repeat its name either way.
-  if (references.length === 1 && !NEW_TASK_RE.test(text)) {
+  if (references.length === 1 && !NEW_TASK_RE.test(text) && !COPY_INTENT_RE.test(text)) {
     const record = saved.find(
       (candidate) => candidate.id === references[0].automationId
     );
@@ -673,7 +678,11 @@ export async function sendText(text: string) {
       // otherwise leave the real one untouched); everything else compiles as
       // one job.
       const segNamed = findTargetsByName(seg, scopedItems(), saved);
+      // Only the FIRST segment can be an edit: every later one was introduced
+      // by an explicit "and another automation to…" marker that the splitter
+      // consumed, so it is a new job by construction.
       if (
+        i === 0 &&
         segNamed.length === 1 &&
         DELTA_VERB_RE.test(seg) &&
         !NEW_TASK_RE.test(seg)
@@ -705,8 +714,16 @@ export async function sendText(text: string) {
   // A named automation — drafts on built cards are first-class targets, so
   // "schedule the tech news one for 9am" patches the unsaved draft instead
   // of re-building it.
+  // A saved automation's name is ordinary topic vocabulary ("Bitcoin Price",
+  // "Top Tech News"), so a bare name match must NOT mean "edit this" — the
+  // message also has to ask for a CHANGE. "alert me when the bitcoin price
+  // drops" names a topic and is a new job; "change Bitcoin Price to 9am" is
+  // an edit. (Questions about a named automation still route to explain.)
   const named = findTargetsByName(text, thread, saved);
-  if (named.length === 1 && !NEW_TASK_RE.test(text)) {
+  const namedIsTarget =
+    !NEW_TASK_RE.test(text) &&
+    (DELTA_VERB_RE.test(text) || isQuestionAbout(text));
+  if (named.length === 1 && namedIsTarget) {
     if (isQuestionAbout(text)) {
       await runExplain(named[0].record, text, history);
       return;
@@ -718,7 +735,7 @@ export async function sendText(text: string) {
       return;
     }
   }
-  if (named.length > 1 && !NEW_TASK_RE.test(text)) {
+  if (named.length > 1 && namedIsTarget) {
     askWhichOne(named, text);
     return;
   }
@@ -758,7 +775,20 @@ export async function sendText(text: string) {
           { name: focus[0].record.name, sentence: focus[0].record.sentence },
           model
         );
-        if (intent === "edit") {
+        // Trust EDIT only with evidence the message is ABOUT that card: a
+        // pronoun aimed at it, or a real word in common with what it does.
+        // Without this, a primed "EDIT" from a small model turns a brand-new
+        // request into a patch of the last automation.
+        const refers =
+          DEIXIS_RE.test(text) ||
+          ELLIPTICAL_RE.test(text.trim()) ||
+          refersToFocus(text, {
+            name: focus[0].record.name,
+            sentence: focus[0].record.sentence,
+            steps: focus[0].record.steps,
+            sources: focus[0].record.sources,
+          });
+        if (intent === "edit" && refers) {
           await runEdit(focus[0], rewriteDeixis(text, focus[0].record.name));
           return;
         }

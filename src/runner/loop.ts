@@ -416,8 +416,9 @@ export async function runToolLoop(
     if (directSummary) return directSummary;
   }
   const bound = bindTools(record, sandbox);
-  // Online jobs carry no file corpus, so 16k is ample and substantially
-  // quicker on CPU-only machines. File jobs retain the full 32k window.
+  // Online jobs carry no file corpus, so the smaller drafting window is ample
+  // and substantially quicker on CPU-only machines. File jobs retain the full
+  // NUM_CTX_TOOLS window; both constants live in providers/index.ts.
   const contextSize = sandbox ? NUM_CTX_TOOLS : NUM_CTX_DRAFT;
   // Effort sets the base ceiling (quick finishes faster on CPU). App
   // connectors and heavy tools spend one turn per read/step — a mailbox

@@ -1,7 +1,9 @@
 // Stage 1 · Schema-constrained drafting. The drafting call sends
 // format: <JSON schema> (compiled to a llama.cpp grammar — syntax guaranteed)
 // AND embeds the same schema in the prompt with temperature 0 — Ollama's own
-// documented recommendation. Config: temp 0 · seed 7 · num_ctx 16384.
+// documented recommendation. Config: temp 0 · seed 7 · num_ctx NUM_CTX_DRAFT
+// (see providers/index.ts — sized to the prompt so CPU-only Ollama isn't
+// allocating KV cache it will never fill).
 import { chat, NUM_CTX_DRAFT } from "../../providers";
 import type { ChatMessage } from "../../providers/types";
 import type { Catalog } from "../catalog";

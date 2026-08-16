@@ -1,30 +1,51 @@
 # Private Pilot
 
+**A Windows app that turns a sentence into an automation you can read — and
+runs it on your own machine.** A local model compiles plain English into a
+strict-JSON record; that record, not the model, decides what runs. Nothing
+leaves the computer unless you flip a labelled switch.
+
 [![verify](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml/badge.svg)](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**A model running here cannot invent a file that isn't on your disk** — not
-because it's told not to, but because the only filenames in its decoding
-grammar are the real ones. Describe a job in plain English; the model compiles
-it into an **automation record you can read**, and that record runs behind a
-fence written in code, not in a prompt.
-
-Nothing leaves the machine by default (Ollama). Cloud is an explicit choice you
-make per model (Featherless.ai), and the UI never lies about where compute
-happened.
-
 ![Private Pilot — a request compiled into a readable automation, run, and answered in the chat](docs/img/chat-answer.png)
 
-> **Demo video:** _(link)_
+<sub>One sentence → a record you can audit → a watched run → an answer whose
+every number was checked against the page it came from. No API key, no account,
+no server.</sub>
+
+<!-- After recording the demo, paste the PUBLIC video URL here as:
+     > **Demo video:** https://... -->
 
 | | |
 |---|---|
 | **Stack** | Tauri v2 · React 19 · TypeScript · Rust · Ollama · Featherless.ai |
 | **Size** | ~26,000 lines across 100 source files |
 | **Platform** | Windows 11 (WebView2) |
-| **Team** | Alexander Walker · Mustapha324 · Ryan Schlosbon |
+| **Team** | Alexander Walker · Mustapha Straton · Ryan Schlosbon |
 | **License** | [MIT](LICENSE) |
 | **Built** | entirely inside the 48-hour window — first commit [`54ec863`](https://github.com/Awalker77s/PrivatePilot/commit/54ec863) at 6:27 PM CST, 27 minutes after kickoff — [full history](https://github.com/Awalker77s/PrivatePilot/commits/main) |
+
+---
+
+## Why it exists
+
+Automation makes you choose: wire a node graph on a server you maintain, or
+hand your files and your inbox to a cloud you can't inspect. Either way you end
+up trusting something you can't read.
+
+Doing it locally isn't hard because small models are weak. It's hard because
+you get no **guarantees** — a 4B model will invent a filename without
+hesitating. So this app doesn't ask it to behave. It removes the option:
+
+> **The only filenames in the model's decoding grammar are the ones actually on
+> your disk.** A hallucinated path isn't discouraged, it's *unsampleable*. With
+> nothing indexed, the field it would name a file in compiles to `{"not": {}}` —
+> a type no string inhabits.
+
+Three more guarantees work the same way — each one a function in the codebase
+rather than a sentence in a prompt. They are the whole project:
+[**How it works ↓**](#how-it-works)
 
 ---
 
@@ -64,7 +85,7 @@ ollama pull gemma4:12b          # better screen/image reading for "Watch me"
 
 ---
 
-## Verify it works — in one command, without installing anything
+## Verify it works — no model, no Rust toolchain, no API key
 
 ```bash
 npm install && npm run verify
@@ -72,7 +93,10 @@ npm install && npm run verify
 
 That type-checks the whole project and runs the regression suite (**62
 assertions** covering the compiler's template path, chat routing, sequence
-detection, schedule parsing, and the file compiler).
+detection, schedule parsing, and the file compiler). It needs no model, no
+network at test time, and none of the Tauri prerequisites — which is why
+[CI runs the same command on every push](https://github.com/Awalker77s/PrivatePilot/actions/workflows/verify.yml),
+green on a clean Linux runner in under 30 seconds.
 
 **Then try these three in the app** — they exercise the three hardest paths:
 
@@ -326,7 +350,7 @@ src/
   connectors/   Outlook, Gmail, Spotify, any open window
 src-tauri/      Rust: window cloaking, DPAPI, rasterization, job objects
 scripts/        regression suite
-docs/           architecture, demo script, design notes
+docs/           architecture, file-safety model, terminal plan, screenshots
 ```
 
 ## Tests
@@ -399,8 +423,8 @@ a Zap *succeeded*, not what it *found*).
 
 ## Team
 
-Built by **Alexander Walker**, **Mustapha324**, and **Ryan Schlosbon**.
+Built by **Alexander Walker**, **Mustapha Straton**, and **Ryan Schlosbon**.
 
 ## License
 
-[MIT](LICENSE) © 2026 Alexander Walker, Mustapha324, and Ryan Schlosbon
+[MIT](LICENSE) © 2026 Alexander Walker, Mustapha Straton, and Ryan Schlosbon

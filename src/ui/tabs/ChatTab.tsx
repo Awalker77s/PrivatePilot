@@ -18,6 +18,7 @@ import {
   discardBuilt,
   discardWatchMe,
   dropWatchFrame,
+  dropEdit,
   keepBuilt,
   keepEdit,
   notNowBuilt,
@@ -654,7 +655,11 @@ function EditCard({ item }: { item: ChatItem & { kind: "edit" } }) {
           >
             Keep it
           </button>
-          <button className="btn btn-ghost" data-testid="drop-edit">
+          <button
+            className="btn btn-ghost"
+            onClick={() => dropEdit(item.id)}
+            data-testid="drop-edit"
+          >
             Put it back
           </button>
         </div>
@@ -669,6 +674,10 @@ function EditCard({ item }: { item: ChatItem & { kind: "edit" } }) {
         </button>
       )}
       {state === "reverted" && <div className="caption">Put back.</div>}
+      {state === "dropped" && <div className="caption">Left as it was.</div>}
+      {state === "stale" && (
+        <div className="caption">Outdated — the automation changed after this card.</div>
+      )}
     </div>
   );
 }

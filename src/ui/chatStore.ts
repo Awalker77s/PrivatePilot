@@ -5,6 +5,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { readChatFile, writeChatFile } from "../storage/chat";
 import {
+  ADD_SHAPE_RE,
+  CHANGE_NOUN_RE,
   COPY_INTENT_RE,
   DEIXIS_RE,
   DELTA_VERB_RE,
@@ -16,6 +18,7 @@ import {
   findTargetsByName,
   focusTargets,
   isQuestionAbout,
+  nameAfterPreposition,
   renderHistory,
   rewriteDeixis,
   splitCoordination,
@@ -34,7 +37,6 @@ import { keepRun, putBackRun, runAutomation } from "../runner/run";
 import {
   getRun,
   getState,
-  restoreVersion,
   saveAutomation,
   saveChain,
 } from "../storage/stores";
@@ -42,7 +44,7 @@ import { editAutomation, EditResult } from "../pipeline/edit";
 import { activeLocalModel } from "../providers";
 import { ChainCycleError, assertNoCycle, runChain } from "../dispatcher";
 import type { AutomationRecord, AutomationReference } from "../storage/types";
-import { normalizeAutomation } from "../storage/revisions";
+import { automationContentHash, normalizeAutomation } from "../storage/revisions";
 
 type ChatItemVariant =
   | { id: number; kind: "user"; text: string; references?: AutomationReference[] }
@@ -86,7 +88,10 @@ type ChatItemVariant =
       // means the target is a saved record in the store.
       builtItemId: number | null;
       result: EditResult;
-      state: "fresh" | "kept" | "reverted";
+      // dropped = a fresh change the person waved away before it ever
+      // touched the store; stale = the record moved on and this card's
+      // buttons stopped being safe to press.
+      state: "fresh" | "kept" | "reverted" | "dropped" | "stale";
     }
   | {
       id: number;
@@ -419,6 +424,9 @@ async function runCompile(context: DraftContext) {
 
 // An edit in flight, waiting for a "Which one?" answer.
 let pendingEditRequest: string | null = null;
+// items.length when the question was asked — an answer arrives within a turn
+// or two; anything later routes normally instead of firing the old request.
+let pendingEditAskedAt = 0;
 
 async function runEdit(target: EditTarget, request: string) {
   // The patch base is the record's CURRENT state — a draft may have been
@@ -514,9 +522,20 @@ function applyDraftEdit(builtItemId: number, result: EditResult) {
     a.id === result.after!.id ? result.after! : a
   );
   // A watched run stays earned through cosmetic patches; changing what the
-  // job actually DOES demands a fresh watched run before Save.
+  // job actually DOES — including which apps, tools, and knowledge bases it
+  // may touch — demands a fresh watched run before Save.
   const execChanged = result.changed.some((c) =>
-    ["steps", "sources", "files", "inputs", "delivers"].includes(c.key)
+    [
+      "steps",
+      "sources",
+      "files",
+      "inputs",
+      "outputs",
+      "delivers",
+      "apps",
+      "tools",
+      "knowledge",
+    ].includes(c.key)
   );
   patchBuilt(builtItemId, {
     result: { ...host.result, automations: autos },
@@ -533,25 +552,88 @@ function applyDraftEdit(builtItemId: number, result: EditResult) {
   });
 }
 
+// Same job, same content? name is deliberately OUTSIDE the content hash
+// (renames must not re-earn approval), so an honest "is this still the
+// record my card described" check needs both.
+function sameRecord(a: AutomationRecord, b: AutomationRecord): boolean {
+  return a.name === b.name && automationContentHash(a) === automationContentHash(b);
+}
+
+// A card whose before/after no longer matches reality must SAY so, never
+// silently clobber the newer change with its stale copy.
+function markStale(item: ChatItem & { kind: "edit" }, verb: string) {
+  replace(item.id, { ...item, state: "stale" });
+  push({
+    kind: "note",
+    tone: "amber",
+    text: `"${item.result.before.name}" has changed again since this card — nothing was ${verb}. Use the newest change card, or just say the change again.`,
+  });
+}
+
 // Keep it: the patched record becomes current (the old version is kept for
 // Put it back — last ~10).
 export async function keepEdit(itemId: number) {
   const item = items.find((i) => i.id === itemId);
   if (!item || item.kind !== "edit" || item.state !== "fresh" || !item.result.after)
     return;
+  // The patch was drawn against item.result.before — if the record moved on
+  // (another card was kept first), saving this after would erase that change.
+  const current = getState().automations.records.find((r) => r.id === item.autoId);
+  if (current && !sameRecord(current, item.result.before)) {
+    markStale(item, "kept");
+    return;
+  }
   item.result.after.origin = { kind: "edited", at: Date.now() };
   await saveAutomation(item.result.after);
   replace(itemId, { ...item, state: "kept" });
 }
 
+// Put it back (fresh card): the change never touched the store — just wave
+// the card away.
+export function dropEdit(itemId: number) {
+  const item = items.find((i) => i.id === itemId);
+  if (!item || item.kind !== "edit" || item.state !== "fresh") return;
+  replace(itemId, { ...item, state: "dropped" });
+}
+
 export async function revertEdit(itemId: number) {
   const item = items.find((i) => i.id === itemId);
-  if (!item || item.kind !== "edit" || item.state !== "kept") return;
+  if (!item || item.kind !== "edit" || item.state !== "kept" || !item.result.after)
+    return;
   if (item.builtItemId !== null) {
     // Draft edits never touched the store — put the before-record back into
-    // the built card.
+    // the built card, but only if the draft still IS what this card made
+    // (a later follow-up edit must not be silently thrown away).
     const host = builtItem(item.builtItemId);
     if (host) {
+      if (host.state === "saved") {
+        // The draft was SAVED after this edit — the record lives in the
+        // store now. Reverting only the card would leave the Library (and
+        // the scheduler) running the edit while the chat claims "Put back."
+        const current = getState().automations.records.find(
+          (r) => r.id === item.autoId
+        );
+        if (!current || !sameRecord(current, item.result.after)) {
+          markStale(item, "put back");
+          return;
+        }
+        await saveAutomation(item.result.before);
+        patchBuilt(item.builtItemId, {
+          result: {
+            ...host.result,
+            automations: host.result.automations.map((a) =>
+              a.id === item.autoId ? item.result.before : a
+            ),
+          },
+        });
+        replace(itemId, { ...item, state: "reverted" });
+        return;
+      }
+      const cur = host.result.automations.find((a) => a.id === item.autoId);
+      if (cur && !sameRecord(cur, item.result.after)) {
+        markStale(item, "put back");
+        return;
+      }
       patchBuilt(item.builtItemId, {
         result: {
           ...host.result,
@@ -562,7 +644,17 @@ export async function revertEdit(itemId: number) {
       });
     }
   } else {
-    await restoreVersion(item.autoId);
+    // Restore THIS card's before-record. restoreVersion (newest version off
+    // the pile) is wrong here twice over: a rename keeps no version at all
+    // (name is outside the content hash), and an older pile entry may not be
+    // this card's before. saveAutomation versions the replaced current, so
+    // redo stays possible.
+    const current = getState().automations.records.find((r) => r.id === item.autoId);
+    if (!current || !sameRecord(current, item.result.after)) {
+      markStale(item, "put back");
+      return;
+    }
+    await saveAutomation(item.result.before);
   }
   replace(itemId, { ...item, state: "reverted" });
 }
@@ -571,6 +663,7 @@ export async function revertEdit(itemId: number) {
 // guesses and never falls through to a fresh build.
 function askWhichOne(targets: EditTarget[], request: string) {
   pendingEditRequest = request;
+  pendingEditAskedAt = items.length;
   push({
     kind: "question",
     q: {
@@ -606,17 +699,30 @@ export async function sendText(text: string) {
     | undefined;
 
   if (lastQuestion && pendingEditRequest) {
-    const target = findTargetNamed(text, thread, saved);
-    if (target) {
-      replace(lastQuestion.id, { ...lastQuestion, answered: text });
-      const request = pendingEditRequest;
+    // A which-one answer comes NEXT, not three topics later — a stale stored
+    // request must never ambush an unrelated message.
+    if (items.length - pendingEditAskedAt > 6) {
       pendingEditRequest = null;
-      await runEdit(target, request);
-      return;
+    } else {
+      // Exact name first, then a natural answer that uniquely names one
+      // ("the Tech News one" → Tech News).
+      const exact = findTargetNamed(text, thread, saved);
+      const loose = exact ? [] : findTargetsByName(text, thread, saved);
+      const target = exact ?? (loose.length === 1 ? loose[0] : null);
+      if (target) {
+        replace(lastQuestion.id, { ...lastQuestion, answered: text });
+        const request = pendingEditRequest;
+        pendingEditRequest = null;
+        // A reply that carries its own change ("actually change Tech News to
+        // 8am") wins over the stored request — replaying the old one would
+        // silently discard what the person just said.
+        await runEdit(target, DELTA_VERB_RE.test(text) ? text : request);
+        return;
+      }
+      // Not a name — a correction or a new thought ("actually make it 8am").
+      // The which-one question stays open; the message routes normally instead
+      // of dead-ending on an amber "No automation is named that".
     }
-    // Not a name — a correction or a new thought ("actually make it 8am").
-    // The which-one question stays open; the message routes normally instead
-    // of dead-ending on an amber "No automation is named that".
   }
 
   if (lastQuestion && pending) {
@@ -633,10 +739,20 @@ export async function sendText(text: string) {
     return;
   }
 
+  // "make a change to the schedule" ASKS for an edit — NEW_TASK_RE's bare
+  // "make a…" must not read it as a fresh job. And copy-intent words
+  // ("another", "a second") only mean "build a variant" when the message also
+  // NAMES an automation — "send it to another email" changes a field, it
+  // doesn't ask for a second automation.
+  const asksNewThing = NEW_TASK_RE.test(text) && !CHANGE_NOUN_RE.test(text);
+  const asksVariant = () =>
+    COPY_INTENT_RE.test(text) &&
+    findTargetsByName(text, thread, saved).length > 0;
+
   // An Automation Studio is an explicit scope for THIS record: a question
   // answers from it, an instruction edits it — but "make me a NEW automation"
   // is never an edit of this one; it falls through to a fresh compile.
-  if (activeAutomationId && !NEW_TASK_RE.test(text) && !COPY_INTENT_RE.test(text)) {
+  if (activeAutomationId && !asksNewThing && !asksVariant()) {
     const record = saved.find((candidate) => candidate.id === activeAutomationId);
     if (record) {
       if (isQuestionAbout(text)) {
@@ -650,7 +766,7 @@ export async function sendText(text: string) {
 
   // A single structured reference: questions answer from it, instructions
   // edit it — no need to repeat its name either way.
-  if (references.length === 1 && !NEW_TASK_RE.test(text) && !COPY_INTENT_RE.test(text)) {
+  if (references.length === 1 && !asksNewThing && !asksVariant()) {
     const record = saved.find(
       (candidate) => candidate.id === references[0].automationId
     );
@@ -718,6 +834,28 @@ export async function sendText(text: string) {
   // drops" names a topic and is a new job; "change Bitcoin Price to 9am" is
   // an edit. (Questions about a named automation still route to explain.)
   const named = findTargetsByName(text, thread, saved);
+  // "add the weather to Morning Brief": an ADD aimed AT the named automation
+  // (name behind to/on/in) is an edit of IT — without this, the anchored
+  // delta-verb check drops the name and the follow-up tier patches whatever
+  // card happens to be newest. "add Solana Watcher to my chain" stays a
+  // non-edit: there the name sits in front of the preposition.
+  if (
+    !NEW_TASK_RE.test(text) &&
+    ADD_SHAPE_RE.test(text) &&
+    named.length >= 1
+  ) {
+    const aimedAt = named.filter((t) =>
+      nameAfterPreposition(text, t.record.name)
+    );
+    if (aimedAt.length === 1) {
+      await runEdit(aimedAt[0], text);
+      return;
+    }
+    if (aimedAt.length > 1) {
+      askWhichOne(aimedAt, text);
+      return;
+    }
+  }
   const namedIsTarget =
     !NEW_TASK_RE.test(text) &&
     (DELTA_VERB_RE.test(text) || isQuestionAbout(text));
@@ -743,6 +881,23 @@ export async function sendText(text: string) {
     !NEW_TASK_RE.test(text) &&
     DELTA_VERB_RE.test(text)
   ) {
+    // "rename A to B" names its target unambiguously — A, the part before
+    // to/as. B is the NEW name; when B collides with another automation the
+    // edit pass refuses with a sentence, which beats asking "Which one?"
+    // about a name that was never a target.
+    const renameShape =
+      text.match(/^\s*(?:rename|call)\s+(.+?)\s+(?:to|as)\s+/i) ??
+      text.match(/^\s*(?:change|set|update)\s+(?:the\s+)?(?:name|title)\s+of\s+(.+?)\s+to\s+/i);
+    if (renameShape) {
+      const head = renameShape[1].toLowerCase();
+      const inHead = named.filter((t) =>
+        head.includes(t.record.name.toLowerCase())
+      );
+      if (inHead.length === 1) {
+        await runEdit(inHead[0], text);
+        return;
+      }
+    }
     askWhichOne(named, text);
     return;
   }
@@ -766,13 +921,46 @@ export async function sendText(text: string) {
       askWhichOne(focus, text);
       return;
     }
+    // Nothing in the thread to point at (cleared chat, discarded cards) —
+    // but "change the schedule to 8am" is unmistakably an edit of SOMETHING
+    // saved. Compiling a junk job out of a bare field tweak helps no one:
+    // ask which one, or with too many, ask for the name.
+    if (saved.length === 1) {
+      await runEdit(
+        { record: saved[0], builtItemId: null },
+        rewriteDeixis(text, saved[0].name)
+      );
+      return;
+    }
+    if (saved.length > 1 && saved.length <= 6) {
+      askWhichOne(
+        saved.map((record) => ({ record, builtItemId: null })),
+        text
+      );
+      return;
+    }
+    if (saved.length > 6) {
+      push({
+        kind: "note",
+        tone: "gray",
+        text: 'Which automation should I change? Say its name — e.g. "change Bitcoin Price to 8am".',
+      });
+      return;
+    }
+    // No saved automations at all — fall through to a fresh compile.
   }
 
   // A HINTED follow-up ("can you also…", "add…", "now show…") right after a
   // built card is usually ABOUT that card — but no regex can be sure. Before
   // it can compile as a brand-new automation (or get grabbed by a keyword
   // template), one tiny local call thinks about what was actually prompted.
-  if (!NEW_TASK_RE.test(text) && FOLLOWUP_HINT_RE.test(text.trim())) {
+  // Copy-intent with a NAMED automation ("make another Morning Brief for the
+  // weekend") is a variant request — never a patch of the original.
+  if (
+    !NEW_TASK_RE.test(text) &&
+    FOLLOWUP_HINT_RE.test(text.trim()) &&
+    !(COPY_INTENT_RE.test(text) && named.length > 0)
+  ) {
     const focus = focusTargets(thread, saved);
     if (focus.length === 1) {
       const model = await activeLocalModel().catch(() => null);

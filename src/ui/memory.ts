@@ -39,6 +39,27 @@ export const NEW_TASK_RE =
 // instead of editing the original.
 export const COPY_INTENT_RE =
   /\b(a second|another|a separate|a copy of|a version of|duplicate|for the weekend|for weekends)\b/i;
+// "make a change / an adjustment / some tweaks" — a change REQUEST, not a new
+// thing. NEW_TASK_RE's "make a…" branch would otherwise read it as a fresh
+// job and bounce a studio edit into a junk compile.
+export const CHANGE_NOUN_RE =
+  /\bmake (?:me )?(?:a|an|some) (?:changes?|adjustments?|edits?|tweaks?|updates?|corrections?)\b/i;
+// "add the weather to Morning Brief" — an ADD aimed AT a named automation is
+// an edit of it, even though bare "add…" (no name) is usually a new build.
+export const ADD_SHAPE_RE =
+  /^(?:(?:please|can you|could you|would you)\s+)*(?:also\s+)?(?:add|include|append|attach)\b/i;
+
+// "…to <Name>" / "…on <Name>": the name sits behind a preposition, so the
+// sentence acts ON that automation rather than merely mentioning its topic.
+export function nameAfterPreposition(text: string, name: string): boolean {
+  const escaped = name
+    .trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s+");
+  return new RegExp(`\\b(?:to|into|onto|on|in)\\s+(?:the\\s+)?${escaped}\\b`, "i").test(
+    text
+  );
+}
 
 // A question ABOUT an automation ("what can this do?", "when does it run?",
 // "why did it fail?") — answered from the record, never sent to the patcher.
@@ -151,8 +172,21 @@ export function focusTargets(
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
     if (it.kind === "edit" && it.result.after) {
-      if (it.builtItemId !== null)
+      if (it.builtItemId !== null) {
+        // The edit card's host draft may have moved on: once SAVED, the
+        // record lives in the store — patching the card's frozen copy would
+        // change chat memory while the Library (and the scheduler) keep the
+        // old version. A discarded host is no focus at all.
+        const host = items.find(
+          (x) => x.kind === "built" && x.id === it.builtItemId
+        ) as (ChatItem & { kind: "built" }) | undefined;
+        if (host?.state === "saved") {
+          const live = saved.find((r) => r.id === it.autoId);
+          return [{ record: live ?? it.result.after, builtItemId: null }];
+        }
+        if (host?.state === "discarded") continue;
         return [{ record: it.result.after, builtItemId: it.builtItemId }];
+      }
       const live = saved.find((r) => r.id === it.autoId);
       return [{ record: live ?? it.result.after, builtItemId: null }];
     }

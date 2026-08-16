@@ -560,17 +560,24 @@ export function validateEditedAutomation(
   // flaw the record already had (a {token} with no fill-in, say) must not
   // make every future edit of it fail with a complaint about something the
   // person didn't touch.
-  before?: { steps: string[]; inputs: { name: string }[]; sources: string[] }
+  before?: {
+    name?: string;
+    steps: string[];
+    inputs: { name: string }[];
+    sources: string[];
+  }
 ): { ok: boolean; issues: string[] } {
   const issues: string[] = [];
   // The record being edited is itself in automationNames — building the
   // schema from the unfiltered catalog would make every edit fail the new
-  // "already exists" check. Filtering it out also catches an edit that
-  // renames INTO another automation's name.
+  // "already exists" check. Filter out the record's OWN identity (its name
+  // BEFORE the patch): filtering by the after-name would exempt exactly the
+  // collision a rename-into-existing must hit.
+  const ownName = (before?.name ?? record.name).trim().toLowerCase();
   const single = buildWireSchema({
     ...catalog,
     automationNames: catalog.automationNames.filter(
-      (n) => n.trim().toLowerCase() !== record.name.trim().toLowerCase()
+      (n) => n.trim().toLowerCase() !== ownName
     ),
   });
   const probe = {

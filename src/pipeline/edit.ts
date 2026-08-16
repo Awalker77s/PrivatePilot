@@ -89,9 +89,18 @@ function deterministicEditPatch(
 ): Record<string, unknown> | null {
   const text = request.trim();
 
-  const rename = text.match(
-    /^\s*(?:rename|call)\s+(?:(?:it|this|the automation)\s+)?(?:to|as)\s+["']?(.+?)["']?[.!]?\s*$/i
-  );
+  // Renames arrive with the automation's real name in the sentence at least
+  // as often as with "it" — "rename Tesla Stock Check to Tesla Daily Watch"
+  // must not fall through to the model (measured: the model turned exactly
+  // that into a schedule patch).
+  const rename =
+    text.match(
+      /^\s*(?:rename|call)\s+(?:.+?\s+)?(?:to|as)\s+["']?(.+?)["']?[.!]?\s*$/i
+    ) ??
+    text.match(
+      /^\s*(?:change|set|update)\s+(?:the\s+|its\s+)?(?:name|title)(?:\s+of\s+.+?)?\s+to\s+["']?(.+?)["']?[.!]?\s*$/i
+    ) ??
+    text.match(/^\s*name\s+(?:it|this|that)\s+["']?(.+?)["']?[.!]?\s*$/i);
   if (rename?.[1]) return { name: rename[1].trim() };
 
   if (/\b(and|also|plus)\b/i.test(text)) return null;
@@ -138,6 +147,36 @@ function deterministicEditPatch(
   return null;
 }
 
+// Keys an automation cannot live without: a null-delete of one of these is a
+// model mistake, refused with a sentence rather than crashed on downstream.
+const REQUIRED_KEYS = new Set([
+  "name",
+  "sentence",
+  "category",
+  "steps",
+  "inputs",
+  "outputs",
+  "files",
+  "formats",
+  "sources",
+  "delivers",
+  "schedule",
+  "effort",
+]);
+
+// Order-stable serialization for "did this key actually change" — plain
+// JSON.stringify would call merged objects different on key order alone.
+function stableValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${JSON.stringify(k)}:${stableValue(v)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 async function finishEdit(
   auto: AutomationRecord,
   inputPatch: Record<string, unknown>,
@@ -158,15 +197,62 @@ async function finishEdit(
         "That didn't change anything I'm allowed to touch — name, schedule, steps, files, sources, or effort.",
     };
   }
+  for (const k of Object.keys(patch)) {
+    if (patch[k] === null && REQUIRED_KEYS.has(k)) {
+      const sentence = `An automation always has a ${k} — say what it should BE instead of removing it.`;
+      return {
+        ok: false,
+        patch: null,
+        before: auto,
+        after: null,
+        changed: [],
+        failSentence: sentence,
+      };
+    }
+  }
 
   const after = applyMergePatch(
     auto as unknown as Record<string, unknown>,
     patch
   ) as unknown as AutomationRecord;
 
+  // schedule is a discriminated union on trigger — merge-patching a shape
+  // change leaves the old shape's keys behind ({trigger:"daily",
+  // everyMinutes:30, hour:8}). A patch that changes trigger states a whole
+  // new schedule: take it atomically. A tweak within the same shape
+  // ({schedule:{hour:9}}) still merges.
+  const schedPatch = patch.schedule;
+  if (
+    schedPatch &&
+    typeof schedPatch === "object" &&
+    !Array.isArray(schedPatch) &&
+    "trigger" in schedPatch
+  ) {
+    (after as unknown as Record<string, unknown>).schedule = schedPatch;
+  }
+
+  // The card must show what actually CHANGED, not what the patch mentioned —
+  // models echo unchanged fields ("steps": [...same...]), and a no-op row
+  // both confuses the person and falsely demotes a tested draft card.
+  const realKeys = Object.keys(patch).filter(
+    (key) =>
+      stableValue((auto as unknown as Record<string, unknown>)[key]) !==
+      stableValue((after as unknown as Record<string, unknown>)[key])
+  );
+  if (realKeys.length === 0) {
+    return {
+      ok: false,
+      patch: null,
+      before: auto,
+      after: null,
+      changed: [],
+      failSentence: "That matches what it already does — nothing to change.",
+    };
+  }
+
   try {
     if (!needsCatalog) {
-      const changed = Object.keys(patch).map((key) => ({
+      const changed = realKeys.map((key) => ({
         key,
         from: fieldLabel(key, auto),
         to: fieldLabel(key, after),
@@ -177,6 +263,7 @@ async function finishEdit(
     // Judge the edit on what IT changed — a flaw the record already had
     // (a {token} with no fill-in) must not block every future edit of it.
     const verdict = validateEditedAutomation(after, catalog, {
+      name: auto.name,
       steps: auto.steps,
       inputs: auto.inputs,
       sources: auto.sources,
@@ -195,7 +282,7 @@ async function finishEdit(
     // catalog unavailable — shape-only edits still apply
   }
 
-  const changed = Object.keys(patch).map((key) => ({
+  const changed = realKeys.map((key) => ({
     key,
     from: fieldLabel(key, auto),
     to: fieldLabel(key, after),
@@ -214,7 +301,10 @@ export async function editAutomation(
   }
 
   const deterministic = deterministicEditPatch(auto, request);
-  if (deterministic) return finishEdit(auto, deterministic, false);
+  // A deterministic rename still needs the catalog pass — "rename it to
+  // Solana Watcher" when a Solana Watcher already exists must be refused,
+  // not saved as a duplicate name.
+  if (deterministic) return finishEdit(auto, deterministic, "name" in deterministic);
 
   const selectedModel = model ?? (await activeLocalModel());
   if (!selectedModel) {

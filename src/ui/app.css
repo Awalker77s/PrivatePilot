@@ -29,16 +29,12 @@
   font-weight: 640;
 }
 
-.brand-glyph {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  background: var(--green);
-  color: #06281a;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 800;
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  display: block;
+  border-radius: 7px;
+  object-fit: cover;
 }
 
 .tabs {

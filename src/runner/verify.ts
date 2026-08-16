@@ -44,7 +44,14 @@ function appearsAsWholeNumber(n: string, flatCorpus: string): boolean {
 }
 
 function extractNumbers(answer: string): string[] {
-  const matches = answer.match(/\$?\d[\d,]*(?:\.\d+)?%?/g) ?? [];
+  // A number welded to letters is part of a NAME, not a claim: PM2.5 is a
+  // pollutant, CO2 is a gas, M5.4 is a magnitude label, GPT-4 is a model.
+  // Checking those against the source failed runs whose figures were all
+  // perfectly sourced — the answer said "PM2.5 at 9.5 µg/m³" and the
+  // verifier went looking for the number 2.5.
+  const matches = [...answer.matchAll(/(^|[^A-Za-z0-9.])(\$?\d[\d,]*(?:\.\d+)?%?)/g)].map(
+    (m) => m[2]
+  );
   const out = new Set<string>();
   for (const m of matches) {
     const n = m.replace(/[$,%]/g, "").replace(/,/g, "");

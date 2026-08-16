@@ -30,6 +30,17 @@ const SCREEN_REQUEST =
 
 function endpointHints(text: string): string[] {
   const wanted = ENDPOINTS.filter((endpoint) => {
+    // Alerts and warnings are their own endpoint — folding them into the
+    // forecast hints sent the drafter looking for a temperature when the
+    // person asked whether a storm was coming.
+    if (/\b(alerts?|warnings?|watches?|advisor(y|ies))\b/i.test(text))
+      return /alert|warning/.test(endpoint.intent);
+    if (/\b(air quality|aqi|smog|pollution|pollen)\b/i.test(text))
+      return /air quality/.test(endpoint.intent);
+    if (/\b(earthquakes?|quake|seismic|tremor)\b/i.test(text))
+      return /earthquake/.test(endpoint.intent);
+    if (/\b(sunrise|sunset|daylight|golden hour)\b/i.test(text))
+      return /sunrise/.test(endpoint.intent);
     if (/\b(weather|forecast|temperature|rain|snow)\b/i.test(text))
       return /weather|coordinates/.test(endpoint.intent);
     if (/\b(currency|exchange rate|usd|eur|gbp|jpy)\b/i.test(text))

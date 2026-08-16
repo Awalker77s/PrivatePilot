@@ -32,6 +32,10 @@ function coingeckoUrl(slug: string): string {
 function coinbaseUrl(ticker: string): string {
   return `https://api.coinbase.com/v2/prices/${ticker}-USD/spot`;
 }
+function krakenUrl(ticker: string): string {
+  const pair = ticker.toUpperCase() === "BTC" ? "XBT" : ticker.toUpperCase();
+  return `https://api.kraken.com/0/public/Ticker?pair=${pair}USD`;
+}
 function nasdaqUrl(symbol: string): string {
   return `https://api.nasdaq.com/api/quote/${symbol}/info?assetclass=stocks`;
 }
@@ -64,16 +68,44 @@ export function alternativesFor(rawUrl: string): Alternative[] {
     if (h !== host && !out.some((a) => a.host === h)) out.push({ url, host: h, why });
   };
 
-  // ---- crypto spot price ----
+  // ---- crypto spot price (three houses quote the same coin) ----
   if (host === "api.coingecko.com" && u.pathname.includes("/simple/price")) {
     const slug = (u.searchParams.get("ids") ?? "").split(",")[0]?.toLowerCase();
     const ticker = SLUG_TO_TICKER[slug];
-    if (ticker) add(coinbaseUrl(ticker), "Coinbase publishes the same spot price");
+    if (ticker) {
+      add(coinbaseUrl(ticker), "Coinbase publishes the same spot price");
+      add(krakenUrl(ticker), "Kraken publishes the same spot price");
+    }
   }
   if (host === "api.coinbase.com") {
     const m = u.pathname.match(/\/v2\/prices\/([A-Za-z]+)-USD\/spot/);
-    const slug = m ? TICKER_TO_SLUG[m[1].toUpperCase()] : undefined;
+    const ticker = m?.[1]?.toUpperCase();
+    const slug = ticker ? TICKER_TO_SLUG[ticker] : undefined;
     if (slug) add(coingeckoUrl(slug), "CoinGecko publishes the same spot price");
+    if (ticker) add(krakenUrl(ticker), "Kraken publishes the same spot price");
+  }
+  if (host === "api.kraken.com") {
+    const pair = (u.searchParams.get("pair") ?? "").toUpperCase();
+    const ticker = pair.replace(/USD.*$/, "").replace(/^X/, "");
+    const slug = TICKER_TO_SLUG[ticker === "XBT" ? "BTC" : ticker];
+    if (slug) add(coingeckoUrl(slug), "CoinGecko publishes the same spot price");
+  }
+
+  // ---- currency rates ----
+  if (host === "api.frankfurter.dev") {
+    const from = u.searchParams.get("from") ?? "USD";
+    add(
+      `https://open.er-api.com/v6/latest/${from.toUpperCase()}`,
+      "the open exchange-rate API quotes the same pair"
+    );
+  }
+  if (host === "open.er-api.com") {
+    const m = u.pathname.match(/\/v6\/latest\/([A-Za-z]{3})/);
+    if (m)
+      add(
+        `https://api.frankfurter.dev/v1/latest?from=${m[1].toUpperCase()}`,
+        "Frankfurter quotes the same pair"
+      );
   }
 
   // ---- US stock quote ----
@@ -120,6 +152,9 @@ export function mirrorHostsFor(sources: string[]): string[] {
     "api.nasdaq.com": nasdaqUrl("TSLA"),
     "query1.finance.yahoo.com": yahooUrl("TSLA"),
     "news.google.com": googleNewsUrl("test"),
+    "api.kraken.com": krakenUrl("BTC"),
+    "api.frankfurter.dev": "https://api.frankfurter.dev/v1/latest?from=USD&to=EUR",
+    "open.er-api.com": "https://open.er-api.com/v6/latest/USD",
     "hn.algolia.com": hnSearchUrl("test"),
     "feeds.bbci.co.uk": "https://feeds.bbci.co.uk/news/world/rss.xml",
   };

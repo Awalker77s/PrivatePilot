@@ -190,8 +190,16 @@ export async function fetchPage(
   }
 
   const ctype = res.headers.get("Content-Type") ?? "";
+  // Structured-suffix types are the norm in open data: the US National
+  // Weather Service answers application/geo+json, the ECB answers
+  // application/vnd.sdmx.data+json, feeds answer application/atom+xml.
+  // Matching only the bare names turned those into "not a page this tool
+  // reads" — a refusal to read JSON because of the label on the envelope.
   const isText =
-    /text\/|application\/(json|xml|xhtml|rss|atom)/i.test(ctype) || ctype === "";
+    ctype === "" ||
+    /^text\//i.test(ctype) ||
+    /application\/([\w.+-]*\+)?(json|xml)\b/i.test(ctype) ||
+    /application\/(rss|atom|xhtml|javascript|x-ndjson|problem)/i.test(ctype);
   if (!isText) {
     const sentence = `${host} sent ${ctype.split(";")[0] || "something"} — not a page this tool reads.`;
     return {

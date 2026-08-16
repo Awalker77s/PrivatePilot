@@ -639,28 +639,42 @@
 }
 
 .thinking-text {
+  /* One light crosses the words. Geometry measured against a real label: the
+     image is two element-widths plus two spreads, so the band starts one full
+     spread off the left edge and finishes one spread past the right — a whole
+     entry and exit with no dead air. The first cut travelled 4.7 widths a
+     cycle and was off-screen ~1.4s of every 2.4s, which reads as stopped.
+     `linear` is not a style choice: any easing puts the fast part of the
+     curve exactly where the band crosses the glyphs. */
+  --spread: calc(3ch + 40px);
   font-weight: 560;
   letter-spacing: 0.01em;
-  /* The sweep: a bright band travelling through muted text. */
-  background: linear-gradient(
-    100deg,
-    var(--muted) 0%,
-    var(--muted) 38%,
+  background-image: linear-gradient(
+    110deg,
+    var(--muted) calc(50% - var(--spread)),
     var(--text) 50%,
-    var(--muted) 62%,
-    var(--muted) 100%
+    var(--muted) calc(50% + var(--spread))
   );
-  background-size: 280% 100%;
-  background-position: 180% 0;
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--spread) * 2) 100%;
+  background-position: 100% 0;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: thinking-sweep 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-sweep 2.4s linear infinite;
+  /* background-position is a paint, not a composite — bounding the
+     invalidation to the label keeps it a rounding error while a local model
+     has the CPU. */
+  contain: paint;
 }
 
 @keyframes thinking-sweep {
+  from {
+    background-position: 100% 0;
+  }
   to {
-    background-position: -80% 0;
+    background-position: 0 0;
   }
 }
 
@@ -677,15 +691,15 @@
   border-radius: 50%;
   background: var(--blue);
   opacity: 0.45;
-  animation: thinking-rise 1.4s ease-in-out infinite;
+  animation: thinking-rise 1.2s ease-in-out infinite;
 }
 
 .thinking-dots i:nth-child(2) {
-  animation-delay: 0.18s;
+  animation-delay: 0.15s;
 }
 
 .thinking-dots i:nth-child(3) {
-  animation-delay: 0.36s;
+  animation-delay: 0.3s;
 }
 
 @keyframes thinking-rise {
@@ -711,10 +725,13 @@
 @media (prefers-reduced-motion: reduce) {
   .thinking-text {
     animation: none;
-    background: none;
+    background-image: none;
     -webkit-background-clip: border-box;
     background-clip: border-box;
     color: var(--muted);
+    /* Load-bearing: the base rule sets the fill to transparent for the mask.
+       Without resetting it here the label renders completely invisible. */
+    -webkit-text-fill-color: currentColor;
   }
   .thinking-dots i {
     animation: none;

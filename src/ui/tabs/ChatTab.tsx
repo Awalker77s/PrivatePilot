@@ -590,9 +590,13 @@ function WatchMeCard({ item }: { item: ChatItem & { kind: "watchme" } }) {
 
   if (item.state === "listening" || item.state === "reading") {
     return (
-      <div className="pipeline-card card">
-        <span className="spinner" />
-        <span className="stage-text">
+      <div className="thinking">
+        <span className="thinking-dots" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="thinking-text">
           {item.state === "listening"
             ? "Listening back…"
             : "Reading the frames…"}
@@ -772,11 +776,21 @@ function ProgressCard({
     return () => clearInterval(t);
   }, []);
   const elapsed = Math.floor((Date.now() - item.startedAt) / 1000);
+  // No card, no spinner: while it thinks, the words themselves carry the
+  // motion (a light sweeping through them) with three dots keeping time.
+  // Past 10s a quiet counter appears, because a wait you can measure is a
+  // different feeling from a wait you cannot.
   return (
-    <div className="pipeline-card card" data-testid="progress">
-      <span className="spinner" />
-      <span className="stage-text">{item.text}</span>
-      {elapsed > 10 && <span className="caption">{elapsed}s</span>}
+    <div className="thinking" data-testid="progress">
+      <span className="thinking-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span className="thinking-text" data-testid="stage-text">
+        {item.text}
+      </span>
+      {elapsed > 10 && <span className="thinking-elapsed">{elapsed}s</span>}
     </div>
   );
 }
@@ -951,9 +965,13 @@ function BuiltCard({ item }: { item: ChatItem & { kind: "built" } }) {
         ))}
       </div>
       {state === "running" && item.progress && (
-        <div className="pipeline-card" style={{ border: "none", padding: "4px 0" }}>
-          <span className="spinner" />
-          <span className="stage-text" data-testid="run-progress">
+        <div className="thinking" style={{ padding: "6px 0 2px" }}>
+          <span className="thinking-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="thinking-text" data-testid="run-progress">
             {item.progress}
           </span>
         </div>

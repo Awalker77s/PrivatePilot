@@ -229,6 +229,9 @@ file compiler are all exercised against the actual code, not mocks.
 - [Architecture](docs/ARCHITECTURE.md) — diagrams, the compile and run paths,
   where every decision lives in the code
 - [Demo script](docs/DEMO-SCRIPT.md) — the 3-minute video, shot by shot
+- [Submission kit](docs/SUBMISSION.md) — technical writeup, a plain-text
+  architecture diagram for forms that don't render Mermaid, and the
+  pre-submit checklist
 - [Heavy tools & documents](docs/heavy-tools-and-documents.md) — the safety
   model for file work and OCR
 - [Terminal access plan](docs/terminal-access-plan.md) — why this is not a

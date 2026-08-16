@@ -408,6 +408,38 @@ try {
   assertNoCycle(long, nameOf); // threw at 4 members before the cap was raised
   assertionCount++;
 
+  // ---- a conditional sentence splits into check + consequence ----
+  // The drafter will not decompose "check X, if Y, do Z" (rules, examples and
+  // three model sizes were tried). The seam is in the words, so it is split
+  // here and each half compiles as one job.
+  const { splitConditional } = await server.ssrLoadModule("/src/ui/memory.ts");
+  const gmail = splitConditional(
+    "Make a sequence to check my gmail, if someone has sent me an email in the past 5 minutes, summarize the email, if no one has sent me an email, create a schedule for 2 minutes and check again."
+  );
+  assert(gmail !== null, "a sequence-plus-condition sentence splits");
+  assert(gmail.check === "check my gmail", `check half, got "${gmail?.check}"`);
+  assert(gmail.then === "summarize the email", `action half, got "${gmail?.then}"`);
+  assert(gmail.contains === "email", `tested word, got "${gmail?.contains}"`);
+  assert(
+    splitConditional("check the current price of bitcoin") === null,
+    "a plain single job is not split"
+  );
+
+  const { conditionalSequenceFrom } = await server.ssrLoadModule(
+    "/src/pipeline/sequence.ts"
+  );
+  const cA = mk("c1", "Gmail check", ["found"]);
+  const cB = mk("c2", "Email summary");
+  const condChain = conditionalSequenceFrom(cA, cB, "email", null);
+  assert(condChain?.steps?.length === 2, "conditional chain has two steps");
+  assert(condChain.links.length === 0, "conditional chain uses steps, not links");
+  assert(condChain.steps[0].after.length === 0, "the check runs first");
+  assert(
+    condChain.steps[1].after[0] === "s1" &&
+      condChain.steps[1].ifAnswerContains === "email",
+    "the consequence waits on the check AND carries the predicate"
+  );
+
   console.log(`Quick regression suite passed (${assertionCount} assertions).`);
 } finally {
   await server.close();

@@ -7,6 +7,7 @@ import { readChatFile, writeChatFile } from "../storage/chat";
 import {
   ADD_SHAPE_RE,
   CHAIN_TALK_RE,
+  splitConditional,
   CHANGE_NOUN_RE,
   COPY_INTENT_RE,
   DEIXIS_RE,
@@ -31,8 +32,12 @@ import {
   rewriteDeixis,
   splitCoordination,
 } from "./memory";
-import { CHAIN_REQUEST_RE } from "../pipeline/catalog";
-import { appendToSequence, sequenceFrom } from "../pipeline/sequence";
+import { BRANCH_INTENT, CHAIN_REQUEST_RE } from "../pipeline/catalog";
+import {
+  appendToSequence,
+  conditionalSequenceFrom,
+  sequenceFrom,
+} from "../pipeline/sequence";
 import { explainAutomation } from "../pipeline/explain";
 import {
   ELLIPTICAL_RE,
@@ -922,6 +927,56 @@ async function pushSequenceChangeCard(
   });
 }
 
+// The card for a conditional built from one sentence: two automations and the
+// branch between them, none of it re-drafted.
+async function pushConditionalCard(
+  members: AutomationRecord[],
+  chain: ChainRecord,
+  contains: string
+) {
+  const summary = `Built "${members[0].name}" and "${members[1].name}", and linked them so the second only runs when the first mentions "${contains}".`;
+  const runId = newId("run");
+  const at = Date.now();
+  await appendRun({
+    id: runId,
+    automationId: members[0].id,
+    chainId: chain.id,
+    stepIndex: null,
+    cause: "you described a job with a condition",
+    startedAt: at,
+    finishedAt: at,
+    status: "ok",
+    ranOn: "local",
+    sandbox: null,
+    baton: null,
+    summary,
+    stages: [],
+    events: [],
+    counters: { drafts: 0, fieldsFixed: 0, questionCard: false },
+    didNotDo: [],
+    diff: null,
+    answer: null,
+  });
+  push({
+    kind: "built",
+    result: {
+      ok: true,
+      automations: members,
+      chain,
+      question: null,
+      argument: [summary],
+      failSentence: null,
+      runId,
+      keptToOneStep: false,
+    },
+    state: "fresh",
+    runId: null,
+    chainRunIds: null,
+    progress: null,
+    keepSentence: null,
+  });
+}
+
 // A one-tap "Which one?" card — a delta with an ambiguous target never
 // guesses and never falls through to a fresh build.
 function askWhichOne(targets: EditTarget[], request: string) {
@@ -1075,6 +1130,48 @@ export async function sendText(text: string) {
   // connected thing". A chain WORD alone proves nothing ("supply chain
   // news"); it starts meaning something next to two named automations, a
   // plural pointer, or an explicit as-a-chain shape.
+  // "make a sequence to check my gmail, if someone emailed me, summarize it"
+  // is two jobs and a condition. The drafter will not take that apart — the
+  // seam is in the words, so split it here, compile each half as ONE job
+  // (which a small model does reliably), and build the branch in code.
+  const conditional =
+    CHAIN_REQUEST_RE.test(text) && BRANCH_INTENT.test(text)
+      ? splitConditional(text)
+      : null;
+  if (conditional) {
+    const before = new Set(getState().automations.records.map((a) => a.id));
+    const madeIn = (seg: string) =>
+      runCompile({
+        userText: seg,
+        answers: [],
+        history: renderHistory(scopedItems(), saved),
+        singleJob: true,
+      });
+    await madeIn(conditional.check);
+    if (!pending) await madeIn(conditional.then);
+    // Whatever the two compiles produced, newest last.
+    const pair: AutomationRecord[] = [];
+    for (const item of scopedItems()) {
+      if (item.kind !== "built" || item.state === "discarded") continue;
+      for (const record of item.result.automations)
+        if (!before.has(record.id) && !pair.some((p) => p.id === record.id))
+          pair.push(record);
+    }
+    if (pair.length >= 2) {
+      const chain = conditionalSequenceFrom(
+        pair[pair.length - 2],
+        pair[pair.length - 1],
+        conditional.contains,
+        null
+      );
+      if (chain) {
+        await pushConditionalCard(pair.slice(-2), chain, conditional.contains);
+        return;
+      }
+    }
+    return;
+  }
+
   if (CHAIN_TALK_RE.test(text)) {
     const chainNamed = findTargetsByName(text, thread, saved);
     // "make an automation that combines Top Tech News and Bitcoin Note into

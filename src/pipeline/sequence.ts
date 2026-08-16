@@ -200,3 +200,54 @@ export function sequenceFrom(
     permissions: mergePermissionManifests(normalized),
   };
 }
+
+// A two-job conditional, built in code: the check runs first, the consequence
+// runs after it ONLY when the check's answer mentions the tested word. Uses
+// steps rather than links because plain links run every member every time,
+// which is precisely not what "if it found something" means.
+export function conditionalSequenceFrom(
+  check: AutomationRecord,
+  then: AutomationRecord,
+  contains: string,
+  name?: string | null
+): ChainRecord | null {
+  if (!check || !then || check.id === then.id) return null;
+  const a = normalizeAutomation(check);
+  const b = normalizeAutomation(then);
+  const steps: ChainStep[] = [
+    {
+      id: "s1",
+      automationId: a.id,
+      after: [],
+      needs: "all",
+      when: "ran",
+      ifAnswerContains: null,
+      ifAnswerLacks: null,
+      map: {},
+    },
+    {
+      id: "s2",
+      automationId: b.id,
+      after: ["s1"],
+      needs: "all",
+      when: "ran",
+      ifAnswerContains: contains.trim() || null,
+      ifAnswerLacks: null,
+      map: mapBetween(a, b),
+    },
+  ];
+  return {
+    id: newId("chain"),
+    name: name?.trim() || `${a.name} → ${b.name}`,
+    links: [],
+    steps,
+    timeoutMinutes: 30,
+    createdAt: Date.now(),
+    components: [a, b].map((m) => ({
+      automationId: m.id,
+      revisionId: m.revision!.id,
+      revisionNumber: m.revision!.number,
+    })),
+    permissions: mergePermissionManifests([a, b]),
+  };
+}

@@ -457,3 +457,51 @@ export function renderHistory(
   if (block.length > DIGEST_MAX) block = block.slice(-DIGEST_MAX);
   return block;
 }
+
+// "check my gmail, if someone emailed me, summarize the email" — one sentence
+// that is really two jobs and a condition between them. A 4B will not take
+// this apart (rules, examples and larger local models were all tried), but it
+// does not have to: the seam is in the words. Split here, hand the model ONE
+// job at a time — which it does reliably — and let the app draw the link.
+//   check   → the automation that runs first
+//   then    → the automation that runs when the check finds something
+//   contains→ the word the check's answer is tested for
+export function splitConditional(
+  text: string
+): { check: string; then: string; contains: string } | null {
+  const m = text.match(
+    /^(.*?)[,;]?\s*\bif\b\s+([^,]{3,90}?)\s*,\s*([^,.;]{3,140})/i
+  );
+  if (!m) return null;
+  const check = m[1]
+    .replace(
+      /^\s*(?:please\s+)?(?:make|build|create|set up)\s+(?:me\s+)?(?:a|an|one)\s+(?:chain|sequence|workflow|automation)\s+(?:to|that|which)?\s*/i,
+      ""
+    )
+    .trim();
+  const cond = m[2].trim();
+  const then = m[3].trim();
+  if (check.length < 3 || then.length < 3) return null;
+  // The tested word: prefer something the action and the condition share, so
+  // the predicate is about the thing the check actually reports on.
+  const STOP = new Set([
+    "the", "and", "for", "with", "that", "this", "them", "it", "me", "my",
+    "has", "have", "sent", "get", "got", "was", "were", "any", "some",
+    "someone", "somebody", "there", "been", "into", "from", "past", "last",
+    "new", "summarize", "summarise", "tell", "give", "send", "check", "make",
+  ]);
+  const words = (s: string) =>
+    s.toLowerCase().match(/[a-z][a-z-]{2,}/g) ?? [];
+  const actionWords = words(then).filter((w) => !STOP.has(w));
+  const condWords = new Set(words(cond));
+  const checkWords = new Set(words(check));
+  const shared = actionWords.find(
+    (w) => condWords.has(w) || checkWords.has(w)
+  );
+  const contains = (shared ?? actionWords[actionWords.length - 1] ?? "").replace(
+    /s$/,
+    ""
+  );
+  if (!contains) return null;
+  return { check, then, contains };
+}

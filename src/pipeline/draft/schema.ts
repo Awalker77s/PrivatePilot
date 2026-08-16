@@ -305,13 +305,32 @@ export function buildWireSchema(catalog: Catalog) {
             'The person said the next automation depends on an earlier RESULT ("if…, otherwise…"). Express this with chain.steps (links MUST be []): the first job {"id": "s1", "after": [], …}; each branch after it with if_answer_contains or if_answer_lacks naming the word the result is tested for. Plain links would run every branch every time.',
         });
       }
-      // NOTE: a rule insisting on the split when chainIntent AND branchIntent
-      // both fire ("make a sequence to check my gmail, if…, if not…") was tried
-      // and removed. The 4B does not comply even with the branching example
-      // above in the prompt, so it only bought two failed passes and ~15s
-      // before the lenient pass let the folded draft through anyway. A watcher
-      // that polls and summarises is a defensible reading of that sentence;
-      // splitting it wants a stronger drafting model, not another rule.
+      // "Make a sequence to check my gmail, IF someone wrote summarize it, IF
+      // NOT check again" sets both flags, and used to fall between the two
+      // rules: the branch rule only fires once there is more than one
+      // automation, and the anti-folding rule excluded branch-intent outright.
+      // So the drafter could fold a check and its consequences into a single
+      // automation with nothing objecting. The rule alone does not land on a
+      // 4B — it needs the short branching example in draft/index.ts to copy
+      // the shape from. The two together do.
+      // Gated on chainIntent, NOT splitRequired, and that is deliberate: the
+      // lenient final pass clears chainIntent, so this insists twice and then
+      // lets a folded draft through. Keying it to splitRequired instead makes
+      // it survive pass 3 — tested, and the 4B still does not comply, so the
+      // person gets a question card where they used to get a working watcher.
+      // Insisting twice is the most this model will pay for.
+      if (
+        catalog.chainIntent &&
+        catalog.branchIntent &&
+        v.automations.length === 1
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["automations"],
+          message:
+            'The person asked for a SEQUENCE and described a condition ("if…, if not…"). That is at least TWO automations: one that CHECKS, and one for what happens when the check finds something. Never fold them together. Draft the check first, then the consequence, and join them with chain.steps where the second carries if_answer_contains naming the word the check\'s answer is tested for. If the "if not" branch only means "wait and look again", give the CHECK a watch schedule instead of drafting a third automation.',
+        });
+      }
       // The person explicitly asked for ONE connected sequence ("as a
       // chain", "connect them") — several jobs arriving unchained is the
       // drafter dropping the ask. Insist. (Branch-intent wins when both

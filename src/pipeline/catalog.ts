@@ -46,6 +46,12 @@ export interface Catalog {
   // "connect them", "one after the other") — the validator then insists
   // multi-job drafts arrive chained, and allows pure-ordering links.
   chainIntent?: boolean;
+  // chainIntent AND branchIntent together: "a sequence … if X … if not …".
+  // Kept as its own flag because the lenient final pass clears chainIntent to
+  // let an imperfect shape through — but a conditional folded into ONE
+  // automation is not an imperfect sequence, it is the wrong structure, so
+  // this rule has to survive that pass.
+  splitRequired?: boolean;
   // This request is ONE job by construction (a coordination-split segment) —
   // the validator refuses drafts with more than one automation.
   singleJob?: boolean;
@@ -107,11 +113,12 @@ export function catalogForRequest(catalog: Catalog, userText: string): Catalog {
   const branchIntent = BRANCH_INTENT.test(userText);
   const chainIntent = CHAIN_REQUEST_RE.test(userText);
   if (FILE_INTENT.test(userText) || FILENAME_RE.test(userText))
-    return { ...catalog, branchIntent, chainIntent };
+    return { ...catalog, branchIntent, chainIntent, splitRequired: chainIntent && branchIntent };
   return {
     ...catalog,
     branchIntent,
     chainIntent,
+    splitRequired: chainIntent && branchIntent,
     files: [],
     readTargets: [],
     writeTargets: [],

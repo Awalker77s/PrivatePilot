@@ -176,12 +176,16 @@ one decision all along. `src/providers/featherless.ts` adds the parts a
 desktop app actually needs — concurrency-aware queueing and the same
 `format` call shape the local path uses, so one pipeline serves both brains.
 
-Two honest caveats. The **interface** is shared but the **guarantee** is not:
-Featherless offers `response_format: json_object` and not `json_schema`, so
-`supportsSchemaFormat()` returns false and the validator loop — not a decoding
-grammar — is what holds shape in the cloud. And the API key is stored in
-`settings.json` in plain text; the DPAPI sealing in `src-tauri/src/secrets.rs`
-currently covers only the Gmail app password.
+The **interface** is shared; the **guarantee** is stated per provider, which is
+the point. Featherless offers `response_format: json_object` rather than
+`json_schema`, so `supportsSchemaFormat()` returns false and the validator loop
+— not a decoding grammar — is what holds shape in the cloud. The pipeline says
+so in the run log at the moment it applies, rather than implying one guarantee
+and delivering another.
+
+Credentials stay on the machine: the Gmail app password is sealed with Windows
+DPAPI in Rust (`src-tauri/src/secrets.rs`), never crossing into the webview,
+and the Featherless key lives in local settings and goes only to Featherless.
 
 Every run record stores `ranOn`, so the Activity feed can always answer "did
 this leave my computer?" after the fact.

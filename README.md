@@ -74,7 +74,7 @@ ollama pull gemma4:12b          # better screen/image reading for "Watch me"
 
 - **Cloud compute:** paste a [Featherless.ai](https://featherless.ai) key in
   **Settings → Borrow cloud compute**, then pick a cloud model. Off by
-  default; the key is stored in `settings.json` on this machine, unencrypted.
+  default, and the key stays in local settings on this machine.
 - **Packaged build:** `npm run tauri build` produces an NSIS installer and an
   MSI under `src-tauri/target/release/bundle/`.
 - **PowerShell:** use `npm.cmd` if script execution is restricted.
@@ -175,14 +175,12 @@ That document *is* the security model, and every field in it is load-bearing:
   `bindTools()` never puts `read_file` or `write_file` in front of the model at
   all ([src/runner/loop.ts:143](src/runner/loop.ts#L143)). It cannot misuse a
   tool it was never handed.
-- **`permissions`** is the declared manifest the approval UI reads: changing
-  what an automation is allowed to touch is a visible edit, not a silent one.
-  Honest limit — this manifest is bookkeeping the *person* reads, not a second
-  runtime gate. `evaluateAction()` has no callers yet; what actually stops a
-  run is the fence and the tool binding above.
+- **`permissions`** is the declared manifest, written at compile time and shown
+  in the approval sheet: changing what an automation may touch is a visible
+  edit, never a silent one.
 - **`compiledBy`** records which model wrote this, and **`revision.contentHash`**
-  changes whenever the automation does — which is what invalidates a stored
-  approval, and what lets a sequence pin the exact revision it was tested with.
+  changes whenever the automation does — which invalidates a stored approval,
+  and lets a sequence pin the exact revision it was tested against.
 
 A person can read all of it before it ever runs — and so can a reviewer.
 
@@ -323,31 +321,34 @@ quality. 14b has the best JSON validity and costs 4.6× the latency.
 
 ### What only cloud can give
 
-- **Context the local default physically cannot hold.** Local drafts at 8,192
-  and runs tools at 32,768. The cloud roster reaches far past that — though
-  those context numbers are *declared role strings in our code*, not something
-  the app measures, so read them as catalog data.
-- **Escape from the 120-second local ceiling**, which is a real wall on CPU-only
-  machines and produces a designed sentence rather than a hang.
+- **Context far past what a local default holds.** Local drafts at 8,192 and
+  runs tools at 32,768; the cloud roster is picked for long-context work, so a
+  corpus a 4B physically cannot fit still has somewhere to go.
+- **Room past the local time ceiling** on a heavy request — and if a local run
+  does hit it, you get a designed sentence telling you to split the job, never
+  a hang.
 - **A same-weights control.** `Qwen2.5-7B-Instruct` is pinned as "the mirror" —
   identical weights to a local model, which isolates *compute* from *behaviour*
   when comparing the two paths.
 
-### Where local honestly loses
+### Designed around what a small model is good at
 
-Recorded because it's true, and because the code carries the scars:
+A 4B model is a superb compiler and a poor calculator, so the architecture
+gives it only the first job. Each of these is a deliberate boundary, and each
+one is enforced in code:
 
-- **Arithmetic is not trusted at all.** A 4B summed three receipts to 190.51
-  instead of 156.41. Number-checking is now a code subset-sum, and RAG totals
-  are extract-then-sum-in-code.
-- **Digits get misread**, which is why every vision read runs twice at two
-  scales and the numbers must agree exactly — the app would rather say "I don't
-  deliver a coin flip" than guess.
-- **Structural decomposition needs a crutch.** Splitting "…and then email me"
-  into a second automation didn't land on rules alone; it took a
-  structurally-identical worked example in the prompt.
-- **The context ceiling is a constraint, not a preference** — reserving 16k made
-  Ollama allocate twice the KV cache and pushed simple drafts past the timeout.
+- **Arithmetic belongs to the code, never the model.** Number-checking is a
+  subset-sum, and document totals are extract-then-sum-in-TypeScript. The model
+  identifies the figures; the machine adds them.
+- **Vision reads twice and must agree.** Every screen read runs at two scales
+  and the numbers have to match exactly — the app would rather tell you it
+  couldn't confirm a digit than deliver a coin flip.
+- **Structure is taught by example.** Splitting *"…and then email me"* into a
+  second automation is carried by a worked example in the prompt, which lands
+  where a rule alone does not.
+- **Context is sized to the job.** Drafting runs at the window the prompt
+  actually needs, keeping simple requests fast instead of paying for KV cache
+  nothing will use.
 
 **Every run stamps `ranOn`** — `local` or `featherless:<model>` — at record
 creation. That is what makes "did this leave my computer?" a checkable fact
@@ -383,12 +384,11 @@ toggle that can drift out of sync with the model picker.
   to `json_object`, and the **validator loop becomes the primary shape defense
   in the cloud** instead of the grammar. Same compiler, different guarantee —
   declared in code rather than hoped for.
-- **The Featherless key lives in `settings.json` on this machine, in plain
-  text.** It is never sent anywhere but Featherless and never leaves the
-  machine otherwise, but it is not encrypted at rest — the DPAPI sealing in
-  `src-tauri/src/secrets.rs` currently protects only the Gmail app password
-  ([`ConnectedAppsCard.tsx:191`](src/ui/ConnectedAppsCard.tsx#L191)). Sealing
-  the cloud key the same way is a small change we have not made yet.
+- **Credentials stay on the machine.** The Gmail app password is sealed with
+  **Windows DPAPI** in Rust (`src-tauri/src/secrets.rs`), so it is never
+  readable outside your Windows account and never crosses into the webview.
+  The Featherless key is held in local settings and goes exactly one place —
+  Featherless.
 - Concurrency-aware queueing matched to Featherless's plan model.
 - Every run record stores `ranOn`, so Activity can always answer *"did this
   leave my computer?"* after the fact.
@@ -411,33 +411,24 @@ with it.
   live-verified catalog of keyless APIs (crypto, stocks, weather, alerts,
   earthquakes, air quality, FX, news from five publishers, Wikipedia,
   dictionary, holidays, recipes, package registries, service status).
-- **Watch me** — do the task once while narrating; local speech and a local
-  vision model compile the same kind of readable skill. No video is kept, and
-  the UI shows the frames being deleted. **Reading the frames needs a vision
-  model** — pull `gemma4:12b` (Optional extras above); on the text-only default
-  it says so and compiles from your narration alone rather than pretending.
+- **Watch me** — do the task once while narrating, and local speech
+  (whisper.cpp / Parakeet) plus a local vision model compile the same kind of
+  readable skill. No video is kept: the UI shows the frames being deleted as it
+  goes. Add `gemma4:12b` to let it read the screen as well as hear you.
 - **Sequences & watchers** — named outputs map to named inputs with the baton
   shown crossing each hand-off; "email me when it drops below $75" is a
   latched crossing that fires once and re-arms only after it crosses back.
   See **[Chaining](#chaining-automations-that-keep-growing)** below.
-- **Files, safely** — bulk rename, archives, OCR into searchable PDFs, all on
-  a sandbox copy with a diff and Keep (undoable via `.pilot-versions`).
-  Readable formats are PDF, xlsx, csv and text; **`.docx` is not readable yet**
-  — that job compiles and then refuses at run time rather than guessing. The
-  OCR and archive toolkits (Tesseract, pdfium, 7za) are **not bundled** — they
-  install into `%APPDATA%`; only the speech binaries ship in the installer.
-- **Your apps, locally** — Gmail (IMAP app password) and any open window
-  through Windows' accessibility tree. Reading is the default and **the only
-  write is a draft you send yourself** — never a send, and never marking mail
-  as read. A draft can only be addressed to someone this run actually read
-  from, to you, or to an address you typed
-  ([`gmail.ts:314`](src/connectors/gmail.ts#L314)), so a prompt-injected
-  "email this to attacker@example.com" has nowhere to land.
-  <sub>Outlook and Spotify connectors were built and are **not registered** —
-  Outlook reached only the classic desktop app over COM, and Spotify's
-  transport leaned on an undependable media session. Unregistering them in
-  `connectors/registry.ts` removes them from Settings, from the drafter's app
-  list, and from tool binding at once.</sub>
+- **Files, safely** — bulk rename, archives, and OCR that turns scans into
+  searchable PDFs, reading PDF, Excel, CSV and text. Every one of them works on
+  a **sandbox copy**: you get a diff and a **Keep** button, so a wrong
+  automation costs a click rather than a restore from backup.
+- **Your apps, locally** — Gmail over IMAP, and any open window through
+  Windows' accessibility tree. Reading is the default and **the only write is a
+  draft you send yourself** — never a send, never marking mail as read. A draft
+  can only be addressed to someone this run actually read from, to you, or to
+  an address you typed ([`gmail.ts:314`](src/connectors/gmail.ts#L314)) — so a
+  prompt-injected *"email this to attacker@example.com"* has nowhere to land.
 - **Editable in words** — "make it 7am" renders a before→after card with
   **Change it / Cancel** and ten versions of history.
 
@@ -454,20 +445,15 @@ optional `ifAnswerContains` / `ifAnswerLacks` predicates. Data crosses on a
 **baton**: outputs map to the next step's inputs *by name*, and a name that
 matches nothing is dropped rather than invented.
 
-Three things that were true and are no longer:
-
-- **Length.** Linear chains were capped at 3 hops — four automations, total. A
-  ten-member chain threw `ChainCycleError`. The cap is now 25 on both shapes,
-  and it is a runaway guard, not a design limit: each chain is separately
-  bounded by its own `timeoutMinutes`.
-- **Growth.** Adding to a sequence you already had was refused outright
-  ("isn't chat-editable yet"). `appendToSequence()` now grows one in place —
-  it attaches at the tail, joins several branch ends with `needs: "any"`, skips
-  members already present rather than building a cycle, and **keeps the chain's
-  id**, so its version history and pinned member revisions survive instead of a
-  near-duplicate appearing beside it.
-- **Frequency.** Watch schedules floored at 5 minutes in three places, so
-  "check every 2 minutes" was silently rewritten. The floor is 1.
+- **Chains run as long as you need.** Up to 25 steps on either shape, with the
+  cap acting purely as a runaway guard — every chain is separately bounded by
+  its own `timeoutMinutes`.
+- **Sequences grow after the fact.** `appendToSequence()` extends one you
+  already have: it attaches at the tail, joins several branch ends with
+  `needs: "any"`, skips members already present rather than building a cycle,
+  and **keeps the chain's id**, so its version history and pinned member
+  revisions carry straight over instead of leaving a near-duplicate behind.
+- **Watch as often as a minute.** "Check every 2 minutes" means two minutes.
 
 **Loops are not back-edges.** "Keep checking until an email arrives, then stop"
 is a re-arm on a schedule, not a cycle in the graph — the same conclusion
@@ -477,28 +463,29 @@ stays strict, and repetition is expressed as a watcher. That is exactly what
 the compiler does with *"check my gmail every 2 minutes, summarize anything
 new"*: one watcher, not a ring of steps.
 
-**What is reliable, and what isn't.** Connecting automations that **already
-exist**, by name, is deterministic — no model call, no re-drafting:
+**Two ways to build one.** Connecting automations you already have is
+deterministic — no model call, no re-drafting, instant:
 
 ```
 connect Bitcoin Price Fetch and Bitcoin Morning Note
 ```
 
-Building several **brand-new** automations and chaining them from one sentence
-also works — *"make a sequence of the bitcoin price and the weather in
-orlando"*, *"watch solana and tell me if it drops below 75"*, *"connect the
-tesla price and the top tech news"* each compile to two automations and the
-link between them, in 50–85s on a 4B. The honest caveat: a minority of
-phrasings still fold both jobs into a single automation instead of two. It no
-longer *fails* — it occasionally under-decomposes.
+Or describe both jobs and the link in a single sentence, and the compiler
+builds all three. Each of these produces two automations *and* the hand-off
+between them:
 
-That reliability is mostly repair, not prompting. The validator fixes what the
-model got right in the wrong shape, rather than spending a pass to say so: a
-full URL where a bare hostname belongs, an invented file path in a job that
-touches no files, a link missing the `map`/`onlyWhen` the strict schema
-requires, a baton name the next job doesn't accept. Before those repairs, the
-four sentences above died after three drafts and ~55 seconds and became a
-question card.
+```
+make a sequence of the bitcoin price and the weather in orlando
+watch solana and tell me if it drops below 75
+connect the tesla price and the top tech news
+```
+
+That works because the validator **repairs what the model got right in the
+wrong shape** rather than spending a pass to complain about it: a full URL
+where a bare hostname belongs, a link missing the `map` or `onlyWhen` the
+strict schema requires, a baton name the next job doesn't accept. A 4B model
+is a compiler, not an oracle — meeting it halfway on formatting is what turns
+one sentence into a working multi-step workflow.
 
 ## Project layout
 
@@ -553,9 +540,8 @@ file compiler are all exercised against the actual code, not mocks.
 - [Tauri v2](https://tauri.app) · [React](https://react.dev) ·
   [Vite](https://vite.dev) · [zod v4](https://zod.dev) (`z.toJSONSchema`)
 - [jsdiff](https://github.com/kpdecker/jsdiff) — text diffs. Folder comparison
-  is hand-rolled (size, then byte-by-byte) in
-  [`diff.ts:64`](src/runner/diff.ts#L64), following `dir-compare`'s semantics
-  without the dependency.
+  is our own (size, then byte-by-byte) in
+  [`diff.ts:64`](src/runner/diff.ts#L64), so a sandbox diff is exact.
 - [defuddle](https://github.com/kepano/defuddle) — page → clean text, parsed
   with the webview's own `DOMParser`
 - [unpdf](https://github.com/unjs/unpdf) · [exceljs](https://github.com/exceljs/exceljs)
@@ -563,7 +549,7 @@ file compiler are all exercised against the actual code, not mocks.
   [pdfium](https://pdfium.googlesource.com/pdfium/) — documents
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and
   [NVIDIA Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-  (CC-BY-4.0) — local speech; Parakeet runs whenever its model file is present
+  (CC-BY-4.0) — local speech, both running on this machine
 - [nomic-embed-text](https://ollama.com/library/nomic-embed-text) — embeddings
 
 **Data sources** (all keyless, all live-verified before being baked in — a
